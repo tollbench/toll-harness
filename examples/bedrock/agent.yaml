@@ -1,0 +1,27 @@
+version: 1
+model:
+  adapter: bedrock
+  region: us-west-2
+  profile: null
+  model_id: null
+  max_tokens: 2048
+  temperature: 0
+runtime:
+  autonomy: autonomous
+  knowledge_namespace: null
+  max_iterations: 20
+  tools:
+    - state.load
+    - state.save
+    - files.list
+    - files.read
+    - files.write
+    - result.complete
+    - result.fail
+    - human.request
+storage:
+  directory: .toll-harness
+providers:
+  web: disabled
+  browser: disabled
+  email: disabled
