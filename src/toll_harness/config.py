@@ -24,7 +24,10 @@ from toll_harness.email.book_of_houses import (
     BookOfHousesRestMailClient,
 )
 from toll_harness.fleet import FleetStore, default_fleet_database
+from toll_harness.models.anthropic import AnthropicModelAdapter
+from toll_harness.models.base import ModelAdapter
 from toll_harness.models.bedrock import BedrockModelAdapter
+from toll_harness.models.openai import OpenAIModelAdapter
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.storage.secrets import FileSecretStore
@@ -104,24 +107,56 @@ def load_agent_identity(config: dict[str, Any]) -> AgentIdentity | None:
     return identity
 
 
+def _resolve_model_api_key(config: dict, *, root: Path, data_dir: Path) -> str | None:
+    secret_name = config.get("model", {}).get("api_key_secret")
+    if not secret_name:
+        return None  # the provider SDK falls back to its standard environment variable
+    secret_config = config.get("secrets", {})
+    if secret_config.get("provider") != "file":
+        raise ValueError("model.api_key_secret requires a configured file SecretStore")
+    secret_directory = (root / secret_config.get("directory", "secrets")).resolve()
+    if secret_directory != data_dir and data_dir not in secret_directory.parents:
+        raise ValueError("Model API keys must remain in isolated storage")
+    return FileSecretStore(secret_directory).get(secret_name)
+
+
+def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
+    model_config = config.get("model", {})
+    adapter_name = model_config.get("adapter")
+    model_id = model_config.get("model_id")
+    max_tokens = model_config.get("max_tokens", 2048)
+    if adapter_name == "bedrock":
+        if not model_id:
+            raise ValueError("model.model_id is required; run `toll-harness bedrock probe` first")
+        return BedrockModelAdapter(
+            model_id,
+            region=model_config.get("region", "us-west-2"),
+            profile_name=model_config.get("profile"),
+            max_tokens=max_tokens,
+            temperature=model_config.get("temperature", 0),
+        )
+    if adapter_name == "anthropic":
+        return AnthropicModelAdapter(
+            model_id or "claude-opus-4-8",
+            api_key=_resolve_model_api_key(config, root=root, data_dir=data_dir),
+            max_tokens=max_tokens,
+        )
+    if adapter_name == "openai":
+        if not model_id:
+            raise ValueError("model.model_id is required for the openai adapter")
+        return OpenAIModelAdapter(
+            model_id,
+            api_key=_resolve_model_api_key(config, root=root, data_dir=data_dir),
+            max_tokens=max_tokens,
+        )
+    raise ValueError("model.adapter must be one of: bedrock, anthropic, openai")
+
+
 def build_runtime(path: str | Path) -> RuntimeResources:
     config_path = Path(path).resolve()
     config = load_config(config_path)
     identity = load_agent_identity(config)
     root = config_path.parent
-    model_config = config.get("model", {})
-    if model_config.get("adapter") != "bedrock":
-        raise ValueError("The reference CLI currently supports model.adapter: bedrock")
-    model_id = model_config.get("model_id")
-    if not model_id:
-        raise ValueError("model.model_id is required; run `toll-harness bedrock probe` first")
-    model = BedrockModelAdapter(
-        model_id,
-        region=model_config.get("region", "us-west-2"),
-        profile_name=model_config.get("profile"),
-        max_tokens=model_config.get("max_tokens", 2048),
-        temperature=model_config.get("temperature", 0),
-    )
     storage = config.get("storage", {})
     data_dir = (root / storage.get("directory", ".toll-harness")).resolve()
     if identity and identity.id not in data_dir.parts:
@@ -130,6 +165,8 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     if identity:
         identity = store.register_agent(identity)
     artifacts = FilesystemArtifactStore(data_dir / "artifacts")
+    model = _build_model(config, root=root, data_dir=data_dir)
+    model_config = config.get("model", {})
 
     providers = config.get("providers", {})
     web = BasicWebProvider() if providers.get("web") == "basic" else None

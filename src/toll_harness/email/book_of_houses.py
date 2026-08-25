@@ -326,11 +326,19 @@ class BookOfHousesRestMailClient:
 
     def configure_send_context(self, *, proposal_id: str, step_id: str) -> None:
         next_context = {"proposal_id": proposal_id, "step_id": step_id}
-        if self.pending_send and any(
-            str(self.pending_send.get(key) or "") != value
-            for key, value in next_context.items()
-        ):
-            raise RuntimeError("A different deal step has an unresolved pending email send")
+        if self.pending_send:
+            pending_proposal = str(self.pending_send.get("proposal_id") or "")
+            pending_step = str(self.pending_send.get("step_id") or "")
+            if pending_proposal != proposal_id:
+                # A pending send parked on a *different deal* must not be
+                # retargeted onto this one; defer this deal for the cycle.
+                raise RuntimeError("A different deal step has an unresolved pending email send")
+            if pending_step != step_id:
+                # Same deal, but it has advanced past the step the pending send
+                # was bound to. That approval can never satisfy the current step,
+                # so the pending send is stale: discard it so a fresh approval is
+                # requested against the live step instead of deferring forever.
+                self._clear_pending_send()
         if any(self.send_context.get(key) != value for key, value in next_context.items()):
             self.send_context = next_context
 

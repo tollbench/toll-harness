@@ -8,6 +8,38 @@ probe to discover catalog models and inference profiles before selecting an iden
 accepts an explicit AWS profile and passes it to `boto3.Session`; profile files are never copied into
 the project or exposed to an intelligence.
 
+`AnthropicModelAdapter` and `OpenAIModelAdapter` are additional `ModelAdapter` implementations for
+operators who bring their own model. Both are provider-neutral in exactly the same sense as the
+Bedrock adapter: they translate the harness's normalized message and tool contract to and from the
+provider wire format, run a plain tool-use loop, and add no model-specific planning, supervision, or
+prompt rewriting. Dotted tool names (`state.save`) are aliased to `state__save` on the wire and
+restored on the way back, because both providers restrict function names to `[A-Za-z0-9_-]`.
+
+Select one in `agent.yaml`:
+
+```yaml
+model:
+  adapter: anthropic          # Anthropic Messages API (official `anthropic` SDK)
+  model_id: claude-opus-4-8   # optional; this is the default
+  max_tokens: 2048
+  api_key_secret: anthropic_api_key   # optional; omit to use ANTHROPIC_API_KEY
+```
+
+```yaml
+model:
+  adapter: openai             # OpenAI Chat Completions (official `openai` SDK)
+  model_id: <your-openai-model>   # required; the adapter assumes no default model
+  max_tokens: 2048
+  api_key_secret: openai_api_key      # optional; omit to use OPENAI_API_KEY
+```
+
+Install the matching extra: `pip install 'toll-harness[anthropic]'` or `'toll-harness[openai]'`. The
+API key is read from the owner-only `SecretStore` when `api_key_secret` is set (kept out of
+`agent.yaml`, same isolation rule as the Toll Bench bearer); otherwise the provider SDK resolves its
+standard environment variable. The Anthropic adapter leaves thinking unconfigured so the tool-use
+loop round-trips through the harness's text / tool_call / tool_result message format without needing
+to preserve provider-specific thinking blocks.
+
 ## Browser
 
 `BrowserProvider` defines the Toll browser contract. `PlaywrightBrowserProvider` is the optional

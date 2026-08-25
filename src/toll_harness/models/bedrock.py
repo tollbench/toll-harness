@@ -11,15 +11,7 @@ from toll_harness.core.types import (
     ToolCall,
     ToolDefinition,
 )
-from toll_harness.models.base import ModelAdapter
-
-
-class ModelInvocationError(RuntimeError):
-    def __init__(self, provider: str, code: str, message: str):
-        super().__init__(f"{provider} {code}: {message}")
-        self.provider = provider
-        self.code = code
-        self.message = message
+from toll_harness.models.base import ModelAdapter, ModelInvocationError
 
 
 class BedrockModelAdapter(ModelAdapter):

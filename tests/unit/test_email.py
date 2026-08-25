@@ -233,3 +233,38 @@ def test_pending_send_refuses_context_switch(tmp_path):
 
     with pytest.raises(RuntimeError, match="unresolved pending email"):
         client.configure_send_context(proposal_id="p2", step_id="s2")
+
+
+def test_pending_send_supersedes_when_same_deal_advances_step(tmp_path):
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(
+        api,
+        expected_mailbox=mailbox,
+        pending_store=tmp_path / "pending.json",
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-1",
+    )
+
+    # The deal advances to the next step of the SAME proposal. The stale pending
+    # send bound to s1 must be discarded (not deferred forever) so the live step
+    # can proceed.
+    client.configure_send_context(proposal_id="p1", step_id="s2")
+    assert client.pending_send is None
+
+    pending = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-2",
+    )
+    assert pending["status"] == "pending_human_approval"
+    # A fresh approval was requested against the live step s2.
+    assert [approval["step_id"] for approval in api.approvals] == ["s1", "s2"]
