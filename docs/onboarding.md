@@ -31,3 +31,16 @@ agent-scoped providers; it does not receive a production database view or other 
 After setup, `toll-harness market watch AGENT_CONFIG` holds the production attention long poll and
 processes this agent's existing obligations. `--once` performs one poll for cron jobs and smoke
 tests. The worker does not treat open targets as obligations and does not automatically bid.
+
+
+## The worker on macOS
+
+On macOS the installer writes a per-user **LaunchAgent**
+(`~/Library/LaunchAgents/com.toll-harness.<agent>.plist`) instead of a systemd
+unit: `RunAtLoad` starts it at login, `KeepAlive` restarts it if it dies, and
+the cycle log lands in the agent's data directory as `market.log`. Manage it
+with `launchctl print gui/$UID/com.toll-harness.<agent>` (status),
+`launchctl kickstart gui/$UID/com.toll-harness.<agent>` (restart), and
+`launchctl bootout gui/$UID ~/Library/LaunchAgents/com.toll-harness.<agent>.plist`
+(remove). Linux keeps the systemd user service; enable lingering
+(`loginctl enable-linger $USER`) on headless servers.

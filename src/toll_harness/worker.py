@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -20,6 +21,88 @@ def _service_slug(name: str) -> str:
 
 def market_worker_service_name(config: dict[str, Any]) -> str:
     return f"toll-harness-{_service_slug(str(config['agent']['name']))}.service"
+
+
+def market_worker_launchd_label(config: dict[str, Any]) -> str:
+    return "com.toll-harness." + _service_slug(str(config["agent"]["name"]))
+
+
+def _install_launchd_agent(
+    config_path: Path,
+    *,
+    agents_directory: str | Path | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
+    """macOS worker install: a per-user LaunchAgent, launchd's KeepAlive
+    standing in for systemd's Restart=always. Idempotent: an existing agent is
+    booted out before the fresh plist is bootstrapped."""
+    config = load_config(config_path)
+    toll_bench = config.get("toll_bench") or {}
+    if not toll_bench.get("connected") or toll_bench.get("status") != READY:
+        raise ValueError("Market workers require a connected READY agent")
+
+    label = market_worker_launchd_label(config)
+    agents_dir = (
+        Path(agents_directory).expanduser().resolve()
+        if agents_directory is not None
+        else (Path.home() / "Library/LaunchAgents").resolve()
+    )
+    plist_path = agents_dir / (label + ".plist")
+    log_path = data_directory(config_path, config) / "market.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    plist = {
+        "Label": label,
+        "ProgramArguments": [
+            str(Path(sys.executable).absolute()),
+            "-m",
+            "toll_harness.cli",
+            "market",
+            "watch",
+            str(config_path),
+        ],
+        "WorkingDirectory": str(config_path.parent),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(log_path),
+        "StandardErrorPath": str(log_path),
+        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
+    }
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    temporary = plist_path.with_name(f".{plist_path.name}.{os.getpid()}.tmp")
+    with open(temporary, "wb") as handle:
+        plistlib.dump(plist, handle)
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, plist_path)
+
+    domain = f"gui/{os.getuid()}"
+    runner(
+        ["launchctl", "bootout", domain, str(plist_path)],
+        check=False, capture_output=True, text=True,
+    )
+    runner(
+        ["launchctl", "bootstrap", domain, str(plist_path)],
+        check=True, capture_output=True, text=True,
+    )
+    runner(
+        ["launchctl", "enable", f"{domain}/{label}"],
+        check=True, capture_output=True, text=True,
+    )
+    runner(
+        ["launchctl", "kickstart", f"{domain}/{label}"],
+        check=False, capture_output=True, text=True,
+    )
+    active = runner(
+        ["launchctl", "print", f"{domain}/{label}"],
+        check=False, capture_output=True, text=True,
+    )
+    return {
+        "service": label,
+        "unit": str(plist_path),
+        "log": str(log_path),
+        "active": active.returncode == 0 and "state = running" in (active.stdout or ""),
+        "restart_policy": "keepalive",
+        "service_manager": "launchd",
+    }
 
 
 def _systemd_quote(value: str | Path) -> str:
@@ -50,8 +133,15 @@ def install_market_worker(
     *,
     unit_directory: str | Path | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    platform: str | None = None,
 ) -> dict[str, Any]:
     path = Path(config_path).resolve()
+    if (platform or sys.platform) == "darwin":
+        # macOS: per-user LaunchAgent. unit_directory doubles as the
+        # LaunchAgents directory override (used by tests).
+        return _install_launchd_agent(
+            path, agents_directory=unit_directory, runner=runner
+        )
     config = load_config(path)
     toll_bench = config.get("toll_bench") or {}
     if not toll_bench.get("connected") or toll_bench.get("status") != READY:
@@ -128,8 +218,22 @@ def market_worker_status(
     config_path: str | Path,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    platform: str | None = None,
 ) -> dict[str, Any]:
     config = load_config(Path(config_path).resolve())
+    if (platform or sys.platform) == "darwin":
+        label = market_worker_launchd_label(config)
+        result = runner(
+            ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+            check=False, capture_output=True, text=True,
+        )
+        loaded = result.returncode == 0
+        return {
+            "service": label,
+            "active": loaded and "state = running" in (result.stdout or ""),
+            "enabled": loaded,
+            "service_manager": "launchd",
+        }
     service = market_worker_service_name(config)
     active = runner(
         ["systemctl", "--user", "is-active", service],
