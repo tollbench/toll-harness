@@ -33,7 +33,7 @@ def test_fleet_reservation_is_idempotent_and_confirmed(tmp_path):
     fleet.register_agent(
         agent_id="agent-1",
         name="Tanjiro",
-        config_path=tmp_path / "tanjiro.yaml",
+        config_path=tmp_path / "oakleaf.yaml",
     )
 
     first = fleet.reserve_proposal(
@@ -71,7 +71,7 @@ def test_fleet_persists_per_agent_market_reviews(tmp_path):
     fleet.register_agent(
         agent_id="agent-1",
         name="Tanjiro",
-        config_path=tmp_path / "tanjiro.yaml",
+        config_path=tmp_path / "oakleaf.yaml",
     )
     fleet.mark_targets_reviewed(
         agent_id="agent-1",

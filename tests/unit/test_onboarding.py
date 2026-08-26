@@ -35,7 +35,7 @@ class FakeBookOfHousesApi:
         assert idempotency_key.startswith("toll-harness-register-")
         return {
             "ok": True,
-            "maker_id": "maker-kori",
+            "maker_id": "maker-oak",
             "registry_no": "A-001",
             "email_mailbox": {
                 "address": self.address,
@@ -47,7 +47,7 @@ class FakeBookOfHousesApi:
 
     def authenticated(self, token, maker_id):
         assert token == "never-persist-in-state"
-        assert maker_id == "maker-kori"
+        assert maker_id == "maker-oak"
         return self
 
     def me(self):
@@ -85,7 +85,7 @@ def _answers(*, connected=True, use_email=None):
         model_id="mistral.mistral-large-3-675b-instruct",
         company="House of Play",
         mode="Autonomous",
-        aws_profile="toll-harness-builder",
+        aws_profile="example-bedrock-profile",
         aws_region="us-west-2",
         connect_toll_bench=connected,
         use_book_of_houses_email=use_email,
@@ -97,7 +97,7 @@ def _answers(*, connected=True, use_email=None):
 
 
 def test_connected_onboarding_persists_pending_and_resumes_without_secret_leak(tmp_path):
-    config_path = create_configuration(tmp_path / "kori", _answers())
+    config_path = create_configuration(tmp_path / "oak", _answers())
     api = FakeBookOfHousesApi()
 
     pending = advance_connected_onboarding(config_path, approve_registration=True, api=api)
@@ -123,7 +123,7 @@ def test_connected_onboarding_persists_pending_and_resumes_without_secret_leak(t
         "status": READY,
         "mailbox": api.address,
         "outbound_enabled": True,
-        "maker_id": "maker-kori",
+        "maker_id": "maker-oak",
         "registry_no": "A-001",
     }
     assert api.register_calls == 1

@@ -10,12 +10,12 @@ from toll_harness.worker import install_market_worker, market_worker_status
 
 def _connected_answers():
     return InitAnswers(
-        agent_name="Tanjiro",
+        agent_name="Oakleaf",
         intelligence="Amazon Nova",
         model_id="amazon.nova-pro-v1:0",
         company="House of Resolve",
         mode="Autonomous",
-        aws_profile="toll-harness-builder",
+        aws_profile="example-bedrock-profile",
         aws_region="us-west-2",
         connect_toll_bench=True,
         use_book_of_houses_email=True,
@@ -27,7 +27,7 @@ def _connected_answers():
 
 
 def test_install_market_worker_writes_restartable_isolated_unit(tmp_path):
-    config_path = create_configuration(tmp_path / "agent files" / "tanjiro", _connected_answers())
+    config_path = create_configuration(tmp_path / "agent files" / "oakleaf", _connected_answers())
     config = yaml.safe_load(config_path.read_text())
     config["toll_bench"]["status"] = READY
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
@@ -35,7 +35,7 @@ def test_install_market_worker_writes_restartable_isolated_unit(tmp_path):
 
     def runner(command, **kwargs):
         calls.append(command)
-        output = "active\n" if command[-2:] == ["is-active", "toll-harness-tanjiro.service"] else ""
+        output = "active\n" if command[-2:] == ["is-active", "toll-harness-oakleaf.service"] else ""
         return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
 
     result = install_market_worker(
@@ -44,7 +44,7 @@ def test_install_market_worker_writes_restartable_isolated_unit(tmp_path):
         runner=runner,
     )
 
-    unit = (tmp_path / "units" / "toll-harness-tanjiro.service").read_text()
+    unit = (tmp_path / "units" / "toll-harness-oakleaf.service").read_text()
     escaped_parent = str(config_path.parent).replace(" ", r"\x20")
     assert result["active"] is True
     assert "Restart=always" in unit
@@ -60,19 +60,19 @@ def test_install_market_worker_writes_restartable_isolated_unit(tmp_path):
         "--user",
         "enable",
         "--now",
-        "toll-harness-tanjiro.service",
+        "toll-harness-oakleaf.service",
     ]
 
 
 def test_market_worker_status_reports_systemd_truth(tmp_path):
-    config_path = create_configuration(tmp_path / "tanjiro", _connected_answers())
+    config_path = create_configuration(tmp_path / "oakleaf", _connected_answers())
 
     def runner(command, **kwargs):
         value = "active\n" if "is-active" in command else "enabled\n"
         return subprocess.CompletedProcess(command, 0, stdout=value, stderr="")
 
     assert market_worker_status(config_path, runner=runner) == {
-        "service": "toll-harness-tanjiro.service",
+        "service": "toll-harness-oakleaf.service",
         "active": True,
         "enabled": True,
     }

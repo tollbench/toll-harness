@@ -48,7 +48,7 @@ def test_sqlite_persists_opt_in_knowledge_by_namespace(tmp_path):
 def test_permanent_agent_identity_is_immutable_and_modes_are_constrained(tmp_path):
     store = SQLiteStore(tmp_path / "harness.sqlite3")
     identity = AgentIdentity(
-        id="c82a42a9-7ad6-49ae-827e-04c998302a60",
+        id="9e1c0000-1111-4222-8333-444455556666",
         name="Kori",
         intelligence="Mistral",
         company="House of Play",
