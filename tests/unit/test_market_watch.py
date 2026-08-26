@@ -430,3 +430,197 @@ def test_market_scan_selects_newest_target_that_has_not_reached_fleet_cap():
     assert target_count == 3
     assert [candidate["target_id"] for candidate in candidates] == ["next-underfilled"]
     assert review_targets == [("next-underfilled:round:1", "next-underfilled", None)]
+
+
+def _completed_run(goal, mode):
+    return RunResult(
+        run_id="run-x",
+        status=RunStatus.COMPLETED,
+        result={"summary": "Handled."},
+        checkpoint=Checkpoint(
+            run_id="run-x",
+            goal=goal,
+            data={},
+            event_cursor=0,
+            revision=0,
+            updated_at="2026-08-24T00:00:00Z",
+        ),
+        usage=ModelUsage(total_tokens=10),
+        iterations=1,
+        observed_mode=mode,
+    )
+
+
+def test_per_obligation_dispatch_handles_one_kind_with_narrowed_tools():
+    # Three obligations of different kinds arrive at once. The worker must hand
+    # the model ONLY the highest-priority one (deal_step) with only that kind's
+    # focused instruction and tool set -- not a combined wall of instructions
+    # for every kind, and not the file_informed_plan / unanswered_message tools.
+    class MailClient:
+        def configure_send_context(self, **_kwargs):
+            pass
+
+        def resume_pending_send(self):  # pragma: no cover - deal step present
+            raise AssertionError("must not resume while a deal step is pending")
+
+    toll_bench = SimpleNamespace(
+        ensure_reachable=lambda: {"ok": True},
+        attention=lambda wait: {
+            "attention": [
+                {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
+                {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
+                {"kind": "unanswered_message", "deal_id": "d2", "step_id": "s-2"},
+            ]
+        },
+        # p-free is a free finalist (0 cents) so the payout gate does not trip.
+        list_proposals=lambda: {"proposals": [{"id": "p-free", "total_ask_cents": 0}]},
+    )
+
+    observed = {}
+
+    original_tools = [
+        "state.load",
+        "state.save",
+        "result.complete",
+        "result.fail",
+        "toll_bench.current_step",
+        "toll_bench.file_outcome",
+        "toll_bench.post_check_in",
+        "toll_bench.reply_step_message",
+        "toll_bench.read_finalist_answers",
+        "toll_bench.submit_informed_plan",
+        "toll_bench.list_proposals",
+        "email.send",
+        "email.reply",
+    ]
+    runtime = SimpleNamespace(
+        email_provider=SimpleNamespace(client=MailClient()),
+        enabled_tools=list(original_tools),
+    )
+
+    def start(goal, mode):
+        observed["goal"] = goal
+        observed["tools"] = list(runtime.enabled_tools)
+        return _completed_run(goal, mode)
+
+    runtime.start = start
+    resources = SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    # Only the deal step was dispatched: its id is in the goal, the other two are not.
+    assert '"s-1"' in observed["goal"]
+    assert '"p-free"' not in observed["goal"]
+    assert '"s-2"' not in observed["goal"]
+    # The goal carries a single "obligation", not the old combined "attention" list.
+    assert '"obligation":' in observed["goal"]
+    assert '"attention":' not in observed["goal"]
+    # Tools were narrowed to the deal_step set: the finalist-plan-only tool is gone.
+    assert "toll_bench.submit_informed_plan" not in observed["tools"]
+    assert "toll_bench.current_step" in observed["tools"]
+    assert "toll_bench.file_outcome" in observed["tools"]
+    # enabled_tools restored after the run.
+    assert runtime.enabled_tools == original_tools
+
+
+def test_dispatch_prefetches_step_history_and_meters_cost():
+    # H6: a step-scoped obligation rides with the current step prefetched into
+    # the goal payload. H8: the cycle result meters what the dispatch spent.
+    class MailClient:
+        def configure_send_context(self, **_kwargs):
+            pass
+
+        def resume_pending_send(self):
+            return None
+
+    fetched = {}
+
+    def current_step(deal_id):
+        fetched["deal_id"] = deal_id
+        return {"ok": True, "current_step": {"id": "s-1", "note": "prior-check-in"}}
+
+    toll_bench = SimpleNamespace(
+        ensure_reachable=lambda: {"ok": True},
+        attention=lambda wait: {
+            "attention": [
+                {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}
+            ]
+        },
+        list_proposals=lambda: {"proposals": []},
+        current_step=current_step,
+    )
+    observed = {}
+    runtime = SimpleNamespace(
+        email_provider=SimpleNamespace(client=MailClient()),
+        enabled_tools=[
+            "state.load",
+            "state.save",
+            "result.complete",
+            "result.fail",
+            "toll_bench.current_step",
+            "toll_bench.file_outcome",
+        ],
+    )
+
+    def start(goal, mode):
+        observed["goal"] = goal
+        return _completed_run(goal, mode)
+
+    runtime.start = start
+    resources = SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert fetched["deal_id"] == "d1"
+    assert '"current_step":' in observed["goal"]
+    assert "prior-check-in" in observed["goal"]
+    meter = result["dispatch"]
+    assert meter["kind"] == "deal_step"
+    assert meter["goal_words"] == len(observed["goal"].split())
+    assert meter["goal_chars"] == len(observed["goal"])
+    assert meter["tool_count"] == 6
+    assert meter["word_budget"] == cli._DISPATCH_WORD_BUDGET
+
+
+def test_dispatch_survives_step_prefetch_failure():
+    # The prefetch is best-effort: if the bench call dies, the field is null,
+    # the model is told to fetch the step itself, and the cycle must not fail.
+    class MailClient:
+        def configure_send_context(self, **_kwargs):
+            pass
+
+        def resume_pending_send(self):
+            return None
+
+    def current_step(deal_id):
+        raise RuntimeError("bench briefly down")
+
+    toll_bench = SimpleNamespace(
+        ensure_reachable=lambda: {"ok": True},
+        attention=lambda wait: {
+            "attention": [
+                {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}
+            ]
+        },
+        list_proposals=lambda: {"proposals": []},
+        current_step=current_step,
+    )
+    observed = {}
+    runtime = SimpleNamespace(
+        email_provider=SimpleNamespace(client=MailClient()),
+        enabled_tools=["state.load", "state.save", "result.complete", "result.fail"],
+    )
+
+    def start(goal, mode):
+        observed["goal"] = goal
+        return _completed_run(goal, mode)
+
+    runtime.start = start
+    resources = SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert '"current_step":null' in observed["goal"]

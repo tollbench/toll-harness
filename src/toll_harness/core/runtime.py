@@ -30,30 +30,24 @@ confirms it. Tool arguments must contain only fields declared by that tool; neve
 chain-of-thought fields."""
 
 TOLL_BENCH_SYSTEM_INSTRUCTION = """
-This agent is connected to Toll Bench through agent-scoped tools. Production is authoritative:
-read toll_bench.protocol and the relevant toll_bench.guide topic at the start of market work, and
-use toll_bench.attention before looking for new opportunities. Keep the agent reachable. Handle
-obligations before optional bids. Before bidding, read the current target brief and proposal schema,
-validate the exact proposal, and remember that submission is sealed and final. When named a
-finalist, read the finalist answers (including unanswered questions), then file the required
-informed plan. If the work requires sending email and the brief does not already contain the exact
-recipient address, one of the four finalist questions must explicitly ask for the recipient email
-address. Never make the person put an address into an unrelated tone or content answer. Never claim
-a market write succeeded unless its tool result confirms it. For an Easy target, every informed
-plan has exactly two execution steps: one next step and one delivery step, making three stages with
-the proposal. Every step's declared_odds forecast must be strictly greater than 0 and strictly less
-than 1; certainty (1) is invalid. Never repeat an unchanged write after production rejects it. The
-agent
-credential is held by the provider and must never be requested, placed in state, or exposed in
-output. A posted probability is a frozen baseline. Each step's declared_odds is the intelligence's
-updated forecast after that step; disclose an honest reason and do not claim the baseline
-changed. For external email work, use the Book of Houses exact-email approval as the only pre-send
-review: it shows To, Subject, and Body. Do not create a separate draft-approval step. A pending
-email.send result means nothing was sent and the run must wait for the person's approval. For an
-email-delivery plan, the person approves the exact email, then the agent sends it and files the send
-receipt itself; never ask the person to provide proof of the agent's work. A successful email.send
-proves provider acceptance, not inbox delivery. Do not promise or claim inbox delivery unless the
-tool result explicitly confirms it."""
+This agent is connected to Toll Bench through agent-scoped tools. Production is authoritative and
+enforces the mechanical protocol rules; read toll_bench.protocol and the relevant toll_bench.guide
+topic at the start of market work, and use toll_bench.attention before looking for new
+opportunities. Keep the agent reachable. Handle obligations before optional bids. Read the current
+brief and schema before you act; submission is sealed and final. When named a finalist, read the
+finalist answers (including unanswered questions) before filing the informed plan. If a write is
+rejected, read the error, fix exactly that, and retry - do not resend an unchanged payload.
+Never claim a market write succeeded unless its tool result confirms it. The agent credential is
+held by the provider and must never be requested, placed in state, or exposed in output.
+A posted probability is a frozen baseline; each step's declared_odds is your updated forecast after
+that step, so disclose an honest reason and do not claim the baseline changed. When email delivery
+needs a recipient the brief does not supply, ask the person for it plainly; never fold an address
+into an unrelated answer. Use the Book of Houses exact-email approval (it shows To, Subject, Body)
+as the only pre-send review; do not add a separate draft-approval step. A pending email.send result
+means nothing was sent and the run waits for the person's approval; once approved the agent sends
+and files its own receipt, and never asks the person to prove the agent's work. A successful
+email.send proves provider acceptance, not inbox delivery: do not promise or claim inbox delivery
+unless the tool result explicitly confirms it."""
 
 PROTECTED_WRITE_TOOLS = {
     "email.send",
@@ -80,6 +74,7 @@ class HarnessRuntime:
         browser_provider: BrowserProvider | None = None,
         toll_bench_provider: TollBenchProvider | None = None,
         agent_identity: AgentIdentity | None = None,
+        operator_instructions: str | None = None,
         knowledge_namespace: str | None = None,
         max_iterations: int = 20,
         system_instruction: str = BASE_SYSTEM_INSTRUCTION,
@@ -95,6 +90,11 @@ class HarnessRuntime:
         self.browser_provider = browser_provider
         self.toll_bench_provider = toll_bench_provider
         self.agent_identity = agent_identity
+        # Free-text, operator-authored instructions attached to their agent. No
+        # length cap by design: it is the operator's own agent. Delivered to the
+        # model on every run/resume via the agent payload, kept distinct from the
+        # model's own saved scratchpad (state.save knowledge).
+        self.operator_instructions = operator_instructions
         self.knowledge_namespace = knowledge_namespace
         self.max_iterations = max_iterations
         self.system_instruction = system_instruction
@@ -169,7 +169,7 @@ class HarnessRuntime:
         if self.agent_identity is None:
             return None
         identity = self.agent_identity
-        return {
+        payload: JsonObject = {
             "agent_id": identity.id,
             "agent_name": identity.name,
             "intelligence": identity.intelligence,
@@ -180,6 +180,12 @@ class HarnessRuntime:
             "email_verification_recipient": identity.email_verification_recipient,
             "email_address": identity.email_address,
         }
+        # Operator instructions ride the agent payload so the model sees them on
+        # every run and resume. Omitted entirely when unset so agents without the
+        # field produce a byte-identical payload to before (no empty-string noise).
+        if self.operator_instructions:
+            payload["operator_instructions"] = self.operator_instructions
+        return payload
 
     def _inject_live_inputs(
         self, run_id: str, messages: list[ModelMessage], after_sequence: int

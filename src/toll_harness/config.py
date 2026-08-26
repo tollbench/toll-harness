@@ -156,6 +156,11 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     config_path = Path(path).resolve()
     config = load_config(config_path)
     identity = load_agent_identity(config)
+    # Operator-authored free-text instructions for their own agent (optional, no
+    # length cap). Delivered to the model on every run via the agent payload.
+    operator_instructions = (config.get("agent") or {}).get("operator_instructions")
+    if operator_instructions is not None and not isinstance(operator_instructions, str):
+        raise ValueError("agent.operator_instructions must be a string when set")
     root = config_path.parent
     storage = config.get("storage", {})
     data_dir = (root / storage.get("directory", ".toll-harness")).resolve()
@@ -256,6 +261,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         browser_provider=browser,
         toll_bench_provider=toll_bench_provider,
         agent_identity=identity,
+        operator_instructions=operator_instructions,
         knowledge_namespace=knowledge_namespace,
         max_iterations=runtime_config.get("max_iterations", 20),
         system_instruction=(

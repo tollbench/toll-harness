@@ -235,7 +235,7 @@ def test_pending_send_refuses_context_switch(tmp_path):
         client.configure_send_context(proposal_id="p2", step_id="s2")
 
 
-def test_pending_send_supersedes_when_same_deal_advances_step(tmp_path):
+def test_pending_send_carries_content_forward_when_same_deal_advances_step(tmp_path):
     api = FakeApi()
     mailbox = "canonical@bookofhouses.com"
     client = BookOfHousesRestMailClient(
@@ -252,19 +252,111 @@ def test_pending_send_supersedes_when_same_deal_advances_step(tmp_path):
         idempotency_key="send-1",
     )
 
-    # The deal advances to the next step of the SAME proposal. The stale pending
-    # send bound to s1 must be discarded (not deferred forever) so the live step
-    # can proceed.
+    # The deal advances to the next step of the SAME proposal. The harness must
+    # re-bind the already-approved email to the live step WITHOUT regenerating
+    # its content, and without deferring forever.
     client.configure_send_context(proposal_id="p1", step_id="s2")
-    assert client.pending_send is None
 
-    pending = client.send_message(
+    assert client.pending_send is not None
+    assert client.pending_send["step_id"] == "s2"
+    assert client.pending_send["subject"] == "Hello"
+    assert client.pending_send["body_text"] == "Approved body"
+    assert client.pending_send["to"] == "person@example.com"
+
+    # A fresh approval was requested against the live step s2, carrying the exact
+    # same recipient, subject, and body as the original.
+    assert [approval["step_id"] for approval in api.approvals] == ["s1", "s2"]
+    assert api.approvals[1]["subject"] == "Hello"
+    assert api.approvals[1]["body_text"] == "Approved body"
+    assert api.approvals[1]["to"] == "person@example.com"
+
+    # Resuming sends that same preserved content, not a regenerated message.
+    resumed = client.resume_pending_send()
+    assert resumed["success"] is True
+    assert resumed["send_receipt"]["subject"] == "Hello"
+
+
+def test_pending_send_refuses_context_switch_to_a_different_deal(tmp_path):
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(
+        api,
+        expected_mailbox=mailbox,
+        pending_store=tmp_path / "pending-other.json",
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-1",
+    )
+
+    # A pending send on a *different deal* must still be refused, never retargeted.
+    with pytest.raises(RuntimeError, match="unresolved pending email"):
+        client.configure_send_context(proposal_id="p2", step_id="s2")
+
+
+def test_send_after_approval_enforces_the_approved_content(tmp_path):
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(
+        api,
+        expected_mailbox=mailbox,
+        pending_store=tmp_path / "pending.json",
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-1",
+    )
+
+    # The model redrafts between approval and send. The harness must put the
+    # exact approved bytes on the wire, not the rewrite, and say it did so.
+    sent = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello v2",
+        text="A punchier rewrite",
+        idempotency_key="send-2",
+    )
+
+    assert sent["success"] is True
+    assert sent["approved_content_enforced"] is True
+    assert sent["payload"]["subject"] == "Hello"
+    assert sent["payload"]["body_text"] == "Approved body"
+    assert sent["payload"]["to"] == "person@example.com"
+
+
+def test_send_after_approval_with_matching_content_is_not_flagged(tmp_path):
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(
+        api,
+        expected_mailbox=mailbox,
+        pending_store=tmp_path / "pending.json",
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-1",
+    )
+
+    sent = client.send_message(
         mailbox,
         to=["person@example.com"],
         subject="Hello",
         text="Approved body",
         idempotency_key="send-2",
     )
-    assert pending["status"] == "pending_human_approval"
-    # A fresh approval was requested against the live step s2.
-    assert [approval["step_id"] for approval in api.approvals] == ["s1", "s2"]
+
+    assert sent["success"] is True
+    assert "approved_content_enforced" not in sent
+    assert sent["payload"]["subject"] == "Hello"

@@ -446,6 +446,139 @@ def command_market_connect(arguments: argparse.Namespace) -> int:
 _LOGGER = logging.getLogger("toll_harness.cli")
 
 
+# Attention "kinds" this worker dispatches on, in descending priority. Exactly
+# one obligation is handled per watch cycle: the model is handed a single,
+# focused instruction and only the tools that one obligation needs, instead of a
+# manual covering every task type. The watch loop polls attention again on the
+# next cycle for the remaining obligations.
+_OBLIGATION_PRIORITY: tuple[str, ...] = (
+    "deal_step",
+    "file_informed_plan",
+    "unanswered_message",
+)
+
+# Shared bookkeeping tools every focused obligation goal needs: load/save a
+# compact checkpoint and report a confirmed result or a correction.
+_BOOKKEEPING_TOOLS: frozenset[str] = frozenset(
+    {"state.load", "state.save", "result.complete", "result.fail"}
+)
+
+# Per-kind focused instruction + the minimal tool set. Each entry narrows what
+# the model reads and can call for that one obligation; capability across all
+# kinds is preserved because the watch loop returns for the next obligation.
+_DEAL_STEP_INSTRUCTION = (
+    "Handle the single active deal step below and nothing else. The step's "
+    "current state and history are included below as current_step (fetch it "
+    "only if that field is null). Obey the step's progress-pulse cadence, and "
+    "use a document outcome for "
+    "APPROVE review steps and a short text outcome only where permitted. If the "
+    "step is an email step, read finalist answers for the exact recipient, call "
+    "email.send with the approved Subject and Body, and wait if exact-email "
+    "approval is pending. If confirmed_email_send_receipt is present below, the "
+    "provider accepted the email already: file that exact send receipt as the "
+    "agent's evidence and do not send it again. Do not call it inbox delivery "
+    "unless the receipt explicitly confirms inbox delivery."
+)
+_FILE_INFORMED_PLAN_INSTRUCTION = (
+    "File the single finalist plan below and nothing else. Read the owned "
+    "proposal and the finalist answers before filing; copy every required field "
+    "of each execution step from the owned proposal and change only what the "
+    "answers require. Easy targets require exactly two execution steps. Every "
+    "declared_odds value must be strictly between 0 and 1."
+)
+_UNANSWERED_MESSAGE_INSTRUCTION = (
+    "Answer the single unanswered step message below and nothing else. The "
+    "step's current state and history are included below as current_step "
+    "(fetch it only if that field is null). Call "
+    "toll_bench.reply_step_message before any check-in or outcome; a work pulse "
+    "is not a reply."
+)
+_GOAL_COMMON_TAIL = (
+    " Do not bid on unrelated open targets and do not request the full protocol "
+    "or proposal schema. If a previous attempt failure is present, correct it "
+    "and never repeat the rejected payload. Save a compact checkpoint and report "
+    "only confirmed results."
+)
+
+# H8: keep it cheap. Every dispatch measures the words it hands the model and
+# the tools it exposes, and a cycle that blows past the budget logs a warning,
+# so prompt growth is caught when it happens rather than on the bill.
+_DISPATCH_WORD_BUDGET = 800
+
+
+def _dispatch_meter(kind: str, goal: str, tools: list[str]) -> dict[str, Any]:
+    words = len(goal.split())
+    meter = {
+        "kind": kind or "market_scan",
+        "goal_words": words,
+        "goal_chars": len(goal),
+        "tool_count": len(tools),
+        "word_budget": _DISPATCH_WORD_BUDGET,
+    }
+    if words > _DISPATCH_WORD_BUDGET:
+        _LOGGER.warning(
+            "Dispatch for %s spent %d words (budget %d)",
+            meter["kind"],
+            words,
+            _DISPATCH_WORD_BUDGET,
+        )
+    return meter
+
+_OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
+    "deal_step": {
+        "instruction": _DEAL_STEP_INSTRUCTION,
+        "tools": frozenset(
+            {
+                "toll_bench.current_step",
+                "toll_bench.file_outcome",
+                "toll_bench.post_check_in",
+                "toll_bench.reply_step_message",
+                "toll_bench.read_finalist_answers",
+                "email.send",
+                "email.reply",
+            }
+        )
+        | _BOOKKEEPING_TOOLS,
+    },
+    "file_informed_plan": {
+        "instruction": _FILE_INFORMED_PLAN_INSTRUCTION,
+        "tools": frozenset(
+            {
+                "toll_bench.read_finalist_answers",
+                "toll_bench.list_proposals",
+                "toll_bench.submit_informed_plan",
+            }
+        )
+        | _BOOKKEEPING_TOOLS,
+    },
+    "unanswered_message": {
+        "instruction": _UNANSWERED_MESSAGE_INSTRUCTION,
+        "tools": frozenset(
+            {
+                "toll_bench.current_step",
+                "toll_bench.reply_step_message",
+            }
+        )
+        | _BOOKKEEPING_TOOLS,
+    },
+}
+
+
+def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pick the single highest-priority obligation to handle this cycle.
+
+    Kinds are ranked by ``_OBLIGATION_PRIORITY``; within a kind the first item
+    the server returned wins (attention arrives server-ordered). Any obligation
+    of an unranked kind is a last-resort fallback so nothing is silently
+    dropped.
+    """
+    for kind in _OBLIGATION_PRIORITY:
+        match = next((item for item in obligations if item.get("kind") == kind), None)
+        if match is not None:
+            return match
+    return obligations[0] if obligations else None
+
+
 def _process_market_attention(
     resources: Any, wait: int, previous_failure: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -534,30 +667,65 @@ def _process_market_attention(
             "email": resumed_email,
             "run": None,
         }
+    # Per-obligation dispatch: hand the model ONE obligation with only the
+    # instruction and tools that obligation needs. The watch loop returns for
+    # the next obligation on its next cycle.
+    obligation = _select_obligation(obligations)
+    if obligation is None:
+        # Every obligation was deferred (e.g. a lone deal step blocked on a
+        # parked email send). Nothing to hand the model this cycle.
+        return {
+            "ok": True,
+            "reachability": reachability,
+            "attention_count": len(obligations),
+            "run": None,
+        }
+    kind = str(obligation.get("kind") or "")
+    dispatch = _OBLIGATION_DISPATCH.get(kind)
+    if dispatch is None:
+        # Unranked/unknown kind: fall back to the full obligation instruction and
+        # tool set so capability is never lost for a kind we did not special-case.
+        instruction = (
+            _DEAL_STEP_INSTRUCTION
+            + " "
+            + _FILE_INFORMED_PLAN_INSTRUCTION
+            + " "
+            + _UNANSWERED_MESSAGE_INSTRUCTION
+        )
+        obligation_tools = (
+            _OBLIGATION_DISPATCH["deal_step"]["tools"]
+            | _OBLIGATION_DISPATCH["file_informed_plan"]["tools"]
+            | _OBLIGATION_DISPATCH["unanswered_message"]["tools"]
+            | {"toll_bench.guide", "human.request"}
+        )
+    else:
+        instruction = dispatch["instruction"]
+        obligation_tools = set(dispatch["tools"])
     identity = resources.agent_identity
     mode = identity.autonomy_mode if identity else AutonomyMode.AUTONOMOUS
+    # H6: put the step's history right in front of the model. Step-scoped
+    # obligations get the current step prefetched into the payload so the run
+    # starts with the full step state instead of spending its first call (or
+    # skipping) fetching it. Best-effort: on failure the field is null and the
+    # instruction tells the model to fetch it itself.
+    step_state = None
+    if kind in ("deal_step", "unanswered_message"):
+        deal_id = str(obligation.get("deal_id") or "")
+        if deal_id:
+            try:
+                step_state = resources.toll_bench.current_step(deal_id)
+            except Exception as error:  # noqa: BLE001 - prefetch must not kill the cycle
+                _LOGGER.warning(
+                    "current_step prefetch failed for deal %s: %s", deal_id, error
+                )
     goal = (
-        "Process the current Toll Bench obligations below. Handle only these existing "
-        "commitments; do not bid on unrelated open targets. Follow the exact next call carried "
-        "by each attention item. For a finalist plan, read the owned proposal and answers before "
-        "filing; copy every required field of each execution step from the owned proposal and "
-        "change only what the answers require. For an unanswered_message item, call "
-        "toll_bench.reply_step_message before any check-in or outcome; a work pulse is not a "
-        "reply. For a deal step, read the current step first, obey its progress-pulse cadence, use "
-        "a document outcome for APPROVE review steps and a short text outcome only where "
-        "permitted. For an email step, read finalist "
-        "answers for the exact recipient, call email.send with the approved Subject and Body, and "
-        "wait if exact-email approval is pending. If confirmed_email_send_receipt is present "
-        "below, the provider accepted the email already: file that exact send receipt as the "
-        "agent's evidence and do not send it again. Do not call it inbox delivery unless the "
-        "receipt explicitly confirms inbox delivery. Easy targets require exactly two execution "
-        "steps. Every declared_odds value must be strictly between 0 and 1. If a previous attempt "
-        "failure is present, correct it and never repeat the rejected payload. Do not "
-        "request the full protocol or proposal schema. Save a compact checkpoint and report only "
-        "confirmed results.\n\n"
+        instruction
+        + _GOAL_COMMON_TAIL
+        + "\n\n"
         + json.dumps(
             {
-                "attention": obligations,
+                "obligation": obligation,
+                "current_step": step_state,
                 "confirmed_email_send_receipt": resumed_email,
                 "previous_attempt_failure": previous_failure,
             },
@@ -565,25 +733,9 @@ def _process_market_attention(
             sort_keys=True,
         )
     )
-    obligation_tools = {
-        "state.load",
-        "state.save",
-        "result.complete",
-        "result.fail",
-        "toll_bench.guide",
-        "toll_bench.list_proposals",
-        "toll_bench.read_finalist_answers",
-        "toll_bench.submit_informed_plan",
-        "toll_bench.current_step",
-        "toll_bench.reply_step_message",
-        "toll_bench.post_check_in",
-        "toll_bench.file_outcome",
-        "email.send",
-        "email.reply",
-        "human.request",
-    }
     original_tools = resources.runtime.enabled_tools
     resources.runtime.enabled_tools = [name for name in original_tools if name in obligation_tools]
+    meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
     try:
         result = resources.runtime.start(goal, mode)
     finally:
@@ -592,6 +744,7 @@ def _process_market_attention(
         "ok": result.status.value in {"completed", "waiting"},
         "reachability": reachability,
         "attention_count": len(obligations),
+        "dispatch": meter,
         "run": _result_payload(result),
     }
 
@@ -702,6 +855,7 @@ def _process_market_opportunities(
 
     resources.runtime.enabled_tools = list(MARKET_SCAN_TOOLS)
     resources.toll_bench.submit_proposal = submit_at_most_one
+    meter = _dispatch_meter("market_scan", goal, resources.runtime.enabled_tools)
     try:
         result = resources.runtime.start(goal, mode)
     finally:
@@ -723,6 +877,7 @@ def _process_market_opportunities(
         "open_target_count": target_count,
         "candidate_count": len(candidates),
         "proposal_filed": proposal_filed,
+        "dispatch": meter,
         "run": _result_payload(result),
     }
 

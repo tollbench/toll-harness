@@ -324,6 +324,41 @@ class BookOfHousesRestMailClient:
         if self.pending_store is not None:
             self.pending_store.unlink(missing_ok=True)
 
+    def _reanchor_pending_send(self, *, proposal_id: str, step_id: str) -> None:
+        """Carry an approval-pending email to the deal\'s new current step.
+
+        The intelligence already chose these exact bytes and a person may be
+        reviewing them, so the harness preserves the content verbatim and only
+        re-binds it to the live step, requesting approval for the identical
+        recipient, subject, and body. It never regenerates the message.
+        """
+        if self.pending_send is None:
+            return
+        approval = self.api.request_email_approval(
+            {
+                "proposal_id": proposal_id,
+                "step_id": step_id,
+                "approval_type": "individual",
+                "to": self.pending_send["to"],
+                "subject": self.pending_send["subject"],
+                "body_text": self.pending_send["body_text"],
+                "purpose": self.pending_send.get(
+                    "purpose", "Complete the accepted Toll Bench email delivery step."
+                ),
+                "message_classification": self.pending_send.get(
+                    "message_classification", "operational"
+                ),
+            }
+        )
+        approval_id = approval.get("approval_id")
+        self.pending_send = {**self.pending_send, "step_id": step_id, "approval_id": approval_id}
+        self.send_context = {
+            "proposal_id": proposal_id,
+            "step_id": step_id,
+            "approval_id": approval_id,
+        }
+        self._persist_pending_send()
+
     def configure_send_context(self, *, proposal_id: str, step_id: str) -> None:
         next_context = {"proposal_id": proposal_id, "step_id": step_id}
         if self.pending_send:
@@ -334,11 +369,11 @@ class BookOfHousesRestMailClient:
                 # retargeted onto this one; defer this deal for the cycle.
                 raise RuntimeError("A different deal step has an unresolved pending email send")
             if pending_step != step_id:
-                # Same deal, but it has advanced past the step the pending send
-                # was bound to. That approval can never satisfy the current step,
-                # so the pending send is stale: discard it so a fresh approval is
-                # requested against the live step instead of deferring forever.
-                self._clear_pending_send()
+                # Same deal advanced to a new step. Carry the already drafted and
+                # approval-pending email forward to the live step unchanged
+                # instead of regenerating it or deferring forever.
+                self._reanchor_pending_send(proposal_id=proposal_id, step_id=step_id)
+                return
         if any(self.send_context.get(key) != value for key, value in next_context.items()):
             self.send_context = next_context
 
@@ -431,18 +466,30 @@ class BookOfHousesRestMailClient:
                 "approval_id": approval.get("approval_id"),
                 "message": "Exact recipient and email content are waiting for person approval.",
             }
+        # H5: the person approved exact bytes, and those are the only bytes
+        # that can go out. If the model redrafted between approval and send,
+        # send the approved content and say so in the result; never the rewrite.
+        approved = self.pending_send
+        content_rewritten = bool(approved) and (
+            recipients[0] != approved["to"]
+            or (message.get("subject") or "") != (approved["subject"] or "")
+            or (message.get("text") or "") != (approved["body_text"] or "")
+        )
         payload = {
             **self.send_context,
             "purpose": purpose,
             "message_classification": classification,
-            "to": recipients[0],
-            "subject": message.get("subject"),
-            "body_text": message.get("text"),
+            "to": approved["to"] if approved else recipients[0],
+            "subject": approved["subject"] if approved else message.get("subject"),
+            "body_text": approved["body_text"] if approved else message.get("text"),
         }
         try:
             result = self.api.send_email(payload)
             self._clear_pending_send()
-            return self._with_send_receipt(result, payload)
+            result = self._with_send_receipt(result, payload)
+            if content_rewritten:
+                result["approved_content_enforced"] = True
+            return result
         except BookOfHousesApiError as error:
             if error.code in {"EMAIL_REQUIRES_HUMAN_APPROVAL", "EMAIL_APPROVAL_PENDING"}:
                 return {
