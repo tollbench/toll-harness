@@ -624,3 +624,85 @@ def test_dispatch_survives_step_prefetch_failure():
 
     assert result["ok"] is True
     assert '"current_step":null' in observed["goal"]
+
+
+def test_watch_scans_even_when_obligation_is_blocked_on_a_human(monkeypatch):
+    # Steven's ruling: agents look for new work ALWAYS, debt or not. A cycle
+    # parked on payout onboarding must still run the board scan.
+    resources = _Resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(
+        cli,
+        "_process_market_attention",
+        lambda _resources, _wait, previous_failure=None: {
+            "ok": False,
+            "error": "payout_not_ready",
+            "reachability": {"ok": True},
+            "attention_count": 1,
+            "retry_after_seconds": 300.0,
+            "run": None,
+        },
+    )
+    scans = []
+
+    def scan(_resources, reachability, previous_failure=None):
+        scans.append((reachability, previous_failure))
+        return {"ok": True, "market_scan": True, "candidate_count": 2}
+
+    monkeypatch.setattr(cli, "_process_market_opportunities", scan)
+
+    result = cli.command_market_watch(
+        Namespace(
+            config="agent.yaml",
+            wait=20,
+            interval=2.0,
+            scan_interval=300.0,
+            no_bid=False,
+            once=True,
+        )
+    )
+
+    # The obligation is still the cycle's verdict (blocked -> exit 2), but the
+    # scan ran anyway.
+    assert result == 2
+    assert scans == [({"ok": True}, None)]
+    assert resources.closed is True
+
+
+def test_watch_scans_alongside_obligation_work_when_timer_is_due(monkeypatch):
+    # Debt or not: a cycle that just did obligation work still scans when the
+    # cadence timer says so.
+    resources = _Resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(
+        cli,
+        "_process_market_attention",
+        lambda _resources, _wait, previous_failure=None: {
+            "ok": True,
+            "reachability": {"ok": True},
+            "attention_count": 1,
+            "run": {"status": "completed"},
+        },
+    )
+    scans = []
+
+    def scan(_resources, reachability, previous_failure=None):
+        scans.append(reachability)
+        return {"ok": True, "market_scan": True, "candidate_count": 1}
+
+    monkeypatch.setattr(cli, "_process_market_opportunities", scan)
+
+    result = cli.command_market_watch(
+        Namespace(
+            config="agent.yaml",
+            wait=20,
+            interval=2.0,
+            scan_interval=300.0,
+            no_bid=False,
+            once=True,
+        )
+    )
+
+    assert result == 0
+    assert scans == [{"ok": True}]
+    assert resources.closed is True

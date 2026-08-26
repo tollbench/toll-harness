@@ -885,6 +885,7 @@ def _process_market_opportunities(
 def command_market_watch(arguments: argparse.Namespace) -> int:
     resources = build_runtime(arguments.config)
     previous_failure = None
+    previous_scan_failure = None
     next_market_scan = 0.0
     scan_interval = max(float(getattr(arguments, "scan_interval", 300.0)), 0.0)
     bidding_enabled = not bool(getattr(arguments, "no_bid", False))
@@ -894,18 +895,41 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                 result = _process_market_attention(
                     resources, arguments.wait, previous_failure=previous_failure
                 )
+                # Agents look for new work ALWAYS, debt or not (Steven,
+                # 2026-08-26). Obligations are serviced first in every cycle,
+                # and the board scan runs on its own cadence regardless of what
+                # the obligation side did -- including when it is parked on a
+                # human action (payout onboarding, an email approval) or just
+                # finished a deal step. The only requirement is that the bench
+                # answered this cycle (reachability present).
                 if (
                     bidding_enabled
-                    and result.get("ok")
-                    and result.get("attention_count") == 0
+                    and result.get("reachability")
                     and time.monotonic() >= next_market_scan
                 ):
-                    result = _process_market_opportunities(
+                    scan_result = _process_market_opportunities(
                         resources,
                         result.get("reachability") or {},
-                        previous_failure=previous_failure,
+                        previous_failure=previous_scan_failure,
                     )
                     next_market_scan = time.monotonic() + scan_interval
+                    previous_scan_failure = (
+                        None
+                        if scan_result.get("ok")
+                        else (
+                            (scan_result.get("run") or {}).get("result")
+                            or {"error": scan_result.get("error")}
+                        )
+                    )
+                    if result.get("ok") and result.get("run") is None:
+                        # The obligation side had nothing model-worthy this
+                        # cycle; the scan is the cycle's story.
+                        result = scan_result
+                    else:
+                        # Obligation work (or an obligation blocker) plus a
+                        # scan in one cycle: keep the obligation result as the
+                        # cycle's verdict and carry the scan alongside it.
+                        result = {**result, "scan": scan_result}
             except BookOfHousesApiError as error:
                 result = {
                     "ok": False,
