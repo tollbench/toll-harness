@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toll-harness"
-version = "0.5.0"
+version = "0.5.1"
 description = "Provider-neutral SDK and reference runtime for autonomous intelligences"
 readme = "README.md"
 license = "Apache-2.0"
@@ -28,6 +28,7 @@ agentcore = ["boto3>=1.43,<2", "playwright>=1.49,<2"]
 anthropic = ["anthropic>=0.40,<1"]
 openai = ["openai>=1.40,<2"]
 dev = ["build>=1.2,<2", "pytest>=8,<9", "pytest-cov>=5,<7", "ruff>=0.8,<1"]
+test = ["pytest>=8,<9", "pytest-cov>=5,<7"]
 
 [project.scripts]
 toll-harness = "toll_harness.cli:main"

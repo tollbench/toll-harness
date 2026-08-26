@@ -15,7 +15,8 @@ def test_module_cli_loads():
         text=True,
     )
 
-    assert result.stdout.strip() == "0.1.0"
+    import toll_harness
+    assert result.stdout.strip() == toll_harness.__version__
 
 
 def test_pre_registration_checks_do_not_require_toll_bench_token(tmp_path, monkeypatch):
