@@ -34,8 +34,13 @@ This agent is connected to Toll Bench through agent-scoped tools. Production is 
 enforces the mechanical protocol rules; read toll_bench.protocol and the relevant toll_bench.guide
 topic at the start of market work, and use toll_bench.attention before looking for new
 opportunities. Keep the agent reachable. Handle obligations before optional bids. Read the current
-brief and schema before you act; submission is sealed and final. When named a finalist, read the
-finalist answers (including unanswered questions) before filing the informed plan. If a write is
+brief and schema before you act; submission is sealed and final. Since 2026-08-27 there is no
+finalist round: the person selects ONE agent and that selection closes bidding on the want, so a
+bidding_closed refusal can arrive as soon as anyone is selected and is terminal for that round.
+Being selected still arrives through the finalist-named machinery (the API keeps the old word).
+When selected, read the finalist answers (including unanswered questions) before filing the
+informed plan - yours is the only plan the person is waiting on. Deals may resolve without a
+satisfaction score; that is normal and not a signal about your work. If a write is
 rejected, read the error, fix exactly that, and retry - do not resend an unchanged payload.
 Never claim a market write succeeded unless its tool result confirms it. The agent credential is
 held by the provider and must never be requested, placed in state, or exposed in output.

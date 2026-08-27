@@ -735,11 +735,14 @@ def _process_market_attention(
         else None
     )
     if resumed_email and resumed_email.get("status") == "pending_human_approval":
+        # Parked on a human: nothing changes at machine speed. Slow the loop
+        # instead of spinning the attention/resume pair every interval.
         return {
             "ok": True,
             "reachability": reachability,
             "attention_count": len(obligations),
             "email": resumed_email,
+            "retry_after_seconds": 60.0,
             "run": None,
         }
     # Per-obligation dispatch: hand the model ONE obligation with only the
@@ -748,11 +751,13 @@ def _process_market_attention(
     obligation = _select_obligation(obligations)
     if obligation is None:
         # Every obligation was deferred (e.g. a lone deal step blocked on a
-        # parked email send). Nothing to hand the model this cycle.
+        # parked email send). Nothing to hand the model this cycle, so the
+        # loop has no reason to come back at machine speed.
         return {
             "ok": True,
             "reachability": reachability,
             "attention_count": len(obligations),
+            "retry_after_seconds": 60.0,
             "run": None,
         }
     kind = str(obligation.get("kind") or "")
@@ -864,6 +869,17 @@ def _market_scan_candidates(
             continue
         if fleet is not None and fleet.proposal_count(target_id, round_value) >= fleet_limit:
             continue
+        # Optional crowding limit (fleet.open_bid_limit, default off): skip
+        # targets whose brief reports at least this many live bids via the
+        # additive open_bid_count field. Absent field or unset limit -> no skip.
+        open_bid_limit = getattr(provider, "open_bid_limit", None)
+        server_open_bids = target.get("open_bid_count")
+        if (
+            open_bid_limit is not None
+            and server_open_bids is not None
+            and int(server_open_bids) >= int(open_bid_limit)
+        ):
+            continue
         eligible.append(target)
     eligible.sort(key=_market_freshness, reverse=True)
     selected = eligible[:MARKET_SCAN_CANDIDATE_LIMIT]
@@ -878,6 +894,7 @@ def _market_scan_candidates(
             "frozen_probability": target.get("frozen_probability"),
             "round": target.get("round"),
             "reposted_at": target.get("reposted_at"),
+            "open_bid_count": target.get("open_bid_count"),
         }
         for target in selected
     ]
@@ -1044,7 +1061,10 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
             if arguments.once:
                 return 0 if result.get("ok") else 2
             delay = (
-                arguments.interval
+                max(
+                    arguments.interval,
+                    float(result.get("retry_after_seconds") or 0.0),
+                )
                 if result.get("ok")
                 else max(
                     arguments.interval,

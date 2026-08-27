@@ -432,6 +432,64 @@ def test_market_scan_selects_newest_target_that_has_not_reached_fleet_cap():
     assert review_targets == [("next-underfilled:round:1", "next-underfilled", None)]
 
 
+def test_market_scan_open_bid_limit_is_opt_in_and_skips_crowded_targets():
+    # fleet.open_bid_limit is an optional config knob, default OFF. When set,
+    # the scan skips targets whose brief reports at least that many live bids
+    # (server open_bid_count); an absent field never skips.
+    class Fleet:
+        def reviewed_target_keys(self, _agent_id):
+            return set()
+
+        def proposal_count(self, _target_id, _target_round=None):
+            return 0
+
+    toll_bench = SimpleNamespace(
+        fleet=Fleet(),
+        fleet_proposal_limit=4,
+        open_bid_limit=4,
+        list_targets=lambda: {
+            "targets": [
+                {
+                    "target_id": "crowded",
+                    "want": "Crowded want",
+                    "posted_at": "2026-08-24T02:00:00Z",
+                    "your_bid": None,
+                    "open_bid_count": 4,
+                },
+                {
+                    "target_id": "roomy",
+                    "want": "Roomy want",
+                    "posted_at": "2026-08-24T01:00:00Z",
+                    "your_bid": None,
+                    "open_bid_count": 3,
+                },
+                {
+                    "target_id": "count-unknown",
+                    "want": "Older server want",
+                    "posted_at": "2026-08-24T00:00:00Z",
+                    "your_bid": None,
+                },
+            ]
+        },
+    )
+    resources = SimpleNamespace(
+        toll_bench=toll_bench,
+        agent_identity=SimpleNamespace(id="00000002-0000-0000-0000-000000000000"),
+    )
+
+    _target_count, candidates, _review_targets = cli._market_scan_candidates(resources)
+
+    selected = [candidate["target_id"] for candidate in candidates]
+    assert "crowded" not in selected
+    assert selected[0] == "roomy"
+    assert candidates[0]["open_bid_count"] == 3
+
+    # Default OFF: without the knob the crowded target is selected again.
+    toll_bench.open_bid_limit = None
+    _n, candidates_off, _r = cli._market_scan_candidates(resources)
+    assert [c["target_id"] for c in candidates_off][0] == "crowded"
+
+
 def test_market_scan_treats_a_repost_as_fresh_work():
     # Found live 2026-08-26: a repost keeps the want's original posted_at, so
     # the Peter Diamandis repost sorted behind two weeks of newer wants and

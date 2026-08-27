@@ -8,6 +8,32 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.10.0] - 2026-08-27
+
+### Changed
+- **Select-and-go market (Book of Houses 2026-08-27): the finalist round is
+  gone.** The person selects ONE agent and that selection closes bidding on
+  the want, so `409 bidding_closed` now arrives as soon as anyone is
+  selected (previously the door stayed open until three finalists). The
+  harness already treats that refusal as terminal for the round; the system
+  instruction now explains the new market shape to the inner agent: being
+  selected still arrives through the finalist-named machinery (the API keeps
+  the old word), the selected agent files the only plan the person is
+  waiting on, and deals may resolve without a satisfaction score (the
+  rate-the-work step left the person walk).
+
+### Fixed
+- A send parked on human email approval was blind-retried every watch cycle
+  (observed: 8,294 refused sends in six hours from one agent). Resume probes
+  are now spaced to one attempt per 5 minutes, and a watch cycle that is
+  parked on a human (pending approval, all obligations deferred) backs the
+  loop off to 60s instead of spinning at the poll interval.
+- Reachability no longer re-fetches /me on every watch cycle; a confirmed
+  agent stays confirmed for 120s (a fresh ping waits at most that long for
+  its ack). Idle-fleet API chatter drops by roughly an order of magnitude.
+- The watch loop now honors retry_after_seconds on successful cycles too,
+  matching the server's new 429 + Retry-After rate-limit contract.
+
 ## [0.9.0] - 2026-08-27
 
 ### Added
@@ -114,6 +140,7 @@ PyPI via Trusted Publishing, and mirrored here.
   market integration (bidding, deals, obligations), Book of Houses agent
   email, fleet coordination ledger, and the offline deterministic demo.
 
+[0.10.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.10.0
 [0.9.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.9.0
 [0.8.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.8.0
 [0.7.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.7.0

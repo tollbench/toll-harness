@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,7 +45,9 @@ class BookOfHousesApiClient:
         authenticated: bool = False,
         idempotency_key: str | None = None,
         query: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        extra_headers: dict[str, str] | None = None,
+        return_headers: bool = False,
+    ) -> Any:
         if authenticated and not self._token:
             raise BookOfHousesApiError(401, "missing_agent_token", "Agent token is not configured")
         url = f"{self.base_url}{path}"
@@ -61,11 +64,16 @@ class BookOfHousesApiClient:
                 headers["X-Maker-Id"] = self.maker_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if extra_headers:
+            headers.update(extra_headers)
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
-                return json.loads(raw) if raw else {}
+                data = json.loads(raw) if raw else {}
+                if return_headers:
+                    return data, dict(response.headers)
+                return data
         except urllib.error.HTTPError as error:
             try:
                 detail = json.loads(error.read())
@@ -238,8 +246,24 @@ class BookOfHousesApiClient:
         return self._request("GET", "/api/agent-email/mailbox", authenticated=True)
 
     def proposals(self) -> list[dict[str, Any]]:
-        result = self._request("GET", "/api/bench/proposals/mine", authenticated=True)
-        return list(result.get("proposals") or [])
+        # ETag rail (server additive 2026-08-27): most polls see an unchanged
+        # list, and the full body can exceed 100KB. If-None-Match turns those
+        # polls into empty 304s; urllib surfaces the 304 as an HTTPError, and
+        # that "error" IS the cache hit.
+        extra = None
+        if getattr(self, "_proposals_etag", None):
+            extra = {"If-None-Match": self._proposals_etag}
+        try:
+            result, response_headers = self._request(
+                "GET", "/api/bench/proposals/mine", authenticated=True,
+                extra_headers=extra, return_headers=True)
+        except BookOfHousesApiError as error:
+            if error.status == 304 and getattr(self, "_proposals_cache", None) is not None:
+                return list(self._proposals_cache)
+            raise
+        self._proposals_etag = response_headers.get("ETag")
+        self._proposals_cache = list(result.get("proposals") or [])
+        return list(self._proposals_cache)
 
     def threads(self, proposal_id: str, limit: int = 50) -> dict[str, Any]:
         return self._request(
@@ -520,16 +544,33 @@ class BookOfHousesRestMailClient:
             "reason": error.message,
         }
 
+    # A send parked on human approval resolves at human speed. Probing it by
+    # re-POSTing every watch cycle produced 8,294 refused sends in six hours
+    # (2026-08-27, Marcia), so probes are spaced: at most one attempt per
+    # RESUME_PROBE_SECONDS. Worst-case latency after the person approves is
+    # one probe interval; rejection feedback also arrives on the next probe.
+    RESUME_PROBE_SECONDS = 300.0
+
     def resume_pending_send(self) -> dict[str, Any] | None:
         if self.pending_send is None:
             return None
+        if time.monotonic() < getattr(self, "_next_resume_probe", 0.0):
+            return {
+                "ok": False,
+                "success": False,
+                "status": "pending_human_approval",
+                "approval_id": self.send_context.get("approval_id"),
+                "probe_deferred": True,
+            }
         payload = dict(self.pending_send)
         try:
             result = self.api.send_email(payload)
         except BookOfHousesApiError as error:
             if error.code == "EMAIL_APPROVAL_REJECTED":
+                self._next_resume_probe = 0.0
                 return self._handle_rejected_approval(error)
             if error.code in {"EMAIL_REQUIRES_HUMAN_APPROVAL", "EMAIL_APPROVAL_PENDING"}:
+                self._next_resume_probe = time.monotonic() + self.RESUME_PROBE_SECONDS
                 return {
                     "ok": False,
                     "success": False,
@@ -537,6 +578,7 @@ class BookOfHousesRestMailClient:
                     "approval_id": self.send_context.get("approval_id"),
                 }
             raise
+        self._next_resume_probe = 0.0
         self._clear_pending_send()
         return self._with_send_receipt(result, payload)
 

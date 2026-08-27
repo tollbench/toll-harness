@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
@@ -16,11 +17,20 @@ class BookOfHousesTollBenchProvider:
         fleet: FleetStore | None = None,
         fleet_agent_id: str | None = None,
         fleet_proposal_limit: int = 4,
+        open_bid_limit: int | None = None,
     ):
         self.api = api
         self.fleet = fleet
         self.fleet_agent_id = fleet_agent_id
         self.fleet_proposal_limit = fleet_proposal_limit
+        # Optional market-scan crowding limit; None disables the check.
+        self.open_bid_limit = open_bid_limit
+        # Once reachable, stay confirmed for a window instead of re-fetching
+        # /me every watch cycle (2026-08-27: the 7-agent fleet alone was
+        # ~2,400 /me calls an hour). A fresh reachability ping waits at most
+        # this long for its ack.
+        self._reachable_cached: dict[str, Any] | None = None
+        self._reachable_until = 0.0
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -58,7 +68,11 @@ class BookOfHousesTollBenchProvider:
     def status(self) -> dict[str, Any]:
         return self.api.me()
 
+    REACHABLE_CACHE_SECONDS = 120.0
+
     def ensure_reachable(self) -> dict[str, Any]:
+        if self._reachable_cached is not None and time.monotonic() < self._reachable_until:
+            return self._reachable_cached
         status = self.status()
         acknowledgements = 0
         for _ in range(2):
@@ -68,11 +82,17 @@ class BookOfHousesTollBenchProvider:
             status = self.api.ack_reachability_ping()
             acknowledgements += 1
         reachability = status.get("reachability_test") or {}
-        return {
+        result = {
             "ok": bool(reachability.get("reachable") or reachability.get("reachable_at")),
             "acknowledgements": acknowledgements,
             "reachability_test": reachability,
         }
+        if result["ok"]:
+            # The cached answer describes a confirmation that did no work:
+            # zero acknowledgements, marked cached.
+            self._reachable_cached = {**result, "acknowledgements": 0, "cached": True}
+            self._reachable_until = time.monotonic() + self.REACHABLE_CACHE_SECONDS
+        return result
 
     def attention(self, *, wait: int = 0) -> dict[str, Any]:
         return self.api.attention(wait=wait)

@@ -255,6 +255,11 @@ def build_runtime(path: str | Path) -> RuntimeResources:
             fleet=fleet_store,
             fleet_agent_id=identity.id if identity else None,
             fleet_proposal_limit=int(fleet_config.get("proposal_limit_per_target", 4)),
+            open_bid_limit=(
+                int(fleet_config["open_bid_limit"])
+                if fleet_config.get("open_bid_limit") is not None
+                else None
+            ),
         )
     if providers.get("email") == "book_of_houses":
         email_config = config.get("email", {})
