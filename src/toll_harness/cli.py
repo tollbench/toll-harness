@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
 import platform
+import shutil
 import sys
 import time
 from dataclasses import asdict
@@ -13,7 +15,12 @@ from typing import Any
 import yaml
 
 from toll_harness import __version__
-from toll_harness.config import build_runtime, default_config, load_config
+from toll_harness.config import (
+    build_model_adapter,
+    build_runtime,
+    default_config,
+    load_config,
+)
 from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.email.book_of_houses import BookOfHousesApiError
@@ -92,6 +99,34 @@ def _yes_no(label: str, *, default: bool) -> bool:
     raise ValueError(f"{label} must be answered yes or no")
 
 
+def _choose(label: str, options: list[tuple[str, str]], *, default_key: str) -> str:
+    print(f"{label}:")
+    for index, (_key, description) in enumerate(options, 1):
+        print(f"  {index}. {description}")
+    default_index = next(i for i, (key, _) in enumerate(options, 1) if key == default_key)
+    value = input(f"Choose 1-{len(options)} [{default_index}]:\n> ").strip().lower()
+    if not value:
+        return default_key
+    if value.isdigit() and 1 <= int(value) <= len(options):
+        return options[int(value) - 1][0]
+    for key, _description in options:
+        if value == key:
+            return key
+    raise ValueError(f"{label} must be a number 1-{len(options)}")
+
+
+def _secret_prompt(label: str) -> str:
+    value = getpass.getpass(f"{label} (input hidden):\n> ").strip()
+    if not value:
+        raise ValueError(f"{label} is required")
+    return value
+
+
+def _require_cli(binary: str, hint: str) -> None:
+    if shutil.which(binary) is None:
+        raise ValueError(f"The '{binary}' CLI is not on PATH. {hint}")
+
+
 def _configuration_path(value: str) -> Path:
     path = Path(value).resolve()
     return path if path.name.endswith((".yaml", ".yml")) else path / "agent.yaml"
@@ -148,13 +183,9 @@ def _resolve_bedrock_model(
 def _test_model_and_browser(config_path: Path) -> dict[str, Any]:
     config = load_config(config_path)
     model_config = config["model"]
-    adapter = BedrockModelAdapter(
-        model_config["model_id"],
-        region=model_config.get("region", "us-west-2"),
-        profile_name=model_config.get("profile"),
-        max_tokens=16,
-        temperature=0,
-    )
+    root = config_path.parent
+    data_dir = (root / config.get("storage", {}).get("directory", ".toll-harness")).resolve()
+    adapter = build_model_adapter(config, root=root, data_dir=data_dir)
     response = adapter.invoke(
         system="This is a provider connectivity check.",
         messages=[ModelMessage.text("user", "Reply with OK.")],
@@ -279,21 +310,62 @@ def command_init(arguments: argparse.Namespace) -> int:
         raise FileExistsError(f"Refusing to overwrite {config_path}; pass --force")
     print("Toll Harness\n")
     agent_name = _prompt("Agent name")
-    provider = _prompt("Intelligence provider", default="Amazon Bedrock")
-    if provider.lower() not in {"amazon bedrock", "bedrock"}:
-        raise ValueError("Toll Harness 0.1 init currently automates Amazon Bedrock")
-    intelligence = _prompt("Intelligence family", default="Mistral")
-    aws_profile = _prompt("AWS profile", default="default")
-    if aws_profile == "default":
-        aws_profile = None
-    aws_region = _prompt("AWS region", default="us-west-2")
-    model_selection = _prompt("Intelligence/model")
-    model_id = _resolve_bedrock_model(
-        model_selection,
-        intelligence=intelligence,
-        profile=aws_profile,
-        region=aws_region,
+    adapter = _choose(
+        "Model provider",
+        [
+            (
+                "claude_code",
+                "Claude subscription (Pro/Max) - sign in once with the Claude Code "
+                "CLI, no API key",
+            ),
+            ("codex", "ChatGPT subscription - sign in once with `codex login`, no API key"),
+            ("anthropic", "Anthropic API key - paste it now"),
+            ("openai", "OpenAI API key - paste it now"),
+            ("bedrock", "AWS Bedrock - IAM credentials via an AWS profile"),
+        ],
+        default_key="claude_code",
     )
+    aws_profile = None
+    aws_region = "us-west-2"
+    model_api_key = None
+    if adapter == "bedrock":
+        intelligence = _prompt("Intelligence family", default="Mistral")
+        aws_profile = _prompt("AWS profile", default="default")
+        if aws_profile == "default":
+            aws_profile = None
+        aws_region = _prompt("AWS region", default="us-west-2")
+        model_selection = _prompt("Intelligence/model")
+        model_id = _resolve_bedrock_model(
+            model_selection,
+            intelligence=intelligence,
+            profile=aws_profile,
+            region=aws_region,
+        )
+    elif adapter == "claude_code":
+        _require_cli(
+            "claude",
+            "Install Claude Code (https://claude.com/claude-code) and run `claude` "
+            "once to sign in with your subscription, or set CLAUDE_CODE_OAUTH_TOKEN "
+            "from `claude setup-token`. Then run init again.",
+        )
+        intelligence = "Claude"
+        model_id = _prompt("Model (as your claude CLI names it)", default="opus")
+    elif adapter == "codex":
+        _require_cli(
+            "codex",
+            "Install the Codex CLI (https://github.com/openai/codex) and run "
+            "`codex login` to sign in with ChatGPT. Then run init again.",
+        )
+        intelligence = "GPT"
+        model_id = _prompt("Model (as your codex CLI names it)", default="gpt-5-codex")
+    elif adapter == "anthropic":
+        intelligence = "Claude"
+        model_id = _prompt("Model id", default="claude-opus-4-8")
+        model_api_key = _secret_prompt("Anthropic API key")
+    else:
+        intelligence = "GPT"
+        model_id = _prompt("Model id (for example gpt-5.2)")
+        model_api_key = _secret_prompt("OpenAI API key")
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
     connect = _yes_no("Connect to Toll Bench / Book of Houses?", default=True)
@@ -318,6 +390,8 @@ def command_init(arguments: argparse.Namespace) -> int:
         responsible_legal_name=responsible_name,
         responsible_jurisdiction=jurisdiction,
         verification_recipient=verification_recipient,
+        model_adapter=adapter,
+        model_api_key=model_api_key,
     )
     config_path = create_configuration(config_path.parent, answers)
     _set_worker_preference(config_path, connect and not arguments.no_worker)

@@ -79,6 +79,12 @@ class InitAnswers:
     responsible_legal_name: str | None = None
     responsible_jurisdiction: str | None = None
     verification_recipient: str | None = None
+    # bedrock | anthropic | openai | claude_code | codex
+    model_adapter: str = "bedrock"
+    # Pasted at init for the anthropic/openai adapters; written straight into
+    # the agent's isolated SecretStore, never into agent.yaml or onboarding
+    # state. The subscription rails (claude_code, codex) never carry a key.
+    model_api_key: str | None = None
 
 
 def _atomic_text(path: Path, value: str, mode: int) -> None:
@@ -151,9 +157,45 @@ def save_onboarding(config_path: Path, config: dict[str, Any], state: dict[str, 
     )
 
 
+_API_KEY_SECRET_NAMES = {"anthropic": "anthropic_api_key", "openai": "openai_api_key"}
+
+
+def _model_block(answers: InitAnswers) -> dict[str, Any]:
+    adapter = answers.model_adapter
+    if adapter == "bedrock":
+        return {
+            "adapter": "bedrock",
+            "profile": answers.aws_profile,
+            "region": answers.aws_region,
+            "model_id": answers.model_id,
+            "max_tokens": 2048,
+            "temperature": 0,
+        }
+    if adapter in _API_KEY_SECRET_NAMES:
+        return {
+            "adapter": adapter,
+            "model_id": answers.model_id,
+            "max_tokens": 2048,
+            "api_key_secret": _API_KEY_SECRET_NAMES[adapter],
+        }
+    if adapter in ("claude_code", "codex"):
+        # Subscription OAuth rails: the vendor CLI owns the login, so the
+        # configuration carries no credential reference at all.
+        return {
+            "adapter": adapter,
+            "model_id": answers.model_id or None,
+            "timeout_seconds": 600,
+        }
+    raise ValueError(
+        "model_adapter must be one of: bedrock, anthropic, openai, claude_code, codex"
+    )
+
+
 def create_configuration(destination: Path, answers: InitAnswers) -> Path:
     if answers.mode not in {"Autonomous", "Supported"}:
         raise ValueError("Operating mode must be exactly Autonomous or Supported")
+    if answers.model_api_key and answers.model_adapter not in _API_KEY_SECRET_NAMES:
+        raise ValueError("Only the anthropic and openai adapters take a pasted API key")
     if answers.connect_toll_bench and not all(
         (
             answers.company_url,
@@ -185,14 +227,7 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
             "company": answers.company,
             "autonomy": answers.mode.upper(),
         },
-        "model": {
-            "adapter": "bedrock",
-            "profile": answers.aws_profile,
-            "region": answers.aws_region,
-            "model_id": answers.model_id,
-            "max_tokens": 2048,
-            "temperature": 0,
-        },
+        "model": _model_block(answers),
         "runtime": {
             "autonomy": answers.mode.lower(),
             "knowledge_namespace": agent_id,
@@ -207,7 +242,9 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         },
         "providers": {
             "web": "basic",
-            "browser": "agentcore",
+            # The AgentCore browser assumes AWS credentials; every other rail
+            # gets no browser by default (operators can flip to playwright).
+            "browser": "agentcore" if answers.model_adapter == "bedrock" else "disabled",
             "browser_headless": True,
             "email": "book_of_houses" if email_enabled else "disabled",
         },
@@ -246,7 +283,11 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
     }
     save_config(config_path, config)
     data_directory(config_path, config).mkdir(parents=True, exist_ok=True)
-    secret_store(config_path, config)
+    secrets_store = secret_store(config_path, config)
+    if answers.model_api_key:
+        # The pasted key lands only in the owner-only SecretStore; agent.yaml
+        # carries just the secret NAME (model.api_key_secret).
+        secrets_store.set(_API_KEY_SECRET_NAMES[answers.model_adapter], answers.model_api_key)
     save_onboarding(config_path, config, {"version": 1, "status": LOCAL_CONFIGURED})
     return config_path
 

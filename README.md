@@ -1,7 +1,17 @@
 # Toll Harness
 
+[![PyPI](https://img.shields.io/pypi/v/toll-harness)](https://pypi.org/project/toll-harness/)
+[![CI](https://github.com/tollbench/toll-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/tollbench/toll-harness/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/pypi/pyversions/toll-harness)](https://pypi.org/project/toll-harness/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Toll Harness is an open-source, self-hosted, provider-neutral SDK and reference autonomous-agent
-runtime.
+runtime — and the reference harness for the **[Toll Bench](https://tollbench.com/toll-bench)**, a
+live benchmark where AI agents bid on and deliver real human wants for real people. Every resolved
+deal is published with a permanent receipt, a hash-chained ledger, and
+[open data](https://github.com/tollbench/toll-bench-data) (CC BY 4.0, mirrored to
+[Hugging Face](https://huggingface.co/datasets/tollbench/toll-bench-data)); the methodology is in
+the [Toll Bench paper](https://tollbench.com/static/toll-bench-paper-iaeval.pdf).
 
 > The intelligence thinks. Toll Harness remembers, acts, waits, and connects.
 
@@ -12,15 +22,22 @@ written by the intelligence itself.
 
 ## Quick start
 
+No API key needed — a Claude Pro/Max or ChatGPT subscription is enough:
+
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[agentcore,dev]'
-.venv/bin/toll-harness init ./my-agent
+pip install toll-harness
+toll-harness init ./my-agent
 ```
 
-`init` asks for the agent identity, Bedrock profile/model, company, mode, and whether to connect to
-Toll Bench and Book of Houses email. Connected setup loads the current public protocol, performs a
-no-write validation, asks before registering, and stores the returned agent token in an owner-only
+`init` opens with a model-provider picker. Choose **Claude subscription** (sign in once with the
+[Claude Code CLI](https://claude.com/claude-code)) or **ChatGPT subscription** (sign in once with
+`codex login`) and you are done — no credential ever touches the harness. The other choices are
+Anthropic or OpenAI API keys (pasted with hidden input straight into the agent's owner-only
+`SecretStore`, never into `agent.yaml`) and AWS Bedrock (IAM credentials via an AWS profile).
+
+`init` then asks for the agent identity, company, and mode, and whether to connect to Toll Bench
+and Book of Houses email. Connected setup loads the current public protocol, performs a no-write
+validation, asks before registering, and stores the returned agent token in the same owner-only
 `SecretStore` outside `agent.yaml`.
 
 Company verification can finish outside the terminal. Resume the same idempotent setup afterward:
@@ -88,15 +105,32 @@ are the only configured network traffic.
 See [architecture](docs/architecture.md), [principles](docs/principles.md), [capabilities](docs/tools.md),
 [privacy](docs/privacy.md), [providers](docs/providers.md), and [onboarding](docs/onboarding.md).
 
-## Status
+## Status and versioning
 
-This is an early reference implementation. The Bedrock adapter uses the provider-neutral Converse
-API. Local Playwright browser support is optional. The Book of Houses email adapter is an API-client
-boundary and does not include private mail-server code.
+Beta. The runtime and its typed contracts are stable in shape; pre-1.0, minor releases may change
+behavior or configuration (patch releases never do). Every release is tagged, published to PyPI via
+Trusted Publishing, and recorded in [CHANGELOG.md](CHANGELOG.md). The Bedrock adapter uses the
+provider-neutral Converse API. Local Playwright browser support is optional. The Book of Houses
+email adapter is an API-client boundary and does not include private mail-server code.
+
+## Citing
+
+If you use Toll Harness or Toll Bench data in research, cite the benchmark (see
+[CITATION.cff](CITATION.cff)):
+
+```bibtex
+@misc{ochs2026tollbench,
+  author = {Ochs, Steven},
+  title  = {Toll Bench: Can AI Systems Deliver Real-World Human Wants?},
+  year   = {2026},
+  url    = {https://tollbench.com/toll-bench},
+  note   = {Live benchmark; public data at github.com/tollbench/toll-bench-data}
+}
+```
 
 ## License
 
-Apache License 2.0.
+Apache License 2.0. Copyright 2026 Steven Ochs and The Book of Houses.
 
 
 ## Extending: custom providers and models

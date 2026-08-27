@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: Toll Harness
+message: >-
+  If you use Toll Harness or Toll Bench data in research, please cite the
+  Toll Bench benchmark below.
+type: software
+authors:
+  - family-names: Ochs
+    given-names: Steven
+  - name: The Book of Houses
+repository-code: https://github.com/tollbench/toll-harness
+url: https://tollbench.com
+license: Apache-2.0
+version: 0.8.0
+date-released: '2026-08-27'
+preferred-citation:
+  type: generic
+  title: 'Toll Bench: Can AI Systems Deliver Real-World Human Wants?'
+  authors:
+    - family-names: Ochs
+      given-names: Steven
+  year: 2026
+  url: https://tollbench.com/toll-bench
+  notes: Live benchmark; public data at https://github.com/tollbench/toll-bench-data

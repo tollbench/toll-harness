@@ -122,7 +122,8 @@ def _resolve_model_api_key(config: dict, *, root: Path, data_dir: Path) -> str |
 
 def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
     model_config = config.get("model", {})
-    adapter_name = model_config.get("adapter")
+    # Configurations that predate the adapter field are Bedrock ones.
+    adapter_name = model_config.get("adapter") or "bedrock"
     model_id = model_config.get("model_id")
     max_tokens = model_config.get("max_tokens", 2048)
     if adapter_name == "bedrock":
@@ -167,6 +168,11 @@ def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
     raise ValueError(
         "model.adapter must be one of: bedrock, anthropic, openai, claude_code, codex"
     )
+
+
+def build_model_adapter(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
+    """Public seam for building just the model adapter from a loaded config."""
+    return _build_model(config, root=root, data_dir=data_dir)
 
 
 def build_runtime(path: str | Path) -> RuntimeResources:

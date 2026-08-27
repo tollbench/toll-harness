@@ -56,7 +56,9 @@ def test_pre_registration_checks_do_not_require_toll_bench_token(tmp_path, monke
         def close(self):
             pass
 
-    monkeypatch.setattr(cli, "BedrockModelAdapter", FakeAdapter)
+    monkeypatch.setattr(
+        cli, "build_model_adapter", lambda _config, *, root, data_dir: FakeAdapter()
+    )
     monkeypatch.setattr(
         "toll_harness.browser.agentcore.AgentCoreBrowserProvider",
         FakeBrowser,

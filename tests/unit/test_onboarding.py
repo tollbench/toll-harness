@@ -8,6 +8,7 @@ from toll_harness.onboarding import (
     InitAnswers,
     advance_connected_onboarding,
     create_configuration,
+    load_config,
 )
 
 
@@ -162,3 +163,55 @@ def test_connected_without_email_does_not_activate_mailbox(tmp_path):
     assert config["providers"]["email"] == "disabled"
     assert config["email"]["status"] == "ineligible"
     assert config["email"]["address"] is None
+
+
+def test_claude_subscription_configuration_carries_no_credentials(tmp_path):
+    from dataclasses import replace
+
+    answers = replace(
+        _answers(connected=False),
+        model_adapter="claude_code",
+        model_id="opus",
+        aws_profile=None,
+    )
+    config_path = create_configuration(tmp_path / "subscription", answers)
+
+    text = config_path.read_text()
+    config = load_config(config_path)
+    assert config["model"] == {"adapter": "claude_code", "model_id": "opus", "timeout_seconds": 600}
+    # The subscription rail must reference no key or AWS credential material.
+    assert "api_key" not in text.lower()
+    assert "aws_profile" not in text.lower()
+    # No AWS-credentialed browser default on a non-Bedrock rail.
+    assert config["providers"]["browser"] == "disabled"
+
+
+def test_pasted_api_key_lands_only_in_the_secret_store(tmp_path):
+    from dataclasses import replace
+
+    answers = replace(
+        _answers(connected=False),
+        model_adapter="anthropic",
+        model_id="claude-opus-4-8",
+        model_api_key="sk-ant-test-1234567890",
+    )
+    config_path = create_configuration(tmp_path / "keyed", answers)
+
+    assert "sk-ant-test-1234567890" not in config_path.read_text()
+    config = load_config(config_path)
+    assert config["model"]["api_key_secret"] == "anthropic_api_key"
+    from toll_harness.onboarding import secret_store
+
+    assert secret_store(config_path, config).get("anthropic_api_key") == "sk-ant-test-1234567890"
+
+
+def test_pasted_key_is_refused_on_a_subscription_rail(tmp_path):
+    from dataclasses import replace
+
+    import pytest
+
+    answers = replace(
+        _answers(connected=False), model_adapter="claude_code", model_api_key="sk-oops"
+    )
+    with pytest.raises(ValueError, match="pasted API key"):
+        create_configuration(tmp_path / "wrong", answers)
