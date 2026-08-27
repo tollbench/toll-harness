@@ -40,6 +40,44 @@ standard environment variable. The Anthropic adapter leaves thinking unconfigure
 loop round-trips through the harness's text / tool_call / tool_result message format without needing
 to preserve provider-specific thinking blocks.
 
+### OAuth subscriptions (no API key): `claude_code` and `codex`
+
+Claude Pro/Max and ChatGPT subscription sign-ins are OAuth flows owned by the vendors' own CLIs,
+and those OAuth tokens are **not accepted by the raw platform APIs** — so the harness does not
+implement the OAuth dance itself. Instead, two CLI-rail adapters run the official CLI headlessly
+and inherit whatever login it holds (subscription OAuth or an API key, the CLI's choice). The CLI
+does token storage and refresh; no key, token, or credential ever passes through Toll Harness
+configuration or storage.
+
+```yaml
+model:
+  adapter: claude_code        # Claude subscription OAuth via the Claude Code CLI
+  model_id: claude-opus-4-8   # optional; omit to use the CLI's configured default
+  timeout_seconds: 600        # optional; per-invocation CLI timeout
+  # binary: claude            # optional; override which CLI on PATH is used
+  # extra_args: []            # optional; appended to every CLI invocation
+```
+
+```yaml
+model:
+  adapter: codex              # ChatGPT subscription OAuth via the OpenAI Codex CLI
+  model_id: null              # optional; omit to use the CLI's configured default
+```
+
+Sign in once, outside the harness: run `claude` interactively (browser OAuth; on headless machines
+run `claude setup-token` elsewhere and set `CLAUDE_CODE_OAUTH_TOKEN`), or run `codex login`. If the
+binary is missing, the adapter fails fast at startup with the sign-in instruction.
+
+Two properties worth knowing. First, these CLIs are agents rather than raw model endpoints, so the
+harness tool contract rides a strict one-JSON-object envelope: each invocation renders the
+normalized transcript and tool catalog into a single prompt, and the reply must be
+`{"text": ..., "tool_calls": [{"name": ..., "arguments": {...}}]}`. A malformed reply gets one
+corrective retry, then degrades to a text-only turn so a chatty model stalls a turn instead of
+failing the run. Second, every invocation runs in an isolated scratch directory
+(`<storage>/cli-rail`) so the CLI never reads project context (CLAUDE.md, AGENTS.md, git state)
+from wherever the harness happens to run; the Claude rail is capped at `--max-turns 1` and the
+Codex rail additionally runs `--sandbox read-only`.
+
 ## Browser
 
 `BrowserProvider` defines the Toll browser contract. `PlaywrightBrowserProvider` is the optional

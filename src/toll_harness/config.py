@@ -149,7 +149,24 @@ def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
             api_key=_resolve_model_api_key(config, root=root, data_dir=data_dir),
             max_tokens=max_tokens,
         )
-    raise ValueError("model.adapter must be one of: bedrock, anthropic, openai")
+    # OAuth-subscription rails: no API key anywhere in the harness. The vendor
+    # CLI owns the sign-in (browser OAuth) plus token storage and refresh; the
+    # adapter runs it headlessly in an isolated scratch directory.
+    if adapter_name in ("claude_code", "codex"):
+        from toll_harness.models.cli_rail import ClaudeCodeCliAdapter, CodexCliAdapter
+
+        adapter_cls = ClaudeCodeCliAdapter if adapter_name == "claude_code" else CodexCliAdapter
+        kwargs: dict[str, Any] = {
+            "workdir": data_dir / "cli-rail",
+            "timeout_seconds": model_config.get("timeout_seconds", 600),
+            "extra_args": model_config.get("extra_args") or [],
+        }
+        if model_config.get("binary"):
+            kwargs["binary"] = model_config["binary"]
+        return adapter_cls(model_id, **kwargs)
+    raise ValueError(
+        "model.adapter must be one of: bedrock, anthropic, openai, claude_code, codex"
+    )
 
 
 def build_runtime(path: str | Path) -> RuntimeResources:

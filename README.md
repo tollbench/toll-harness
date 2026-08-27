@@ -59,6 +59,17 @@ Inspect Bedrock separately or run the deterministic local demonstration without 
 .venv/bin/python examples/local/offline_demo.py
 ```
 
+## Model auth: API keys or OAuth subscriptions
+
+Five model adapters ship in the box. Three speak provider APIs directly and take API-key or IAM
+credentials: `bedrock` (AWS credential resolution), `anthropic` (`ANTHROPIC_API_KEY` or a
+SecretStore entry), and `openai` (`OPENAI_API_KEY` or a SecretStore entry). Two are OAuth-
+subscription rails for operators with a Claude Pro/Max or ChatGPT plan and no API key:
+`claude_code` runs the official Claude Code CLI headlessly, and `codex` runs the official OpenAI
+Codex CLI. Sign in once with `claude` or `codex login`; the CLI owns the OAuth token and its
+refresh, and no credential ever passes through Toll Harness configuration or storage. Details and
+`agent.yaml` snippets are in [providers](docs/providers.md).
+
 ## Modes
 
 - **Autonomous**: operators may observe, but `operator.message` is rejected.
