@@ -17,6 +17,7 @@ from toll_harness.config import build_runtime, default_config, load_config
 from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.email.book_of_houses import BookOfHousesApiError
+from toll_harness.fleet import market_target_key
 from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
 from toll_harness.onboarding import (
@@ -753,7 +754,17 @@ def _market_target_key(target: dict[str, Any]) -> tuple[str, str, str | None]:
     target_id = str(target.get("target_id") or "")
     target_round = target.get("round")
     round_value = str(target_round) if target_round is not None else None
-    return f"{target_id}:round:{round_value or '1'}", target_id, round_value
+    return market_target_key(target_id, round_value), target_id, round_value
+
+
+def _market_freshness(target: dict[str, Any]) -> str:
+    # A repost keeps the want's original posted_at; reposted_at is when the
+    # current round opened. Sorting by bare posted_at buried every repost
+    # under weeks of newer wants, so freshness is whichever is latest.
+    return max(
+        str(target.get("posted_at") or ""),
+        str(target.get("reposted_at") or ""),
+    )
 
 
 def _market_scan_candidates(
@@ -772,15 +783,15 @@ def _market_scan_candidates(
     )
     eligible = []
     for target in targets:
-        target_key, target_id, _ = _market_target_key(target)
+        target_key, target_id, round_value = _market_target_key(target)
         if not target_id or target.get("your_bid") is not None:
             continue
         if target_key in reviewed:
             continue
-        if fleet is not None and fleet.proposal_count(target_id) >= fleet_limit:
+        if fleet is not None and fleet.proposal_count(target_id, round_value) >= fleet_limit:
             continue
         eligible.append(target)
-    eligible.sort(key=lambda item: str(item.get("posted_at") or ""), reverse=True)
+    eligible.sort(key=_market_freshness, reverse=True)
     selected = eligible[:MARKET_SCAN_CANDIDATE_LIMIT]
     summaries = [
         {
@@ -792,6 +803,7 @@ def _market_scan_candidates(
             "timeline_days": target.get("timeline_days"),
             "frozen_probability": target.get("frozen_probability"),
             "round": target.get("round"),
+            "reposted_at": target.get("reposted_at"),
         }
         for target in selected
     ]

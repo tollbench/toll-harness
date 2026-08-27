@@ -11,12 +11,35 @@ def default_fleet_database() -> Path:
     return Path.home() / ".local/share/toll-harness/fleet.sqlite3"
 
 
+def market_target_key(target_id: str, round_value: str | None) -> str:
+    """One key per (target, repost round). A repost reuses the target id and
+    bumps the round, so keys — not bare ids — are what dedupe safely."""
+    return f"{target_id}:round:{round_value or '1'}"
+
+
+_PROPOSAL_SLOTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS proposal_slots (
+    target_id TEXT NOT NULL,
+    target_round TEXT NOT NULL DEFAULT '1',
+    agent_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('reserved', 'confirmed')),
+    proposal_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, target_round, agent_id),
+    FOREIGN KEY (agent_id) REFERENCES fleet_agents(agent_id)
+);
+"""
+
+
 @dataclass(frozen=True)
 class ProposalReservation:
     allowed: bool
     target_id: str
     agent_id: str
     idempotency_key: str
+    target_round: str = "1"
     status: str | None = None
     proposal_id: str | None = None
     existing: bool = False
@@ -27,6 +50,7 @@ class ProposalReservation:
         return {
             "allowed": self.allowed,
             "target_id": self.target_id,
+            "target_round": self.target_round,
             "agent_id": self.agent_id,
             "idempotency_key": self.idempotency_key,
             "status": self.status,
@@ -63,19 +87,9 @@ class FleetStore:
                     config_path TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS proposal_slots (
-                    target_id TEXT NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    idempotency_key TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('reserved', 'confirmed')),
-                    proposal_id TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (target_id, agent_id),
-                    FOREIGN KEY (agent_id) REFERENCES fleet_agents(agent_id)
-                );
-                CREATE INDEX IF NOT EXISTS ix_proposal_slots_target
-                    ON proposal_slots(target_id, status);
+                """
+                + _PROPOSAL_SLOTS_SCHEMA
+                + """
                 CREATE TABLE IF NOT EXISTS market_target_reviews (
                     agent_id TEXT NOT NULL,
                     target_key TEXT NOT NULL,
@@ -87,6 +101,48 @@ class FleetStore:
                 );
                 """
             )
+            self._migrate_round_blind_slots(connection)
+            # After the migration so a pre-round table never sees this index.
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS ix_proposal_slots_target_round"
+                " ON proposal_slots(target_id, target_round, status)"
+            )
+
+    def _migrate_round_blind_slots(self, connection: sqlite3.Connection) -> None:
+        """Rebuild a pre-round proposal_slots table in place.
+
+        The v1 ledger was keyed by bare (target_id, agent_id), so proposals
+        from a dead round blocked every later round of the same want. Existing
+        rows were all filed against round 1 by definition — stamp them so and
+        free every later round.
+        """
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(proposal_slots)")
+        }
+        if "target_round" in columns:
+            return
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            DROP INDEX IF EXISTS ix_proposal_slots_target;
+            ALTER TABLE proposal_slots RENAME TO proposal_slots_round_blind;
+            """
+            + _PROPOSAL_SLOTS_SCHEMA
+            + """
+            INSERT INTO proposal_slots(
+                target_id, target_round, agent_id, idempotency_key,
+                status, proposal_id, created_at, updated_at
+            )
+            SELECT target_id, '1', agent_id, idempotency_key,
+                   status, proposal_id, created_at, updated_at
+            FROM proposal_slots_round_blind;
+            DROP TABLE proposal_slots_round_blind;
+            CREATE INDEX IF NOT EXISTS ix_proposal_slots_target_round
+                ON proposal_slots(target_id, target_round, status);
+            COMMIT;
+            """
+        )
 
     @staticmethod
     def _now() -> str:
@@ -111,10 +167,12 @@ class FleetStore:
         target_id: str,
         agent_id: str,
         idempotency_key: str,
+        target_round: str | None = "1",
         limit: int = 4,
     ) -> ProposalReservation:
         if limit < 1:
             raise ValueError("Proposal limit must be positive")
+        round_value = str(target_round or "1")
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -122,14 +180,15 @@ class FleetStore:
                 """
                 SELECT idempotency_key, status, proposal_id
                 FROM proposal_slots
-                WHERE target_id = ? AND agent_id = ?
+                WHERE target_id = ? AND target_round = ? AND agent_id = ?
                 """,
-                (target_id, agent_id),
+                (target_id, round_value, agent_id),
             ).fetchone()
             count = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM proposal_slots WHERE target_id = ?",
-                    (target_id,),
+                    "SELECT COUNT(*) FROM proposal_slots"
+                    " WHERE target_id = ? AND target_round = ?",
+                    (target_id, round_value),
                 ).fetchone()[0]
             )
             if existing is not None:
@@ -137,6 +196,7 @@ class FleetStore:
                 return ProposalReservation(
                     allowed=True,
                     target_id=target_id,
+                    target_round=round_value,
                     agent_id=agent_id,
                     idempotency_key=existing["idempotency_key"],
                     status=existing["status"],
@@ -150,6 +210,7 @@ class FleetStore:
                 return ProposalReservation(
                     allowed=False,
                     target_id=target_id,
+                    target_round=round_value,
                     agent_id=agent_id,
                     idempotency_key=idempotency_key,
                     count=count,
@@ -159,15 +220,17 @@ class FleetStore:
             connection.execute(
                 """
                 INSERT INTO proposal_slots(
-                    target_id, agent_id, idempotency_key, status, created_at, updated_at
-                ) VALUES (?, ?, ?, 'reserved', ?, ?)
+                    target_id, target_round, agent_id, idempotency_key,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'reserved', ?, ?)
                 """,
-                (target_id, agent_id, idempotency_key, now, now),
+                (target_id, round_value, agent_id, idempotency_key, now, now),
             )
             connection.commit()
             return ProposalReservation(
                 allowed=True,
                 target_id=target_id,
+                target_round=round_value,
                 agent_id=agent_id,
                 idempotency_key=idempotency_key,
                 status="reserved",
@@ -180,33 +243,53 @@ class FleetStore:
         finally:
             connection.close()
 
-    def confirm_proposal(self, *, target_id: str, agent_id: str, proposal_id: str) -> None:
+    def confirm_proposal(
+        self,
+        *,
+        target_id: str,
+        agent_id: str,
+        proposal_id: str,
+        target_round: str | None = "1",
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE proposal_slots
                 SET status='confirmed', proposal_id=?, updated_at=?
-                WHERE target_id=? AND agent_id=?
+                WHERE target_id=? AND target_round=? AND agent_id=?
                 """,
-                (proposal_id, self._now(), target_id, agent_id),
+                (
+                    proposal_id,
+                    self._now(),
+                    target_id,
+                    str(target_round or "1"),
+                    agent_id,
+                ),
             )
 
-    def release_reservation(self, *, target_id: str, agent_id: str) -> None:
+    def release_reservation(
+        self,
+        *,
+        target_id: str,
+        agent_id: str,
+        target_round: str | None = "1",
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 DELETE FROM proposal_slots
-                WHERE target_id=? AND agent_id=? AND status='reserved'
+                WHERE target_id=? AND target_round=? AND agent_id=? AND status='reserved'
                 """,
-                (target_id, agent_id),
+                (target_id, str(target_round or "1"), agent_id),
             )
 
-    def proposal_count(self, target_id: str) -> int:
+    def proposal_count(self, target_id: str, target_round: str | None = "1") -> int:
         with self._connect() as connection:
             return int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM proposal_slots WHERE target_id=?",
-                    (target_id,),
+                    "SELECT COUNT(*) FROM proposal_slots"
+                    " WHERE target_id=? AND target_round=?",
+                    (target_id, str(target_round or "1")),
                 ).fetchone()[0]
             )
 
@@ -241,3 +324,16 @@ class FleetStore:
                     for target_key, target_id, target_round in targets
                 ],
             )
+
+    def mark_target_reviewed(
+        self,
+        *,
+        agent_id: str,
+        target_id: str,
+        target_round: str | None,
+    ) -> None:
+        round_value = str(target_round or "1")
+        self.mark_targets_reviewed(
+            agent_id=agent_id,
+            targets=[(market_target_key(target_id, round_value), target_id, round_value)],
+        )

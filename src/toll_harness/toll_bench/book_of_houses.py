@@ -187,9 +187,58 @@ class BookOfHousesTollBenchProvider:
                 "reachability": reachability,
             }
         reservation = None
-        if self.fleet is not None and self.fleet_agent_id:
+        target_round = None
+        fleet_engaged = self.fleet is not None and bool(self.fleet_agent_id)
+        if fleet_engaged:
+            # A repost reuses the target id and bumps the brief's `round`, so
+            # the fleet ledger must be keyed by the CURRENT round or slots from
+            # a dead round block the repost forever. Read it from the live
+            # brief; the same read also catches a target that already closed.
+            try:
+                brief_response = self.api.target_brief(target_id)
+            except BookOfHousesApiError as error:
+                if error.status == 404:
+                    return {
+                        "ok": False,
+                        "error": "target_not_open",
+                        "terminal": True,
+                        "message": (
+                            "Production reports this target is not open. "
+                            "No proposal was filed; do not retry it."
+                        ),
+                    }
+                raise
+            brief = brief_response.get("brief") or {}
+            target_round = str(brief.get("round") or 1)
+            your_bid = brief.get("your_bid") or None
+            if your_bid:
+                # Participation on the current round already exists — filed or
+                # withdrawn, production will refuse a second bid. Record the
+                # round as reviewed so the market scan moves on.
+                self.fleet.mark_target_reviewed(
+                    agent_id=self.fleet_agent_id,
+                    target_id=target_id,
+                    target_round=target_round,
+                )
+                if your_bid.get("status") == "withdrawn":
+                    return {
+                        "ok": False,
+                        "error": "participation_ended_this_round",
+                        "terminal": True,
+                        "message": (
+                            "This agent withdrew from the current round; "
+                            "participation is over until the want reposts."
+                        ),
+                    }
+                return {
+                    "ok": True,
+                    "proposal_id": your_bid.get("proposal_id"),
+                    "idempotent": True,
+                    "message": "A bid from this agent is already live on the current round.",
+                }
             reservation = self.fleet.reserve_proposal(
                 target_id=target_id,
+                target_round=target_round,
                 agent_id=self.fleet_agent_id,
                 idempotency_key=idempotency_key,
                 limit=self.fleet_proposal_limit,
@@ -200,10 +249,11 @@ class BookOfHousesTollBenchProvider:
                     "error": "fleet_proposal_limit",
                     "message": (
                         f"This Toll Harness fleet already reserved {reservation.count} of "
-                        f"{reservation.limit} proposal slots for the target."
+                        f"{reservation.limit} proposal slots for the target's current round."
                     ),
                     "fleet_count": reservation.count,
                     "fleet_limit": reservation.limit,
+                    "target_round": target_round,
                 }
             if reservation.status == "confirmed" and reservation.proposal_id:
                 return {
@@ -215,32 +265,48 @@ class BookOfHousesTollBenchProvider:
         try:
             result = self.api.submit_proposal(target_id, proposal, idempotency_key)
         except BookOfHousesApiError as error:
-            if (
-                reservation is not None
-                and 400 <= error.status < 500
-                and self.fleet is not None
-                and self.fleet_agent_id
-            ):
+            if fleet_engaged and reservation is not None and 400 <= error.status < 500:
                 self.fleet.release_reservation(
                     target_id=target_id,
+                    target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
+            if fleet_engaged and error.status in (404, 409):
+                # Terminal refusals for this round: bidding closed on finalists,
+                # a bid already on file, participation ended, or the target
+                # gone. Retrying cannot succeed until the want reposts (which
+                # opens a new round and a new review key) — record the round as
+                # reviewed so the market scan advances instead of looping.
+                self.fleet.mark_target_reviewed(
+                    agent_id=self.fleet_agent_id,
+                    target_id=target_id,
+                    target_round=target_round,
+                )
+                return {
+                    "ok": False,
+                    "error": "proposal_refused_terminally",
+                    "terminal": True,
+                    "status": error.status,
+                    "refusal": error.code,
+                    "message": (
+                        f"Production refused the bid ({error.code}). This round is "
+                        "recorded as reviewed; do not retry it."
+                    ),
+                }
             raise
-        if (
-            reservation is not None
-            and self.fleet is not None
-            and self.fleet_agent_id
-        ):
+        if fleet_engaged and reservation is not None:
             proposal_id = str(result.get("proposal_id") or "")
             if proposal_id:
                 self.fleet.confirm_proposal(
                     target_id=target_id,
+                    target_round=target_round,
                     agent_id=self.fleet_agent_id,
                     proposal_id=proposal_id,
                 )
             elif result.get("ok") is False:
                 self.fleet.release_reservation(
                     target_id=target_id,
+                    target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
         return result

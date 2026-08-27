@@ -1,3 +1,4 @@
+from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 
@@ -6,6 +7,18 @@ class FakeApi:
     def __init__(self):
         self.acks = 0
         self.submissions = []
+        self.brief_round = 1
+        self.brief_your_bid = None
+
+    def target_brief(self, target_id):
+        return {
+            "ok": True,
+            "brief": {
+                "target_id": target_id,
+                "round": self.brief_round,
+                "your_bid": self.brief_your_bid,
+            },
+        }
 
     def me(self):
         return {
@@ -171,6 +184,116 @@ def test_submit_proposal_caps_only_this_harness_fleet_at_four(tmp_path):
     assert results[4]["error"] == "fleet_proposal_limit"
     assert results[4]["fleet_count"] == 4
     assert len(api.submissions) == 4
+
+
+def _fleet_provider(api, fleet, agent_id="agent-1", tmp_path=None):
+    fleet.register_agent(
+        agent_id=agent_id,
+        name=f"Agent {agent_id}",
+        config_path=(tmp_path / f"{agent_id}.yaml") if tmp_path else f"/tmp/{agent_id}.yaml",
+    )
+    return BookOfHousesTollBenchProvider(
+        api, fleet=fleet, fleet_agent_id=agent_id, fleet_proposal_limit=4
+    )
+
+
+def test_terminal_409_marks_the_round_reviewed_instead_of_looping(tmp_path):
+    # Found live 2026-08-26: workers retried one closed want 34-160 times
+    # because a 409 left no trace and the scan re-selected the same target.
+    class ClosedApi(FakeApi):
+        def submit_proposal(self, target_id, proposal, idempotency_key):
+            raise BookOfHousesApiError(
+                409, "finalists named — bidding closed on this target", "closed"
+            )
+
+    api = ClosedApi()
+    fleet = FleetStore(tmp_path / "fleet.sqlite3")
+    provider = _fleet_provider(api, fleet, tmp_path=tmp_path)
+
+    result = provider.submit_proposal("t1", _valid_proposal(), "key-1")
+
+    assert result["ok"] is False
+    assert result["terminal"] is True
+    assert result["error"] == "proposal_refused_terminally"
+    assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
+    # The reserved (never confirmed) slot is released, not burned.
+    assert fleet.proposal_count("t1", "1") == 0
+
+
+def test_terminal_404_refuses_without_retry_and_without_burning_a_slot(tmp_path):
+    class GoneApi(FakeApi):
+        def target_brief(self, target_id):
+            raise BookOfHousesApiError(404, "target not found or not open", "gone")
+
+    api = GoneApi()
+    fleet = FleetStore(tmp_path / "fleet.sqlite3")
+    provider = _fleet_provider(api, fleet, tmp_path=tmp_path)
+
+    result = provider.submit_proposal("t1", _valid_proposal(), "key-1")
+
+    assert result["ok"] is False
+    assert result["terminal"] is True
+    assert result["error"] == "target_not_open"
+    assert api.submissions == []
+    assert fleet.proposal_count("t1", "1") == 0
+
+
+def test_repost_round_gets_a_fresh_fleet_slot(tmp_path):
+    # The round-1 confirmed slot must not answer for round 2: the repost is
+    # fresh work and the agent's new bid must actually reach production.
+    api = FakeApi()
+    fleet = FleetStore(tmp_path / "fleet.sqlite3")
+    provider = _fleet_provider(api, fleet, tmp_path=tmp_path)
+
+    first = provider.submit_proposal("t1", _valid_proposal(), "key-round-1")
+    assert first["proposal_id"] == "p1"
+    assert fleet.proposal_count("t1", "1") == 1
+
+    api.brief_round = 2  # the want failed and reposted
+    second = provider.submit_proposal("t1", _valid_proposal(), "key-round-2")
+
+    assert second.get("idempotent") is None
+    assert second["proposal_id"] == "p1"
+    assert len(api.submissions) == 2
+    assert fleet.proposal_count("t1", "1") == 1
+    assert fleet.proposal_count("t1", "2") == 1
+
+
+def test_repost_round_resets_the_fleet_cap(tmp_path):
+    # Four round-1 bids from this fleet must not lock the fleet out of the
+    # repost: the cap counts per round, not per target forever.
+    api = FakeApi()
+    fleet = FleetStore(tmp_path / "fleet.sqlite3")
+    providers = [
+        _fleet_provider(api, fleet, agent_id=f"agent-{index}", tmp_path=tmp_path)
+        for index in range(5)
+    ]
+    for index, provider in enumerate(providers[:4]):
+        assert provider.submit_proposal("t1", _valid_proposal(), f"r1-{index}")["ok"]
+    assert providers[4].submit_proposal("t1", _valid_proposal(), "r1-4")[
+        "error"
+    ] == "fleet_proposal_limit"
+
+    api.brief_round = 2
+    result = providers[4].submit_proposal("t1", _valid_proposal(), "r2-4")
+
+    assert result["proposal_id"] == "p1"
+    assert fleet.proposal_count("t1", "2") == 1
+
+
+def test_live_bid_on_current_round_short_circuits_and_marks_reviewed(tmp_path):
+    api = FakeApi()
+    api.brief_your_bid = {"proposal_id": "p-live", "status": "filed"}
+    fleet = FleetStore(tmp_path / "fleet.sqlite3")
+    provider = _fleet_provider(api, fleet, tmp_path=tmp_path)
+
+    result = provider.submit_proposal("t1", _valid_proposal(), "key-1")
+
+    assert result["ok"] is True
+    assert result["idempotent"] is True
+    assert result["proposal_id"] == "p-live"
+    assert api.submissions == []
+    assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
 
 
 def test_informed_plan_rejects_line_items_that_change_the_sealed_total():
