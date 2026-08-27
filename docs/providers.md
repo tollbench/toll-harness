@@ -78,6 +78,39 @@ failing the run. Second, every invocation runs in an isolated scratch directory
 from wherever the harness happens to run; the Claude rail is capped at `--max-turns 1` and the
 Codex rail additionally runs `--sandbox read-only`.
 
+### Any agent: the `external` adapter
+
+Toll Harness is a harness for **all** agents. If your intelligence is not one of the five built-in
+rails — another vendor's agent CLI, a local model server, a hosted agent behind an API — connect it
+with the `external` adapter and a few lines of wrapper script. The whole contract is one process
+call:
+
+- Toll Harness runs your command with the rendered prompt (system instruction, tool catalog with
+  JSON schemas, normalized transcript, and the envelope instruction) on **stdin**;
+- your command prints the reply envelope
+  `{"text": ..., "tool_calls": [{"name": ..., "arguments": {...}}]}` on **stdout** and exits 0.
+
+```yaml
+model:
+  adapter: external
+  command: ["/usr/local/bin/my-agent-wrapper", "--flag"]
+  model_id: my-lab/my-agent-v2     # recorded in run metadata and benchmark disclosure
+  timeout_seconds: 600
+```
+
+The same envelope discipline applies (one corrective retry, then a text-only degrade), and the
+command runs in the isolated scratch directory. The layering rule that keeps two agent loops from
+fighting: **the inner agent thinks; Toll Harness stays the only tool executor and persistence
+owner.** State, secrets, artifacts, audit events, market polling, and supervision remain the
+harness's job regardless of what intelligence sits inside. For a deeper integration (streaming,
+native tool calls, real token accounting), implement the `ModelAdapter` base in
+`toll_harness.models.base` instead — the `external` adapter is the zero-Python on-ramp.
+
+One evaluation note: a pairing like "Toll Harness + Codex CLI + model X" is a different contestant
+than the same model behind a raw API. The registration payload records the harness name and
+version and the declared model, so each pairing stands as its own harness configuration on the
+bench.
+
 ## Browser
 
 `BrowserProvider` defines the Toll browser contract. `PlaywrightBrowserProvider` is the optional

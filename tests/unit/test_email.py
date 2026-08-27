@@ -178,6 +178,50 @@ def test_resume_pending_send_returns_provider_acceptance_receipt():
     assert resumed["send_receipt"]["inbox_delivery_confirmed"] is False
 
 
+def test_rejected_approval_clears_pending_send_and_returns_feedback(tmp_path):
+    """A person rejection is an answer, not a wait state: the parked draft and
+    stale approval id are dropped, the feedback is returned verbatim, and the
+    next send starts a fresh approval cycle instead of retrying the rejection."""
+    from toll_harness.email.book_of_houses import BookOfHousesApiError
+
+    class RejectingApi(FakeApi):
+        def send_email(self, payload):
+            raise BookOfHousesApiError(
+                403,
+                "EMAIL_APPROVAL_REJECTED",
+                "The person rejected this email draft. Their feedback: shorter please.",
+            )
+
+    api = RejectingApi()
+    mailbox = "canonical@bookofhouses.com"
+    pending_store = tmp_path / "agent-id" / "pending-email-send.json"
+    client = BookOfHousesRestMailClient(
+        api, expected_mailbox=mailbox, pending_store=pending_store
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+
+    pending = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Rejected body",
+        idempotency_key="send-1",
+    )
+    assert pending["status"] == "pending_human_approval"
+    assert pending_store.exists()
+
+    rejected = client.resume_pending_send()
+
+    assert rejected["status"] == "rejected_by_person"
+    assert rejected["approval_id"] == "approval-1"
+    assert "shorter please" in rejected["reason"]
+    assert client.pending_send is None
+    assert not pending_store.exists()
+    assert "approval_id" not in client.send_context
+    # A second resume is a no-op: nothing is parked anymore.
+    assert client.resume_pending_send() is None
+
+
 def test_pending_send_survives_worker_restart_in_isolated_storage(tmp_path):
     api = FakeApi()
     mailbox = "canonical@bookofhouses.com"

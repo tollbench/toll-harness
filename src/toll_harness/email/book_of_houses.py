@@ -491,6 +491,8 @@ class BookOfHousesRestMailClient:
                 result["approved_content_enforced"] = True
             return result
         except BookOfHousesApiError as error:
+            if error.code == "EMAIL_APPROVAL_REJECTED":
+                return self._handle_rejected_approval(error)
             if error.code in {"EMAIL_REQUIRES_HUMAN_APPROVAL", "EMAIL_APPROVAL_PENDING"}:
                 return {
                     "ok": False,
@@ -501,6 +503,23 @@ class BookOfHousesRestMailClient:
                 }
             raise
 
+    def _handle_rejected_approval(self, error: BookOfHousesApiError) -> dict[str, Any]:
+        """The person rejected the parked draft. A rejection is an answer, not
+        a wait state: drop the pending send and the stale approval id so the
+        next send starts a fresh draft/approval cycle. The refusal message
+        carries the person's feedback verbatim; return it so the caller (and
+        the model) can write a different draft instead of retrying this one."""
+        rejected_approval = self.send_context.get("approval_id")
+        self._clear_pending_send()
+        self.send_context.pop("approval_id", None)
+        return {
+            "ok": False,
+            "success": False,
+            "status": "rejected_by_person",
+            "approval_id": rejected_approval,
+            "reason": error.message,
+        }
+
     def resume_pending_send(self) -> dict[str, Any] | None:
         if self.pending_send is None:
             return None
@@ -508,6 +527,8 @@ class BookOfHousesRestMailClient:
         try:
             result = self.api.send_email(payload)
         except BookOfHousesApiError as error:
+            if error.code == "EMAIL_APPROVAL_REJECTED":
+                return self._handle_rejected_approval(error)
             if error.code in {"EMAIL_REQUIRES_HUMAN_APPROVAL", "EMAIL_APPROVAL_PENDING"}:
                 return {
                     "ok": False,

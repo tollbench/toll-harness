@@ -5,7 +5,11 @@ import pytest
 
 from toll_harness.core.types import ModelMessage, ToolDefinition
 from toll_harness.models.base import ModelInvocationError
-from toll_harness.models.cli_rail import ClaudeCodeCliAdapter, CodexCliAdapter
+from toll_harness.models.cli_rail import (
+    ClaudeCodeCliAdapter,
+    CodexCliAdapter,
+    ExternalAgentAdapter,
+)
 
 TOOLS = [
     ToolDefinition(
@@ -173,6 +177,35 @@ def test_missing_binary_fails_fast_with_sign_in_hint(tmp_path):
         CodexCliAdapter(binary="definitely-not-on-path-xyz", workdir=tmp_path)
 
 
+def test_external_adapter_rails_any_command(tmp_path):
+    # The whole "any agent" contract: prompt on stdin, envelope on stdout.
+    envelope = json.dumps({"tool_calls": [{"name": "result.complete", "arguments": {}}]})
+    calls = []
+
+    def run(argv, *, input, capture_output, text, timeout, cwd):
+        calls.append({"argv": argv, "prompt": input})
+        return SimpleNamespace(returncode=0, stdout=envelope, stderr="")
+
+    adapter = ExternalAgentAdapter(
+        "my-lab/my-agent-v2",
+        command=["my-agent-wrapper", "--flag"],
+        workdir=tmp_path,
+        runner=run,
+    )
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert [call.name for call in response.tool_calls] == ["result.complete"]
+    assert adapter.model_id == "my-lab/my-agent-v2"
+    assert calls[0]["argv"] == ["my-agent-wrapper", "--flag"]
+    assert "result.complete" in calls[0]["prompt"]  # tool catalog rendered
+
+
+def test_external_adapter_requires_a_command(tmp_path):
+    with pytest.raises(ValueError, match="non-empty model.command"):
+        ExternalAgentAdapter(workdir=tmp_path, runner=lambda *a, **k: None, command=[])
+
+
 def test_config_builds_cli_rail_adapters(tmp_path):
     from toll_harness.config import _build_model
 
@@ -188,3 +221,8 @@ def test_config_builds_cli_rail_adapters(tmp_path):
     assert isinstance(
         _build_model(config, root=tmp_path, data_dir=tmp_path / "data"), CodexCliAdapter
     )
+
+    config = {"model": {"adapter": "external", "command": ["sh", "-c", "cat"]}}
+    external = _build_model(config, root=tmp_path, data_dir=tmp_path / "data")
+    assert isinstance(external, ExternalAgentAdapter)
+    assert external.command == ["sh", "-c", "cat"]

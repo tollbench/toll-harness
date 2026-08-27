@@ -215,3 +215,21 @@ def test_pasted_key_is_refused_on_a_subscription_rail(tmp_path):
     )
     with pytest.raises(ValueError, match="pasted API key"):
         create_configuration(tmp_path / "wrong", answers)
+
+
+def test_agent_yaml_is_owner_only_and_stamps_real_harness_version(tmp_path):
+    # agent.yaml carries the verification contact, so it is 0600 like every
+    # other private file; and the harness identifies as its installed version,
+    # not a hardcoded "0.1".
+    import os
+    import stat
+
+    from toll_harness import __version__
+
+    config_path = create_configuration(tmp_path / "stamped", _answers(connected=False))
+
+    mode = stat.S_IMODE(os.stat(config_path).st_mode)
+    assert mode == 0o600
+    config = load_config(config_path)
+    assert config["agent"]["harness"] == f"Toll Harness {__version__}"
+    assert config["benchmark"]["harness"] == f"Toll Harness {__version__}"

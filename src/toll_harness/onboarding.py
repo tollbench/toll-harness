@@ -10,9 +10,12 @@ from typing import Any
 
 import yaml
 
+from toll_harness import __version__
 from toll_harness.email.book_of_houses import BookOfHousesApiClient
 from toll_harness.fleet import default_fleet_database
 from toll_harness.storage.secrets import FileSecretStore
+
+HARNESS_LABEL = f"Toll Harness {__version__}"
 
 WAITING_FOR_COMPANY_VERIFICATION = "WAITING_FOR_COMPANY_VERIFICATION"
 READY = "READY"
@@ -104,7 +107,7 @@ def _atomic_text(path: Path, value: str, mode: int) -> None:
 
 
 def save_config(path: Path, config: dict[str, Any]) -> None:
-    _atomic_text(path, yaml.safe_dump(config, sort_keys=False), 0o644)
+    _atomic_text(path, yaml.safe_dump(config, sort_keys=False), 0o600)
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -219,11 +222,11 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
             "intelligence": answers.intelligence,
             "company": answers.company,
             "mode": answers.mode,
-            "harness": "Toll Harness 0.1",
+            "harness": HARNESS_LABEL,
         },
         "benchmark": {
             "intelligence": answers.intelligence,
-            "harness": "Toll Harness 0.1",
+            "harness": HARNESS_LABEL,
             "company": answers.company,
             "autonomy": answers.mode.upper(),
         },
@@ -320,8 +323,8 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
             ],
             "autonomy": ("fully_autonomous" if agent["mode"] == "Autonomous" else "human_assisted"),
             "harness": "Toll Harness",
-            "harness_version": "0.1",
-            "label": f"{agent['name']} Toll Harness 0.1",
+            "harness_version": __version__,
+            "label": f"{agent['name']} {HARNESS_LABEL}",
         },
         "responsible_party": responsible,
         "rules": {

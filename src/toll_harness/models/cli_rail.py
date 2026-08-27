@@ -282,6 +282,48 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         return str(payload.get("result") or ""), usage
 
 
+class ExternalAgentAdapter(_CliRailAdapter):
+    """Layer Toll Harness over ANY agent or model runner: one process contract.
+
+    Point ``model.adapter: external`` at any executable (``model.command``).
+    Each invocation runs the command with the rendered prompt (system + tool
+    catalog + normalized transcript + envelope instruction) on stdin, and reads
+    the reply — the strict one-JSON-object envelope — from stdout. Exit 0 with
+    the envelope on stdout is the whole contract; wrap any inner agent, CLI, or
+    HTTP service in a few lines of shell or Python. The harness stays the only
+    tool executor and persistence owner; the inner agent supplies intelligence.
+    """
+
+    provider = "external"
+    install_hint = (
+        "Set model.command in agent.yaml to an executable that reads a prompt "
+        "on stdin and writes the reply envelope to stdout."
+    )
+
+    def __init__(
+        self,
+        model_id: str | None = None,
+        *,
+        command: Sequence[str],
+        **kwargs: Any,
+    ):
+        parts = [str(part) for part in (command or [])]
+        if not parts:
+            raise ValueError("The external adapter requires a non-empty model.command list")
+        self.command = parts
+        super().__init__(model_id or "external/custom", binary=parts[0], **kwargs)
+
+    def _invoke_cli(self, prompt: str) -> tuple[str, ModelUsage]:
+        completed = self._run(self.command + self.extra_args, prompt)
+        if completed.returncode != 0:
+            raise ModelInvocationError(
+                self.provider,
+                f"exit_{completed.returncode}",
+                (completed.stderr or completed.stdout or "").strip()[-2000:],
+            )
+        return completed.stdout, ModelUsage()
+
+
 class CodexCliAdapter(_CliRailAdapter):
     """ChatGPT subscription OAuth via the official OpenAI Codex CLI.
 

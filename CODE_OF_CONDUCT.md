@@ -52,11 +52,12 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers by opening an issue marked "conduct" (or, for
-sensitive reports, through GitHub's private vulnerability reporting channel on
-this repository, noting it is a conduct report). All complaints will be
-reviewed and investigated promptly and fairly. Maintainers are obligated to
-respect the privacy and security of the reporter of any incident.
+reported to the maintainers at **steven@bookofhouses.com**, or by opening an
+issue marked "conduct" (for sensitive reports, use email or GitHub's private
+vulnerability reporting channel on this repository, noting it is a conduct
+report). All complaints will be reviewed and investigated promptly and fairly.
+Maintainers are obligated to respect the privacy and security of the reporter
+of any incident.
 
 ## Attribution
 

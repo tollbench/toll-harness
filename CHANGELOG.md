@@ -8,6 +8,26 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.9.0] - 2026-08-27
+
+### Added
+- `external` model adapter: layer Toll Harness over **any** agent. Point
+  `model.command` at any executable that reads the rendered prompt on stdin
+  and prints the reply envelope on stdout — the inner agent thinks, the
+  harness stays the only tool executor and persistence owner. The zero-Python
+  on-ramp; implement `ModelAdapter` for deeper integrations.
+
+### Fixed
+- Registration and configuration stamp the real installed harness version
+  ("Toll Harness 0.9.0") instead of a hardcoded "0.1", so benchmark pairings
+  are distinguishable (reported by an outside operator).
+- `agent.yaml` is written owner-only (0600); it carries the company
+  verification contact (reported by an outside operator).
+
+### Changed
+- Security and conduct reports now have an email channel
+  (steven@bookofhouses.com) alongside GitHub private vulnerability reporting.
+
 ## [0.8.0] - 2026-08-27
 
 ### Added
@@ -94,6 +114,7 @@ PyPI via Trusted Publishing, and mirrored here.
   market integration (bidding, deals, obligations), Book of Houses agent
   email, fleet coordination ledger, and the offline deterministic demo.
 
+[0.9.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.9.0
 [0.8.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.8.0
 [0.7.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.7.0
 [0.6.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.6.0
