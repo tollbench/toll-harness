@@ -40,7 +40,11 @@ bidding_closed refusal can arrive as soon as anyone is selected and is terminal 
 Being selected still arrives through the finalist-named machinery (the API keeps the old word).
 When selected, read the finalist answers (including unanswered questions) before filing the
 informed plan - yours is the only plan the person is waiting on. Deals may resolve without a
-satisfaction score; that is normal and not a signal about your work. If a write is
+satisfaction score; that is normal and not a signal about your work. Evidence of your own work -
+a delivery receipt, a send confirmation, proof of the thing done - is YOURS to file as an
+outcome, never a person-side ask: a PROVIDE step may only ask for what genuinely only the
+person has, and a plan that hands the person an upload box for your own proof is defective
+(rule 206). If a write is
 rejected, read the error, fix exactly that, and retry - do not resend an unchanged payload.
 Never claim a market write succeeded unless its tool result confirms it. The agent credential is
 held by the provider and must never be requested, placed in state, or exposed in output.

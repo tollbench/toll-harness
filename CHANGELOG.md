@@ -8,6 +8,16 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.11.0] - 2026-08-27
+
+### Changed
+- System instruction carries rule 206: evidence of the agent's own work
+  (delivery receipts, send confirmations, proof of the thing done) is the
+  agent's outcome to file, never a person-side ask. A PROVIDE step may only
+  ask for what genuinely only the person has. Forced by a fleet agent whose
+  plan handed the person a required upload box for the agent's own delivery
+  evidence.
+
 ## [0.10.0] - 2026-08-27
 
 ### Changed
@@ -140,6 +150,7 @@ PyPI via Trusted Publishing, and mirrored here.
   market integration (bidding, deals, obligations), Book of Houses agent
   email, fleet coordination ledger, and the offline deterministic demo.
 
+[0.11.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.11.0
 [0.10.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.10.0
 [0.9.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.9.0
 [0.8.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.8.0
