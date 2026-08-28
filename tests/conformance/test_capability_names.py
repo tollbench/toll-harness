@@ -26,6 +26,11 @@ def test_initial_capability_names_are_frozen():
         "human.request",
         "result.complete",
         "result.fail",
+        # Added in 0.12.0: outward HTTP with SecretStore placeholders, and the
+        # park-and-wake timer. Additions extend this set; existing names stay
+        # frozen.
+        "http.request",
+        "wake.set_timer",
         "operator.observe",
         "operator.message",
     }

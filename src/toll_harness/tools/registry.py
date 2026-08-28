@@ -1,18 +1,35 @@
 from __future__ import annotations
 
 import json
+import re
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.types import JsonObject, RunStatus, ToolDefinition, ToolResult
 from toll_harness.email.base import EmailProvider
-from toll_harness.storage.base import ArtifactStore, EventStore, StateStore
+from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
 from toll_harness.toll_bench.base import TollBenchProvider
-from toll_harness.tools.web import WebProvider
+from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
 
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject]
+
+# Reserved knowledge namespace where wake.set_timer parks per-run wake times.
+# The market worker reads it every cycle and resumes runs whose time has come.
+WAKE_TIMERS_NAMESPACE = "__wake_timers__"
+
+# {{secret:NAME}} placeholders for http.request. Names follow the SecretStore
+# naming rule. Resolved values must never reach a tool result, event, or error.
+SECRET_PLACEHOLDER = re.compile(r"\{\{secret:([A-Za-z][A-Za-z0-9_.-]{0,127})\}\}")
+
+_HTTP_REQUEST_MAX_BYTES = 1_000_000
+_HTTP_REQUEST_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
 
 
 @dataclass
@@ -26,6 +43,7 @@ class ToolContext:
     email_provider: EmailProvider | None = None
     browser_provider: BrowserProvider | None = None
     toll_bench_provider: TollBenchProvider | None = None
+    secret_store: SecretStore | None = None
     knowledge_namespace: str | None = None
     terminal_status: RunStatus | None = None
     terminal_result: JsonObject | None = None
@@ -85,6 +103,9 @@ def _validate(value: Any, schema: JsonObject, path: str = "arguments") -> None:
         and isinstance(value, bool)
     ):
         raise ValueError(f"{path} must be {expected}")
+    if "enum" in schema and value not in schema["enum"]:
+        allowed = ", ".join(str(item) for item in schema["enum"])
+        raise ValueError(f"{path} must be one of: {allowed}")
     if expected == "object":
         for required in schema.get("required", []):
             if required not in value:
@@ -132,6 +153,117 @@ def _has_secret_key(value: Any) -> bool:
     if isinstance(value, list):
         return any(_has_secret_key(item) for item in value)
     return False
+
+
+def _resolve_secret_placeholders(
+    value: str, context: ToolContext, resolved: dict[str, str]
+) -> str:
+    """Replace {{secret:NAME}} with SecretStore values, recording what resolved."""
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if context.secret_store is None:
+            raise ValueError(
+                "Secret placeholders require a configured secret store, and none is available"
+            )
+        secret = context.secret_store.get(name)
+        if secret is None:
+            raise ValueError(f"unknown secret: {name}")
+        resolved[name] = secret
+        return secret
+
+    return SECRET_PLACEHOLDER.sub(_replace, value)
+
+
+def _toll_bench_api_host(context: ToolContext) -> str | None:
+    api = getattr(context.toll_bench_provider, "api", None)
+    base_url = getattr(api, "base_url", None)
+    if not base_url:
+        return None
+    return (urlparse(str(base_url)).hostname or "").lower() or None
+
+
+def _http_request(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    headers = arguments.get("headers") or {}
+    for key, item in headers.items():
+        if not isinstance(item, str):
+            raise ValueError(f"headers.{key} must be a string")
+    resolved_secrets: dict[str, str] = {}
+    url = _resolve_secret_placeholders(arguments["url"], context, resolved_secrets)
+    body = arguments.get("body")
+    body_text = (
+        _resolve_secret_placeholders(body, context, resolved_secrets)
+        if body is not None
+        else None
+    )
+    resolved_headers = {
+        key: _resolve_secret_placeholders(item, context, resolved_secrets)
+        for key, item in headers.items()
+    }
+    _validate_public_url(url)
+    bench_host = _toll_bench_api_host(context)
+    if bench_host is not None and (urlparse(url).hostname or "").lower() == bench_host:
+        raise ValueError("use the toll_bench tools for the bench")
+    request = urllib.request.Request(
+        url,
+        data=body_text.encode("utf-8") if body_text is not None else None,
+        headers=resolved_headers,
+        method=arguments["method"],
+    )
+    # Redirects are DISABLED (same NoRedirectHandler as web.fetch): following
+    # one could re-send a resolved secret header to a host the agent never
+    # named. The refusal error tells the agent to call the destination itself.
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    try:
+        response = opener.open(request, timeout=arguments.get("timeout_seconds", 30))
+    except urllib.error.HTTPError as error:
+        response = error  # a non-2xx status is still a response, not a failure
+    except ValueError:
+        raise  # our own guard messages carry no resolved values
+    except Exception as error:
+        # Network errors can embed the resolved URL or hostname; report the
+        # failure type only so resolved secrets never reach an error message.
+        raise RuntimeError(f"http.request failed: {type(error).__name__}") from None
+    with response:
+        content = response.read(_HTTP_REQUEST_MAX_BYTES + 1)
+        if len(content) > _HTTP_REQUEST_MAX_BYTES:
+            raise ValueError("Response exceeds the 1,000,000 byte limit")
+        content_type = response.headers.get_content_type()
+        charset = response.headers.get_content_charset() or "utf-8"
+        status = int(getattr(response, "status", None) or getattr(response, "code", 0))
+    decoded = content.decode(charset, errors="replace")
+    # A server that echoes a request back (or an error page quoting the
+    # Authorization header) must not leak the resolved value into the result.
+    for name, secret in resolved_secrets.items():
+        if secret:
+            decoded = decoded.replace(secret, f"[secret:{name}]")
+    return {
+        "status": status,
+        "content_type": content_type,
+        "body": decoded,
+        # The caller's own url argument, never the resolved one: a secret
+        # placeholder in the URL must not round-trip through the result.
+        "url": arguments["url"],
+    }
+
+
+def _set_wake_timer(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    note = arguments.get("note")
+    if note is not None and len(note) > 200:
+        raise ValueError("note must be at most 200 characters")
+    wake_at = time.time() + int(arguments["seconds"])
+    timers = context.state_store.load_knowledge(WAKE_TIMERS_NAMESPACE)
+    if not isinstance(timers, dict):
+        timers = {}
+    entry: JsonObject = {"wake_at": wake_at}
+    if note:
+        entry["note"] = note
+    timers[context.run_id] = entry
+    context.state_store.save_knowledge(WAKE_TIMERS_NAMESPACE, timers)
+    # Parks the run (waiting) rather than ending it; the market worker resumes
+    # it when the timer fires or when new inbound mail arrives first.
+    context.wait_requested = True
+    return {"wake_at": datetime.fromtimestamp(wake_at, timezone.utc).isoformat()}
 
 
 def build_standard_registry() -> ToolRegistry:
@@ -342,6 +474,56 @@ def build_standard_registry() -> ToolRegistry:
             ),
         ),
         web_search,
+    )
+
+    registry.register(
+        ToolDefinition(
+            "http.request",
+            (
+                "Send one HTTP request to a public host with the agent's own "
+                "credentials. Header values, the body, and the url may carry "
+                "{{secret:NAME}} placeholders resolved from the agent's secret "
+                "store at execution; resolved values never appear in results or "
+                "logs. Redirects are not followed: call the destination URL "
+                "directly. The Toll Bench itself is off limits; use the "
+                "toll_bench tools for the bench."
+            ),
+            _object_schema(
+                {
+                    "method": {"type": "string", "enum": list(_HTTP_REQUEST_METHODS)},
+                    "url": {"type": "string", "format": "uri"},
+                    "headers": {"type": "object"},
+                    "body": {"type": "string"},
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 60,
+                        "default": 30,
+                    },
+                },
+                ["method", "url"],
+            ),
+        ),
+        _http_request,
+    )
+    registry.register(
+        ToolDefinition(
+            "wake.set_timer",
+            (
+                "Park this run and wake it later: the harness resumes the run "
+                "automatically once the timer fires (cause: timer), or earlier "
+                "if new inbound mail arrives. Use it when the right move is to "
+                "follow up after a wait instead of ending the run."
+            ),
+            _object_schema(
+                {
+                    "seconds": {"type": "integer", "minimum": 60, "maximum": 604800},
+                    "note": {"type": "string", "maxLength": 200},
+                },
+                ["seconds"],
+            ),
+        ),
+        _set_wake_timer,
     )
 
     def require_email(context: ToolContext) -> EmailProvider:

@@ -45,7 +45,7 @@ from toll_harness.onboarding import (
 from toll_harness.operator.channel import OperatorChannel
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
-from toll_harness.tools.registry import build_standard_registry
+from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
 from toll_harness.worker import install_market_worker, market_worker_status
 
 MARKET_SCAN_CANDIDATE_LIMIT = 1
@@ -985,6 +985,120 @@ def _process_market_opportunities(
     }
 
 
+# Worker-side wake state. Timers live in WAKE_TIMERS_NAMESPACE (written by the
+# wake.set_timer tool); the inbound-mail cursor lives here. Both ride the same
+# knowledge table as everything else, so they survive worker restarts.
+_EMAIL_WAKE_NAMESPACE = "__email_wake__"
+
+
+def _pending_wake_timers(store: Any) -> dict[str, Any]:
+    try:
+        timers = store.load_knowledge(WAKE_TIMERS_NAMESPACE)
+    except Exception:  # noqa: BLE001 - a broken timer table must not kill the watch
+        _LOGGER.warning("Reading wake timers failed", exc_info=True)
+        return {}
+    return timers if isinstance(timers, dict) else {}
+
+
+def _clear_wake_timer(store: Any, run_id: str) -> None:
+    # Re-read before writing: the resumed run may have parked itself again with
+    # a fresh timer, and that fresh timer must survive this clear.
+    timers = _pending_wake_timers(store)
+    if run_id in timers:
+        timers.pop(run_id)
+        store.save_knowledge(WAKE_TIMERS_NAMESPACE, timers)
+
+
+def _earliest_wake_at(resources: Any) -> float | None:
+    store = getattr(resources, "store", None)
+    if store is None:
+        return None
+    values = [
+        float(entry.get("wake_at"))
+        for entry in _pending_wake_timers(store).values()
+        if isinstance(entry, dict) and entry.get("wake_at") is not None
+    ]
+    return min(values) if values else None
+
+
+def _new_inbound_email_marker(resources: Any) -> str | None:
+    """Return a marker when mail arrived since the last cycle, else None.
+
+    Poll-bound, not push: this piggybacks on the existing watch cadence (one
+    check per cycle through the provider's thread listing, which itself rides
+    the ETag-cached proposals call), so a new message is noticed at most one
+    poll interval after it lands. The cursor is the newest last_inbound_at
+    seen; the first observation only baselines it so history never wakes
+    anything.
+    """
+    store = getattr(resources, "store", None)
+    provider = getattr(getattr(resources, "runtime", None), "email_provider", None)
+    if store is None or provider is None:
+        return None
+    try:
+        threads = provider.list(limit=50)
+    except Exception:  # noqa: BLE001 - a mail hiccup must not kill the watch
+        _LOGGER.warning("Inbound email check failed", exc_info=True)
+        return None
+    latest = max(
+        (
+            str(thread.get("last_inbound_at") or "")
+            for thread in threads
+            if isinstance(thread, dict)
+        ),
+        default="",
+    )
+    state = store.load_knowledge(_EMAIL_WAKE_NAMESPACE)
+    cursor = state.get("cursor") if isinstance(state, dict) else None
+    if cursor is None:
+        store.save_knowledge(_EMAIL_WAKE_NAMESPACE, {"cursor": latest})
+        return None
+    if latest and latest > str(cursor):
+        store.save_knowledge(_EMAIL_WAKE_NAMESPACE, {"cursor": latest})
+        return latest
+    return None
+
+
+def _process_wakes(resources: Any) -> list[dict[str, Any]]:
+    """Resume parked runs: due wake.set_timer timers, or new inbound mail.
+
+    New inbound mail wakes every parked run (cause inbound_email) because a
+    parked run is one that chose to wait, and the mail may be the reply it is
+    waiting for; a due timer wakes only its own run (cause timer). A timer is
+    cleared before its run is resumed, so a run that parks itself again keeps
+    its fresh timer.
+    """
+    store = getattr(resources, "store", None)
+    runtime = getattr(resources, "runtime", None)
+    if store is None or runtime is None:
+        return []
+    inbound_marker = _new_inbound_email_marker(resources)
+    timers = _pending_wake_timers(store)
+    now = time.time()
+    woken: list[dict[str, Any]] = []
+    for run_id, entry in timers.items():
+        if not isinstance(entry, dict):
+            _clear_wake_timer(store, run_id)
+            continue
+        if inbound_marker is not None:
+            cause = "inbound_email"
+        elif entry.get("wake_at") is not None and now >= float(entry["wake_at"]):
+            cause = "timer"
+        else:
+            continue
+        note = entry.get("note")
+        _clear_wake_timer(store, run_id)
+        wake: dict[str, Any] = {"run_id": run_id, "cause": cause, "note": note}
+        try:
+            result = runtime.resume(run_id, cause=cause, note=note)
+            wake["run"] = _result_payload(result)
+        except Exception:  # noqa: BLE001 - one unresumable run must not kill the watch
+            _LOGGER.exception("Waking run %s failed", run_id)
+            wake["error"] = "wake_failed"
+        woken.append(wake)
+    return woken
+
+
 def command_market_watch(arguments: argparse.Namespace) -> int:
     resources = build_runtime(arguments.config)
     previous_failure = None
@@ -994,7 +1108,11 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
     bidding_enabled = not bool(getattr(arguments, "no_bid", False))
     try:
         while True:
+            woken: list[dict[str, Any]] = []
             try:
+                # Wake parked runs first: due timers and new inbound mail are
+                # obligations of this worker, checked on the same poll cadence.
+                woken = _process_wakes(resources)
                 result = _process_market_attention(
                     resources, arguments.wait, previous_failure=previous_failure
                 )
@@ -1048,6 +1166,8 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                     "error": "market_watch_iteration_failed",
                     "error_type": type(error).__name__,
                 }
+            if woken:
+                result = {**result, "wakes": woken}
             if result.get("ok"):
                 if result.get("market_scan") or result.get("run") is not None:
                     previous_failure = None
@@ -1071,6 +1191,12 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                     float(result.get("retry_after_seconds") or 30.0),
                 )
             )
+            # Never sleep past a pending wake timer: sleep until whichever
+            # comes first, the next poll or the earliest wake_at (floor 1s so
+            # a due timer cannot busy-spin the loop).
+            earliest_wake = _earliest_wake_at(resources)
+            if earliest_wake is not None:
+                delay = max(1.0, min(delay, earliest_wake - time.time()))
             time.sleep(delay)
     finally:
         resources.close()

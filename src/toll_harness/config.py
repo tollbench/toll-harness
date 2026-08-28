@@ -199,6 +199,17 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     if identity and identity.id not in data_dir.parts:
         raise ValueError("Permanent agent storage must be isolated under its unique agent ID")
     store = SQLiteStore(data_dir / "harness.sqlite3")
+    # One SecretStore for the runtime: the same file store (same directory
+    # resolution and isolation rule as api_key_secret) that already holds the
+    # bench token. Handed to the runtime so http.request can resolve
+    # {{secret:NAME}} placeholders at execution time.
+    secrets_config = config.get("secrets", {})
+    secret_store = None
+    if secrets_config.get("provider") == "file":
+        secret_directory = (root / secrets_config.get("directory", "secrets")).resolve()
+        if secret_directory != data_dir and data_dir not in secret_directory.parents:
+            raise ValueError("Permanent agent secrets must remain in isolated storage")
+        secret_store = FileSecretStore(secret_directory)
     if identity:
         identity = store.register_agent(identity)
     artifacts = FilesystemArtifactStore(data_dir / "artifacts")
@@ -236,13 +247,9 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     if toll_bench_config.get("connected"):
         token_name = toll_bench_config.get("token_secret")
         maker_id = toll_bench_config.get("maker_id")
-        secret_config = config.get("secrets", {})
-        if secret_config.get("provider") != "file":
+        if secret_store is None:
             raise ValueError("Connected Toll Bench agents require a configured SecretStore")
-        secret_directory = (root / secret_config.get("directory", "secrets")).resolve()
-        if secret_directory != data_dir and data_dir not in secret_directory.parents:
-            raise ValueError("Permanent agent secrets must remain in isolated storage")
-        token = FileSecretStore(secret_directory).get(token_name) if token_name else None
+        token = secret_store.get(token_name) if token_name else None
         if not token or not maker_id:
             raise ValueError("Connected Toll Bench agent token or maker ID is missing")
         connected_api = BookOfHousesApiClient(
@@ -297,6 +304,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         email_provider=email_provider,
         browser_provider=browser,
         toll_bench_provider=toll_bench_provider,
+        secret_store=secret_store,
         agent_identity=identity,
         operator_instructions=operator_instructions,
         knowledge_namespace=knowledge_namespace,

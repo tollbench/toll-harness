@@ -8,6 +8,41 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.12.0] - 2026-08-27
+
+### Added
+- **`http.request` tool**: one HTTP call (GET/POST/PUT/PATCH/DELETE/HEAD) to a
+  public host with the agent's own credentials. Header values, the body, and
+  the URL may carry `{{secret:NAME}}` placeholders resolved from the agent's
+  SecretStore at execution time; resolved values never appear in the tool
+  result (echoed values are scrubbed from response bodies), in any event, or
+  in an error message. Guards: the same public-address SSRF validation as
+  `web.fetch`, a refusal for the Toll Bench host itself ("use the toll_bench
+  tools for the bench"), a 1,000,000-byte response cap, and redirects are not
+  followed (following one could re-send a resolved secret header to a host
+  the agent never named; the refusal tells the agent to call the destination
+  directly). Audit events record only the method, target domain, header
+  names, and body size - never the URL path/query, header values, or body,
+  resolved or not.
+- **`wake.set_timer` tool**: parks the run (waiting, not terminal) and
+  persists a wake time; the market worker resumes the run when the timer is
+  due (`run.resumed` with cause `timer`), sleeping until whichever comes
+  first, the next poll or the earliest wake.
+- **Email wake**: when an email provider is configured, the watch cycle also
+  checks for new inbound mail (poll-bound, piggybacking on the existing
+  cadence - nothing is pushed) and wakes parked runs early with cause
+  `inbound_email`, since the mail may be the reply the run is waiting for.
+- The runtime accepts a `secret_store`, wired from the same `secrets:` file
+  configuration that already holds the bench token.
+
+### Changed
+- System instruction: getting the accounts, tools, and access you need is
+  part of the want, not a reason to stop - your own accounts come through
+  `http.request` and your own SecretStore credentials, anything the person
+  owns comes only through a GRANT step, contacting real people follows the
+  market's approval law regardless of channel, and waiting on a reply is
+  priced by the toll, so set a timer instead of giving up.
+
 ## [0.11.0] - 2026-08-27
 
 ### Changed
@@ -150,6 +185,7 @@ PyPI via Trusted Publishing, and mirrored here.
   market integration (bidding, deals, obligations), Book of Houses agent
   email, fleet coordination ledger, and the offline deterministic demo.
 
+[0.12.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.12.0
 [0.11.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.11.0
 [0.10.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.10.0
 [0.9.0]: https://github.com/tollbench/toll-harness/releases/tag/v0.9.0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlparse
 
 from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.types import (
@@ -15,7 +16,7 @@ from toll_harness.core.types import (
 )
 from toll_harness.email.base import EmailProvider
 from toll_harness.models.base import ModelAdapter
-from toll_harness.storage.base import ArtifactStore, EventStore, StateStore
+from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools.registry import ToolContext, ToolRegistry
 from toll_harness.tools.web import WebProvider
@@ -56,7 +57,13 @@ as the only pre-send review; do not add a separate draft-approval step. A pendin
 means nothing was sent and the run waits for the person's approval; once approved the agent sends
 and files its own receipt, and never asks the person to prove the agent's work. A successful
 email.send proves provider acceptance, not inbox delivery: do not promise or claim inbox delivery
-unless the tool result explicitly confirms it."""
+unless the tool result explicitly confirms it.
+Getting the accounts, tools, and access you need is part of the want, not a reason to stop. Your
+own accounts are yours to go get with http.request and your own credentials in the SecretStore.
+Access to anything the person owns comes only through a GRANT step - never by asking for
+credentials in words. Contacting real people on a want follows the market's approval law
+regardless of channel. Waiting on a reply does not count against you: the toll prices the
+timeline you signed. Set a timer (wake.set_timer) when the right move is to follow up later."""
 
 PROTECTED_WRITE_TOOLS = {
     "email.send",
@@ -82,6 +89,7 @@ class HarnessRuntime:
         email_provider: EmailProvider | None = None,
         browser_provider: BrowserProvider | None = None,
         toll_bench_provider: TollBenchProvider | None = None,
+        secret_store: SecretStore | None = None,
         agent_identity: AgentIdentity | None = None,
         operator_instructions: str | None = None,
         knowledge_namespace: str | None = None,
@@ -98,6 +106,7 @@ class HarnessRuntime:
         self.email_provider = email_provider
         self.browser_provider = browser_provider
         self.toll_bench_provider = toll_bench_provider
+        self.secret_store = secret_store
         self.agent_identity = agent_identity
         # Free-text, operator-authored instructions attached to their agent. No
         # length cap by design: it is the operator's own agent. Delivered to the
@@ -127,12 +136,19 @@ class HarnessRuntime:
         )
         return self._drive(run.id)
 
-    def resume(self, run_id: str) -> RunResult:
+    def resume(
+        self, run_id: str, *, cause: str | None = None, note: str | None = None
+    ) -> RunResult:
         run = self.state_store.get_run(run_id)
         if run.status in {RunStatus.COMPLETED, RunStatus.FAILED}:
             raise ValueError(f"Run is already terminal: {run.status.value}")
         self.state_store.set_run_status(run_id, RunStatus.RUNNING)
-        self.event_store.append_event(run_id, "run.resumed", "harness", {})
+        payload: JsonObject = {}
+        if cause:
+            payload["cause"] = cause
+            if note:
+                payload["note"] = note
+        self.event_store.append_event(run_id, "run.resumed", "harness", payload)
         return self._drive(run_id)
 
     def add_human_input(self, run_id: str, message: str) -> None:
@@ -150,6 +166,7 @@ class HarnessRuntime:
             "operator.message",
             "tool.result",
             "model.error",
+            "run.resumed",
         }
         payload = {
             "goal": checkpoint.goal,
@@ -305,7 +322,7 @@ class HarnessRuntime:
                         {
                             "id": call.id,
                             "name": call.name,
-                            "arguments": self._redact(call.arguments),
+                            "arguments": self._audit_arguments(call.name, call.arguments),
                         }
                         for call in response.tool_calls
                     ],
@@ -334,6 +351,7 @@ class HarnessRuntime:
                 email_provider=self.email_provider,
                 browser_provider=self.browser_provider,
                 toll_bench_provider=self.toll_bench_provider,
+                secret_store=self.secret_store,
                 knowledge_namespace=self.knowledge_namespace,
             )
             result_blocks: list[JsonObject] = []
@@ -345,7 +363,7 @@ class HarnessRuntime:
                     {
                         "call_id": call.id,
                         "name": call.name,
-                        "arguments": self._redact(call.arguments),
+                        "arguments": self._audit_arguments(call.name, call.arguments),
                     },
                 )
                 if call.name not in self.enabled_tools:
@@ -411,6 +429,33 @@ class HarnessRuntime:
             usage,
             self.max_iterations,
         )
+
+    @classmethod
+    def _audit_arguments(cls, name: str, arguments: Any) -> Any:
+        """Event-safe view of a tool call's arguments.
+
+        http.request arguments can carry credentials (resolved or as
+        {{secret:...}} placeholders, which are sensitive too) in the URL,
+        header values, and body; the audit trail records only the method, the
+        target domain, the header names, and the body size. If the host itself
+        cannot be stated without exposing a placeholder, it is omitted.
+        """
+        if name == "http.request" and isinstance(arguments, dict):
+            headers = arguments.get("headers")
+            body = arguments.get("body")
+            try:
+                host = urlparse(str(arguments.get("url") or "")).hostname or None
+            except ValueError:
+                host = None
+            if host and ("{{" in host or "}}" in host):
+                host = None
+            return {
+                "method": arguments.get("method"),
+                "domain": host,
+                "header_names": sorted(headers) if isinstance(headers, dict) else [],
+                "body_bytes": len(str(body).encode("utf-8")) if body is not None else 0,
+            }
+        return cls._redact(arguments)
 
     @classmethod
     def _redact(cls, value: Any) -> Any:
