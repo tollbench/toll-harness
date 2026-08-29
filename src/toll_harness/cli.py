@@ -9,6 +9,7 @@ import shutil
 import sys
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -645,6 +646,88 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
 }
 
 
+# Idle-step memo: step_id -> the step-payload fingerprint at the last dispatched
+# run that ended without failing. When the next cycle fetches an IDENTICAL
+# payload, the model has already inspected exactly this state and made no move
+# -- the step is waiting on the person, and re-dispatching the model over it
+# would burn a full run to reach the same conclusion while starving every
+# lower-ranked obligation (a $0 finalist plan request sat ~55 minutes behind
+# one such step on 2026-08-29). Process-local by design: a restart just costs
+# one extra inspection per step.
+_IDLE_STEP_MEMO: dict[str, str] = {}
+
+# Re-dispatch this long before a due progress pulse rather than after it, so
+# the pulse never goes overdue waiting on the poll interval.
+_IDLE_PULSE_MARGIN_SECONDS = 90.0
+
+
+def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
+    """Digest of every part of a current_step payload an agent can act on.
+
+    Deliberately EXCLUDES latest_work_pulse: posting a pulse is bookkeeping,
+    not a state change, and including it would make every pulse look like new
+    work. Pulse timing is judged separately by _deal_step_pulse_due.
+    """
+    if not isinstance(step_payload, dict):
+        return ""
+    thread = step_payload.get("step_thread") or {}
+    messages = thread.get("messages") or []
+    basis = {
+        "step": step_payload.get("current_step"),
+        "message_ids": [
+            item.get("id") for item in messages if isinstance(item, dict)
+        ],
+        "unread_from_person": thread.get("unread_from_person"),
+        "unanswered_elsewhere": thread.get("unanswered_elsewhere"),
+        "grants": (step_payload.get("access") or {}).get("grants"),
+        "released_materials_count": step_payload.get("released_materials_count"),
+        "deal": step_payload.get("deal"),
+    }
+    return json.dumps(basis, sort_keys=True, default=str)
+
+
+def _deal_step_pulse_due(step_payload: dict[str, Any], now: float | None = None) -> bool:
+    """True when the step owes a progress pulse, or its schedule is unreadable.
+
+    Unreadable means due: the pulse cadence (r100) is a promise to the person,
+    so any doubt resolves toward dispatching the model, never toward skipping.
+    """
+    pulse = step_payload.get("latest_work_pulse")
+    if not isinstance(pulse, dict):
+        return True  # never pulsed; the first pulse is owed minutes after start
+    if pulse.get("overdue"):
+        return True
+    next_due = pulse.get("next_due_at")
+    if not next_due:
+        return True
+    try:
+        due = datetime.fromisoformat(str(next_due).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    current = now if now is not None else time.time()
+    return due.timestamp() <= current + _IDLE_PULSE_MARGIN_SECONDS
+
+
+def _deal_step_is_idle(
+    step_id: str, step_payload: dict[str, Any] | None, now: float | None = None
+) -> bool:
+    """A step is idle when a prior run saw this exact state and made no move,
+    nothing from the person has arrived since, and no progress pulse is due."""
+    if not step_id or not isinstance(step_payload, dict):
+        return False
+    memo = _IDLE_STEP_MEMO.get(step_id)
+    if not memo:
+        return False
+    thread = step_payload.get("step_thread") or {}
+    if thread.get("unread_from_person"):
+        return False
+    if _deal_step_pulse_due(step_payload, now=now):
+        return False
+    return _deal_step_fingerprint(step_payload) == memo
+
+
 def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the single highest-priority obligation to handle this cycle.
 
@@ -735,6 +818,50 @@ def _process_market_attention(
                         "retry_after_seconds": 300.0,
                         "run": None,
                     }
+    # Idle deal steps: skip without a model run any step whose payload is
+    # byte-identical to what the model already inspected and left untouched,
+    # unless a progress pulse is due (r100 cadence still gets its one run per
+    # window -- that run doubles as the retry chance for a model that misread
+    # its move). Skipped steps drop out of this cycle's contention so plan
+    # requests and message debts are not starved behind a person's silence.
+    prefetched_steps: dict[str, dict[str, Any]] = {}
+    _remaining: list[dict[str, Any]] = []
+    _idle_step_ids: list[str] = []
+    for item in obligations:
+        step_id = str(item.get("step_id") or "")
+        deal_id = str(item.get("deal_id") or "")
+        if (
+            item.get("kind") == "deal_step"
+            and deal_id
+            and step_id in _IDLE_STEP_MEMO
+        ):
+            try:
+                payload = resources.toll_bench.current_step(deal_id)
+            except Exception as error:  # noqa: BLE001 - a probe must not kill the cycle
+                _LOGGER.warning(
+                    "current_step idle probe failed for deal %s: %s", deal_id, error
+                )
+                payload = None
+            if payload is not None:
+                prefetched_steps[deal_id] = payload
+                if _deal_step_is_idle(step_id, payload):
+                    _idle_step_ids.append(step_id)
+                    continue
+        _remaining.append(item)
+    if _idle_step_ids:
+        _LOGGER.info(
+            "Skipping %d idle deal step(s) waiting on the person; "
+            "servicing %d remaining obligation(s)",
+            len(_idle_step_ids),
+            len(_remaining),
+        )
+    obligations = _remaining
+    # Forget steps that left the attention feed (ended, approved, reassigned).
+    _live_step_ids = {
+        str(item.get("step_id") or "") for item in obligations
+    } | set(_idle_step_ids)
+    for _sid in [sid for sid in _IDLE_STEP_MEMO if sid not in _live_step_ids]:
+        _IDLE_STEP_MEMO.pop(_sid, None)
     deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
     email_provider = resources.runtime.email_provider
     mail_client = getattr(email_provider, "client", None)
@@ -818,7 +945,8 @@ def _process_market_attention(
     step_state = None
     if kind in ("deal_step", "unanswered_message"):
         deal_id = str(obligation.get("deal_id") or "")
-        if deal_id:
+        step_state = prefetched_steps.get(deal_id)
+        if deal_id and step_state is None:
             try:
                 step_state = resources.toll_bench.current_step(deal_id)
             except Exception as error:  # noqa: BLE001 - prefetch must not kill the cycle
@@ -847,6 +975,14 @@ def _process_market_attention(
         result = resources.runtime.start(goal, mode)
     finally:
         resources.runtime.enabled_tools = original_tools
+    if kind == "deal_step" and step_state is not None:
+        # Remember what the model was shown. If the next fetch of this step is
+        # identical, the run above made no move and the step is idle until the
+        # payload changes or a pulse comes due. A failed run records nothing:
+        # it must retry at full cadence, not be mistaken for a judged wait.
+        _step_id = str(obligation.get("step_id") or "")
+        if _step_id and result.status.value in {"completed", "waiting"}:
+            _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
     return {
         "ok": result.status.value in {"completed", "waiting"},
         "reachability": reachability,

@@ -8,6 +8,20 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.14.0] - 2026-08-29
+
+### Fixed
+- **Idle deal steps no longer starve other obligations or burn model runs.**
+  The market worker now remembers the exact step payload each dispatched
+  deal-step run was shown; when the next cycle fetches an identical payload
+  (no new person message, nothing unread, no state change) and no progress
+  pulse is due, the step is skipped without a model run and lower-ranked
+  obligations (finalist plan requests, message debts) get the cycle. The r100
+  pulse cadence still receives its one run per window, which doubles as the
+  retry chance if the model misread its move. Before this, a step waiting on
+  the person was re-inspected by the model every poll interval, and a $0
+  finalist plan request sat ~55 minutes behind one.
+
 ## [0.13.0] - 2026-08-29
 
 ### Added

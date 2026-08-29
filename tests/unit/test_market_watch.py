@@ -773,6 +773,217 @@ def test_dispatch_survives_step_prefetch_failure():
     assert '"current_step":null' in observed["goal"]
 
 
+def _future_iso(minutes: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (
+        (datetime.now(timezone.utc) + timedelta(minutes=minutes))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _idle_step_payload(
+    *, next_due_iso=None, unread=0, message_ids=(), overdue=False
+):
+    return {
+        "ok": True,
+        "current_step": {"id": "s-1", "state": "agent_working", "outcome_filed_at": None},
+        "step_thread": {
+            "messages": [{"id": mid} for mid in message_ids],
+            "unread_from_person": unread,
+            "unanswered_elsewhere": [],
+        },
+        "latest_work_pulse": {
+            "overdue": overdue,
+            "next_due_at": next_due_iso or _future_iso(25),
+        },
+        "released_materials_count": 0,
+        "access": {"grants": []},
+        "deal": {"id": "d1", "status": "signed"},
+    }
+
+
+class _IdleMailClient:
+    def configure_send_context(self, **_kwargs):
+        pass
+
+    def resume_pending_send(self):
+        return None
+
+
+def _idle_resources(attention_items, current_step_payload, observed, fetched=None):
+    def current_step(deal_id):
+        if fetched is not None:
+            fetched.append(deal_id)
+        return current_step_payload
+
+    toll_bench = SimpleNamespace(
+        ensure_reachable=lambda: {"ok": True},
+        attention=lambda wait: {"attention": attention_items},
+        list_proposals=lambda: {"proposals": [{"id": "p-free", "total_ask_cents": 0}]},
+        current_step=current_step,
+    )
+    runtime = SimpleNamespace(
+        email_provider=SimpleNamespace(client=_IdleMailClient()),
+        enabled_tools=[
+            "state.load",
+            "state.save",
+            "result.complete",
+            "result.fail",
+            "toll_bench.current_step",
+            "toll_bench.file_outcome",
+            "toll_bench.read_finalist_answers",
+            "toll_bench.submit_informed_plan",
+        ],
+    )
+
+    def start(goal, mode):
+        observed["goal"] = goal
+        return _completed_run(goal, mode)
+
+    runtime.start = start
+    return SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
+
+
+def test_idle_deal_step_is_skipped_and_the_plan_request_gets_the_cycle():
+    # A deal step the model already inspected in exactly this state, with no
+    # pulse due and nothing new from the person, must NOT be re-dispatched --
+    # and the finalist plan request behind it must get the cycle instead of
+    # starving (a live plan request once sat ~55 minutes behind one).
+    cli._IDLE_STEP_MEMO.clear()
+    payload = _idle_step_payload()
+    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(payload)
+    observed = {}
+    resources = _idle_resources(
+        [
+            {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
+            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
+        ],
+        payload,
+        observed,
+    )
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert '"p-free"' in observed["goal"]
+    assert '"kind":"file_informed_plan"' in observed["goal"]
+    assert '"s-1"' not in observed["goal"]
+    cli._IDLE_STEP_MEMO.clear()
+
+
+def test_idle_deal_step_is_redispatched_when_its_pulse_comes_due():
+    # The r100 pulse cadence still gets its one run per window: an otherwise
+    # idle step with a due (or overdue) pulse is dispatched, not skipped.
+    cli._IDLE_STEP_MEMO.clear()
+    payload = _idle_step_payload(overdue=True)
+    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(payload)
+    observed = {}
+    resources = _idle_resources(
+        [
+            {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
+            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
+        ],
+        payload,
+        observed,
+    )
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert '"s-1"' in observed["goal"]
+    assert '"kind":"deal_step"' in observed["goal"]
+    cli._IDLE_STEP_MEMO.clear()
+
+
+def test_idle_deal_step_wakes_when_the_person_writes():
+    # Any change the person can cause -- a new message, an unread count --
+    # breaks the fingerprint match and the step is dispatched immediately.
+    cli._IDLE_STEP_MEMO.clear()
+    quiet = _idle_step_payload()
+    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(quiet)
+    spoken = _idle_step_payload(unread=1, message_ids=("m-1",))
+    observed = {}
+    resources = _idle_resources(
+        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
+        spoken,
+        observed,
+    )
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert '"s-1"' in observed["goal"]
+    cli._IDLE_STEP_MEMO.clear()
+
+
+def test_noop_deal_step_run_records_the_idle_memo():
+    # After a dispatched deal-step run completes, the pre-run fingerprint is
+    # remembered so the next identical fetch can be skipped. A step that later
+    # leaves the attention feed is forgotten.
+    cli._IDLE_STEP_MEMO.clear()
+    payload = _idle_step_payload()
+    observed = {}
+    fetched = []
+    resources = _idle_resources(
+        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
+        payload,
+        observed,
+        fetched=fetched,
+    )
+
+    first = cli._process_market_attention(resources, wait=20)
+
+    assert first["ok"] is True
+    assert cli._IDLE_STEP_MEMO.get("s-1") == cli._deal_step_fingerprint(payload)
+
+    # Same state again: the step is now skipped without a model run.
+    observed.pop("goal", None)
+    second = cli._process_market_attention(resources, wait=20)
+    assert second["ok"] is True
+    assert second["run"] is None
+    assert "goal" not in observed
+
+    # The step leaves attention: its memo entry is pruned.
+    resources.toll_bench.attention = lambda wait: {"attention": []}
+    cli._process_market_attention(resources, wait=20)
+    # An empty attention list returns before the filter; prune via a cycle
+    # that still carries one unrelated obligation.
+    resources.toll_bench.attention = lambda wait: {
+        "attention": [
+            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"}
+        ]
+    }
+    cli._process_market_attention(resources, wait=20)
+    assert "s-1" not in cli._IDLE_STEP_MEMO
+    cli._IDLE_STEP_MEMO.clear()
+
+
+def test_pulse_due_resolves_doubt_toward_dispatch():
+    # Missing, overdue, or unreadable pulse schedules all read as "due".
+    assert cli._deal_step_pulse_due({"latest_work_pulse": None}) is True
+    assert cli._deal_step_pulse_due({}) is True
+    assert (
+        cli._deal_step_pulse_due(
+            {"latest_work_pulse": {"overdue": True, "next_due_at": _future_iso(25)}}
+        )
+        is True
+    )
+    assert (
+        cli._deal_step_pulse_due(
+            {"latest_work_pulse": {"overdue": False, "next_due_at": "not-a-date"}}
+        )
+        is True
+    )
+    assert (
+        cli._deal_step_pulse_due(
+            {"latest_work_pulse": {"overdue": False, "next_due_at": _future_iso(25)}}
+        )
+        is False
+    )
+
+
 def test_watch_scans_even_when_obligation_is_blocked_on_a_human(monkeypatch):
     # Steven's ruling: agents look for new work ALWAYS, debt or not. A cycle
     # parked on payout onboarding must still run the board scan.
