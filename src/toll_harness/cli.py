@@ -984,10 +984,14 @@ def _process_market_attention(
     if kind == "deal_step" and step_state is not None:
         # Remember what the model was shown. If the next fetch of this step is
         # identical, the run above made no move and the step is idle until the
-        # payload changes or a pulse comes due. A failed run records nothing:
-        # it must retry at full cadence, not be mistaken for a judged wait.
+        # payload changes or a pulse comes due. limit_reached counts: the model
+        # spent its whole run over exactly this state and got nowhere, and an
+        # identical re-run wanders identically at full price (a looping model
+        # burned 20-iteration runs every couple of minutes on 2026-08-29).
+        # A FAILED run records nothing: an adapter or API error is transient
+        # and must retry at full cadence, not be mistaken for a judged wait.
         _step_id = str(obligation.get("step_id") or "")
-        if _step_id and result.status.value in {"completed", "waiting"}:
+        if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
             _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
     return {
         "ok": result.status.value in {"completed", "waiting"},

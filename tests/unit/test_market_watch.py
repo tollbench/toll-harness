@@ -997,6 +997,36 @@ def test_agent_reposting_its_own_ask_does_not_defeat_the_idle_skip():
     cli._IDLE_STEP_MEMO.clear()
 
 
+def test_limit_reached_run_still_records_the_idle_memo():
+    # A run that exhausts its iteration budget spent a full run over exactly
+    # this state; re-running identical input wanders identically at full
+    # price. limit_reached therefore records the memo like a completed run.
+    # (A FAILED run still records nothing -- adapter errors are transient.)
+    cli._IDLE_STEP_MEMO.clear()
+    payload = _idle_step_payload()
+    observed = {}
+    resources = _idle_resources(
+        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
+        payload,
+        observed,
+    )
+
+    def start_limited(goal, mode):
+        import dataclasses
+
+        observed["goal"] = goal
+        return dataclasses.replace(
+            _completed_run(goal, mode), status=RunStatus.LIMIT_REACHED
+        )
+
+    resources.runtime.start = start_limited
+
+    cli._process_market_attention(resources, wait=20)
+
+    assert cli._IDLE_STEP_MEMO.get("s-1") == cli._deal_step_fingerprint(payload)
+    cli._IDLE_STEP_MEMO.clear()
+
+
 def test_pulse_due_resolves_doubt_toward_dispatch():
     # Missing, overdue, or unreadable pulse schedules all read as "due".
     assert cli._deal_step_pulse_due({"latest_work_pulse": None}) is True

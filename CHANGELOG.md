@@ -8,6 +8,16 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.14.2] - 2026-08-29
+
+### Fixed
+- limit_reached runs now record the idle-step memo like completed runs. A
+  model that exhausts its iteration budget over a step spent a full run on
+  exactly that state; re-dispatching identical input wanders identically at
+  full price (a looping model burned a 20-iteration run every couple of
+  minutes). FAILED runs still record nothing: adapter and API errors are
+  transient and retry at full cadence.
+
 ## [0.14.1] - 2026-08-29
 
 ### Fixed
