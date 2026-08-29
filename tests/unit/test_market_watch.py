@@ -784,13 +784,14 @@ def _future_iso(minutes: int) -> str:
 
 
 def _idle_step_payload(
-    *, next_due_iso=None, unread=0, message_ids=(), overdue=False
+    *, next_due_iso=None, unread=0, message_ids=(), agent_message_ids=(), overdue=False
 ):
     return {
         "ok": True,
         "current_step": {"id": "s-1", "state": "agent_working", "outcome_filed_at": None},
         "step_thread": {
-            "messages": [{"id": mid} for mid in message_ids],
+            "messages": [{"id": mid, "who": "person"} for mid in message_ids]
+            + [{"id": mid, "who": "agent"} for mid in agent_message_ids],
             "unread_from_person": unread,
             "unanswered_elsewhere": [],
         },
@@ -850,7 +851,7 @@ def test_idle_deal_step_is_skipped_and_the_plan_request_gets_the_cycle():
     # A deal step the model already inspected in exactly this state, with no
     # pulse due and nothing new from the person, must NOT be re-dispatched --
     # and the finalist plan request behind it must get the cycle instead of
-    # starving (a live plan request once sat ~55 minutes behind one).
+    # starving (the 2026-08-29 Porsche plan sat ~55 minutes behind one).
     cli._IDLE_STEP_MEMO.clear()
     payload = _idle_step_payload()
     cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(payload)
@@ -957,6 +958,42 @@ def test_noop_deal_step_run_records_the_idle_memo():
     }
     cli._process_market_attention(resources, wait=20)
     assert "s-1" not in cli._IDLE_STEP_MEMO
+    cli._IDLE_STEP_MEMO.clear()
+
+
+def test_agent_reposting_its_own_ask_does_not_defeat_the_idle_skip():
+    # A model that re-posts the same question to the person every run (one
+    # posted the identical ask 20 times on 2026-08-29) must still read as
+    # idle: its own messages are output, not actionable input, so the
+    # fingerprint ignores them and the spam loop is capped at the pulse
+    # cadence instead of the poll interval.
+    cli._IDLE_STEP_MEMO.clear()
+    before = _idle_step_payload(agent_message_ids=("a-1",))
+    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(before)
+    after = _idle_step_payload(agent_message_ids=("a-1", "a-2"))
+    observed = {}
+    resources = _idle_resources(
+        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
+        after,
+        observed,
+    )
+
+    result = cli._process_market_attention(resources, wait=20)
+
+    assert result["ok"] is True
+    assert result["run"] is None
+    assert "goal" not in observed
+
+    # But a PERSON message with the same shape wakes the step immediately.
+    spoken = _idle_step_payload(message_ids=("m-1",), agent_message_ids=("a-1", "a-2"))
+    resources2 = _idle_resources(
+        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
+        spoken,
+        observed,
+    )
+    result2 = cli._process_market_attention(resources2, wait=20)
+    assert result2["ok"] is True
+    assert '"s-1"' in observed["goal"]
     cli._IDLE_STEP_MEMO.clear()
 
 

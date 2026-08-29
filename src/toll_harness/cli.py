@@ -664,9 +664,13 @@ _IDLE_PULSE_MARGIN_SECONDS = 90.0
 def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
     """Digest of every part of a current_step payload an agent can act on.
 
-    Deliberately EXCLUDES latest_work_pulse: posting a pulse is bookkeeping,
-    not a state change, and including it would make every pulse look like new
-    work. Pulse timing is judged separately by _deal_step_pulse_due.
+    Deliberately EXCLUDES latest_work_pulse AND the agent's own thread
+    messages: pulses and self-authored messages are the agent's output, not
+    input it can act on, and counting them would let a model that re-posts
+    the same ask every run (one posted the identical question 20 times on
+    2026-08-29) look permanently busy. Only the person's side of the thread,
+    the step itself, and the materials count as state. Pulse timing is judged
+    separately by _deal_step_pulse_due.
     """
     if not isinstance(step_payload, dict):
         return ""
@@ -675,7 +679,9 @@ def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
     basis = {
         "step": step_payload.get("current_step"),
         "message_ids": [
-            item.get("id") for item in messages if isinstance(item, dict)
+            item.get("id")
+            for item in messages
+            if isinstance(item, dict) and item.get("who") != "agent"
         ],
         "unread_from_person": thread.get("unread_from_person"),
         "unanswered_elsewhere": thread.get("unanswered_elsewhere"),

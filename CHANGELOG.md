@@ -8,6 +8,16 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.14.1] - 2026-08-29
+
+### Fixed
+- The idle-step fingerprint now ignores the agent's OWN thread messages, as
+  the 0.14.0 notes already described ("no new person message"). Counting them
+  let a model that re-posts the same ask to the person every run look
+  permanently busy -- one posted the identical question 20 times in one
+  afternoon. Self-authored messages are output, not actionable input; the
+  spam loop is now capped at the pulse cadence.
+
 ## [0.14.0] - 2026-08-29
 
 ### Fixed
