@@ -558,8 +558,14 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "File the single finalist plan below and nothing else. Read the owned "
     "proposal and the finalist answers before filing; copy every required field "
     "of each execution step from the owned proposal and change only what the "
-    "answers require. Easy targets require exactly two execution steps. Every "
-    "declared_odds value must be strictly between 0 and 1."
+    "answers require. For an email-delivery want, author exactly ONE execution "
+    "step: a single review_approve step (titled like 'Review & send the email') "
+    "whose card shows the finished email itself -- the real Subject and Body -- so "
+    "the person's two choices are Send (approve, which sends the email) or Send "
+    "back for a rewrite. Do not author a separate compose/draft step and do not "
+    "author a separate 'confirm it was sent' step; showing the real email IS the "
+    "review and approving it IS the send. For any other easy want, use exactly two "
+    "execution steps. Every declared_odds value must be strictly between 0 and 1."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
@@ -690,24 +696,45 @@ def _process_market_attention(
             status = resources.toll_bench.status()
             payout = status.get("payout") or {}
             if not payout.get("ready"):
-                return {
-                    "ok": False,
-                    "error": "payout_not_ready",
-                    "message": (
-                        "A paid finalist plan is waiting, but this agent's Stripe Connect "
-                        "payout account is not ready. Complete operator onboarding; the worker "
-                        "will resume the obligation automatically."
-                    ),
-                    "reachability": reachability,
-                    "attention_count": len(obligations),
-                    "proposal_ids": [str(item.get("id")) for item in paid_finalists],
-                    "payout": {
-                        key: payout.get(key)
-                        for key in ("ready", "onboarding_needed", "onboarding_link_call")
-                    },
-                    "retry_after_seconds": 300.0,
-                    "run": None,
-                }
+                # Free wants must not wait on payout (Steven 2026-08-28). A PAID
+                # finalist plan needs a ready payout account, but a FREE finalist
+                # plan, a deal step, or a message does not. Drop only the blocked
+                # paid obligations and service the rest this cycle; the paid one
+                # resumes automatically once operator onboarding completes.
+                _blocked_ids = {str(p.get("id") or "") for p in paid_finalists}
+                obligations = [
+                    item
+                    for item in obligations
+                    if not (
+                        item.get("kind") == "file_informed_plan"
+                        and str(item.get("proposal_id") or "") in _blocked_ids
+                    )
+                ]
+                _LOGGER.warning(
+                    "Deferring %d paid finalist plan(s) blocked on payout; "
+                    "servicing %d remaining obligation(s)",
+                    len(_blocked_ids),
+                    len(obligations),
+                )
+                if not obligations:
+                    return {
+                        "ok": False,
+                        "error": "payout_not_ready",
+                        "message": (
+                            "A paid finalist plan is waiting, but this agent's Stripe Connect "
+                            "payout account is not ready. Complete operator onboarding; the worker "
+                            "will resume the obligation automatically."
+                        ),
+                        "reachability": reachability,
+                        "attention_count": 0,
+                        "proposal_ids": sorted(_blocked_ids),
+                        "payout": {
+                            key: payout.get(key)
+                            for key in ("ready", "onboarding_needed", "onboarding_link_call")
+                        },
+                        "retry_after_seconds": 300.0,
+                        "run": None,
+                    }
     deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
     email_provider = resources.runtime.email_provider
     mail_client = getattr(email_provider, "client", None)
@@ -929,7 +956,10 @@ def _process_market_opportunities(
         "Do not inspect targets outside this candidate set. Do not request human input. Save a "
         "compact checkpoint and call result.complete only after submission succeeds. If no honest "
         "executable proposal is possible or production refuses it, call result.fail with the exact "
-        "blocker so the next cycle can retry with that context.\n\n"
+        "blocker so the next cycle can retry with that context. For an email-delivery want, give "
+        "the plan exactly ONE execution step: a single review_approve step that will show the "
+        "finished email so the person can Send it or send it back for a rewrite, never a "
+        "separate compose step and never a separate confirm-it-was-sent step.\n\n"
         + json.dumps(
             {
                 "candidate_targets": candidates,

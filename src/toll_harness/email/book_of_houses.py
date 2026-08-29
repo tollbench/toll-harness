@@ -372,6 +372,11 @@ class BookOfHousesRestMailClient:
                 "message_classification": self.pending_send.get(
                     "message_classification", "operational"
                 ),
+                **(
+                    {"attachment_file_ids": self.pending_send["attachment_file_ids"]}
+                    if self.pending_send.get("attachment_file_ids")
+                    else {}
+                ),
             }
         )
         approval_id = approval.get("approval_id")
@@ -459,6 +464,12 @@ class BookOfHousesRestMailClient:
         recipients = message.get("to") or []
         if len(recipients) != 1:
             raise ValueError("Book of Houses permits exactly one external recipient")
+        # Released-file attachments ride the approval and the send as one
+        # set. The key is included only when non-empty so a text-only email
+        # keeps the exact payload shape servers before 2026-08-28 accept.
+        attachments = [
+            str(item) for item in (message.get("attachment_file_ids") or []) if str(item)
+        ]
         purpose = "Complete the accepted Toll Bench email delivery step."
         classification = "operational"
         if not self.send_context.get("approval_id"):
@@ -471,6 +482,7 @@ class BookOfHousesRestMailClient:
                     "body_text": message.get("text"),
                     "purpose": purpose,
                     "message_classification": classification,
+                    **({"attachment_file_ids": attachments} if attachments else {}),
                 }
             )
             self.send_context["approval_id"] = approval.get("approval_id")
@@ -481,6 +493,7 @@ class BookOfHousesRestMailClient:
                 "to": recipients[0],
                 "subject": message.get("subject"),
                 "body_text": message.get("text"),
+                **({"attachment_file_ids": attachments} if attachments else {}),
             }
             self._persist_pending_send()
             return {
@@ -498,6 +511,7 @@ class BookOfHousesRestMailClient:
             recipients[0] != approved["to"]
             or (message.get("subject") or "") != (approved["subject"] or "")
             or (message.get("text") or "") != (approved["body_text"] or "")
+            or attachments != list(approved.get("attachment_file_ids") or [])
         )
         payload = {
             **self.send_context,
@@ -507,6 +521,11 @@ class BookOfHousesRestMailClient:
             "subject": approved["subject"] if approved else message.get("subject"),
             "body_text": approved["body_text"] if approved else message.get("text"),
         }
+        approved_attachments = (
+            list(approved.get("attachment_file_ids") or []) if approved else attachments
+        )
+        if approved_attachments:
+            payload["attachment_file_ids"] = approved_attachments
         try:
             result = self.api.send_email(payload)
             self._clear_pending_send()
@@ -624,7 +643,13 @@ class BookOfHousesEmailProvider(EmailProvider):
         return self.client.get_message(self.mailbox, message_id)
 
     def send(
-        self, *, to: list[str], subject: str, text: str, idempotency_key: str
+        self,
+        *,
+        to: list[str],
+        subject: str,
+        text: str,
+        idempotency_key: str,
+        attachment_file_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return self.client.send_message(
             self.mailbox,
@@ -632,6 +657,7 @@ class BookOfHousesEmailProvider(EmailProvider):
             subject=subject,
             text=text,
             idempotency_key=idempotency_key,
+            attachment_file_ids=attachment_file_ids,
         )
 
     def reply(self, *, message_id: str, text: str, idempotency_key: str) -> dict[str, Any]:

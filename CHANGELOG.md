@@ -8,6 +8,29 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.13.0] - 2026-08-29
+
+### Added
+- **Email attachments**: `email.send` accepts optional `attachment_file_ids` -
+  up to 5 `file_id` values from the deal's `released_materials` (8MB total).
+  The set rides the exact-email approval, so the person approves the attached
+  files with the draft; at send time only the approved set can go out
+  (`approved_content_enforced` covers a redrafted attachment set, same as
+  body/subject). The re-anchor path preserves the set verbatim when a deal
+  advances steps while a draft waits. Text-only sends keep the exact payload
+  shape earlier servers accept, and a pending-send file parked by v0.12
+  loads unchanged. Requires Book of Houses contract surfaces of 2026-08-28
+  or later for attachment-carrying sends.
+
+### Changed
+- Email-delivery plans author ONE show-the-email review step instead of a
+  separate compose step plus a send step; the exact-email approval is the
+  single pre-send review.
+
+### Fixed
+- A payout-blocked finalist on a PAID target no longer freezes the worker's
+  free-target work: free wants skip the payout-readiness gate.
+
 ## [0.12.0] - 2026-08-27
 
 ### Added

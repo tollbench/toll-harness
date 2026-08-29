@@ -404,3 +404,149 @@ def test_send_after_approval_with_matching_content_is_not_flagged(tmp_path):
     assert sent["success"] is True
     assert "approved_content_enforced" not in sent
     assert sent["payload"]["subject"] == "Hello"
+
+
+def test_email_send_carries_attachments_through_approval_and_send():
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(api, expected_mailbox=mailbox)
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+
+    pending = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Here is the file",
+        text="Sharing the released file.",
+        idempotency_key="send-1",
+        attachment_file_ids=["file-1", "file-2"],
+    )
+    sent = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Here is the file",
+        text="Sharing the released file.",
+        idempotency_key="send-2",
+        attachment_file_ids=["file-1", "file-2"],
+    )
+
+    assert pending["status"] == "pending_human_approval"
+    # The approval request names the exact attachment set the person reviews.
+    assert api.approvals[0]["attachment_file_ids"] == ["file-1", "file-2"]
+    assert sent["success"] is True
+    assert sent["payload"]["attachment_file_ids"] == ["file-1", "file-2"]
+
+
+def test_email_send_without_attachments_keeps_legacy_payload_shape():
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(api, expected_mailbox=mailbox)
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-1",
+    )
+    sent = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Hello",
+        text="Approved body",
+        idempotency_key="send-2",
+    )
+
+    # A text-only email must not grow a new key: older servers reject
+    # unknown fields, and the exact-approval hash covers the same bytes.
+    assert "attachment_file_ids" not in api.approvals[0]
+    assert "attachment_file_ids" not in sent["payload"]
+
+
+def test_approved_attachment_set_is_enforced_over_a_redraft():
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    client = BookOfHousesRestMailClient(api, expected_mailbox=mailbox)
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Here is the file",
+        text="Sharing the released file.",
+        idempotency_key="send-1",
+        attachment_file_ids=["file-1"],
+    )
+    # The model swaps the attachment between approval and send: the approved
+    # set is the only set that can go out (H5), and the result says so.
+    sent = client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Here is the file",
+        text="Sharing the released file.",
+        idempotency_key="send-2",
+        attachment_file_ids=["file-9"],
+    )
+
+    assert sent["success"] is True
+    assert sent["payload"]["attachment_file_ids"] == ["file-1"]
+    assert sent["approved_content_enforced"] is True
+
+
+def test_reanchor_carries_attachments_to_the_new_step(tmp_path):
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    pending_store = tmp_path / "agent-id" / "pending-email-send.json"
+    client = BookOfHousesRestMailClient(
+        api, expected_mailbox=mailbox, pending_store=pending_store
+    )
+    client.configure_send_context(proposal_id="p1", step_id="s1")
+
+    client.send_message(
+        mailbox,
+        to=["person@example.com"],
+        subject="Here is the file",
+        text="Sharing the released file.",
+        idempotency_key="send-1",
+        attachment_file_ids=["file-1"],
+    )
+    # Deal advances to a new step while the draft waits: the re-anchored
+    # approval must preserve the attachment set verbatim.
+    client.configure_send_context(proposal_id="p1", step_id="s2")
+
+    assert len(api.approvals) == 2
+    assert api.approvals[1]["step_id"] == "s2"
+    assert api.approvals[1]["attachment_file_ids"] == ["file-1"]
+
+
+def test_legacy_pending_send_file_without_attachments_still_loads(tmp_path):
+    import json
+
+    api = FakeApi()
+    mailbox = "canonical@bookofhouses.com"
+    pending_store = tmp_path / "agent-id" / "pending-email-send.json"
+    pending_store.parent.mkdir(parents=True)
+    # A parked pending file written by v0.12 has no attachment key.
+    pending_store.write_text(
+        json.dumps(
+            {
+                "proposal_id": "p1",
+                "step_id": "s1",
+                "approval_id": "approval-1",
+                "to": "person@example.com",
+                "subject": "Hello",
+                "body_text": "Approved body",
+                "purpose": "Complete the accepted Toll Bench email delivery step.",
+                "message_classification": "operational",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client = BookOfHousesRestMailClient(
+        api, expected_mailbox=mailbox, pending_store=pending_store
+    )
+    resumed = client.resume_pending_send()
+
+    assert resumed["success"] is True
+    assert "attachment_file_ids" not in resumed["payload"]

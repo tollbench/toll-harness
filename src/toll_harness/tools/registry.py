@@ -559,13 +559,22 @@ def build_standard_registry() -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "email.send",
-            "Send a plain-text message from the agent's scoped mailbox.",
+            "Send a plain-text message from the agent's scoped mailbox. "
+            "Optional attachment_file_ids attaches files the deal released "
+            "to this agent (file_id values from released_materials, up to 5, "
+            "8MB total); the person approves the attachment set with the "
+            "draft and only the approved set can send.",
             _object_schema(
                 {
                     "to": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                     "subject": {"type": "string"},
                     "text": {"type": "string"},
                     "idempotency_key": {"type": "string"},
+                    "attachment_file_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 5,
+                    },
                 },
                 ["to", "subject", "text", "idempotency_key"],
             ),

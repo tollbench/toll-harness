@@ -15,7 +15,13 @@ class EmailProvider(ABC):
 
     @abstractmethod
     def send(
-        self, *, to: list[str], subject: str, text: str, idempotency_key: str
+        self,
+        *,
+        to: list[str],
+        subject: str,
+        text: str,
+        idempotency_key: str,
+        attachment_file_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 

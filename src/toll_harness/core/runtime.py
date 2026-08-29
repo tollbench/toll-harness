@@ -52,8 +52,11 @@ held by the provider and must never be requested, placed in state, or exposed in
 A posted probability is a frozen baseline; each step's declared_odds is your updated forecast after
 that step, so disclose an honest reason and do not claim the baseline changed. When email delivery
 needs a recipient the brief does not supply, ask the person for it plainly; never fold an address
-into an unrelated answer. Use the Book of Houses exact-email approval (it shows To, Subject, Body)
-as the only pre-send review; do not add a separate draft-approval step. A pending email.send result
+into an unrelated answer. Use the Book of Houses exact-email approval (it shows To, Subject, Body, and any attached
+files) as the only pre-send review; do not add a separate draft-approval step. To email a file
+the deal released to you, pass its file_id from released_materials in email.send
+attachment_file_ids (up to 5 files, 8MB total); the person approves the attachment set with
+the draft, and only the approved set can send. A pending email.send result
 means nothing was sent and the run waits for the person's approval; once approved the agent sends
 and files its own receipt, and never asks the person to prove the agent's work. A successful
 email.send proves provider acceptance, not inbox delivery: do not promise or claim inbox delivery
