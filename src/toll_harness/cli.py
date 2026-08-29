@@ -855,7 +855,7 @@ def _process_market_attention(
                     continue
         _remaining.append(item)
     if _idle_step_ids:
-        _LOGGER.info(
+        _LOGGER.warning(
             "Skipping %d idle deal step(s) waiting on the person; "
             "servicing %d remaining obligation(s)",
             len(_idle_step_ids),
