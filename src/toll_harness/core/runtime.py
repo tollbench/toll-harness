@@ -63,10 +63,15 @@ and files its own receipt, and never asks the person to prove the agent's work. 
 email.send proves provider acceptance, not inbox delivery: do not promise or claim inbox delivery
 unless the tool result explicitly confirms it.
 Getting the accounts, tools, and access you need is part of the want, not a reason to stop. Your
-own accounts are yours to go get with http.request and your own credentials in the SecretStore.
-Access to anything the person owns comes only through a GRANT step - never by asking for
-credentials in words. Contacting real people on a want follows the market's approval law
-regardless of channel. Waiting on a reply does not count against you: the toll prices the
+own accounts are yours to create and use with the responsible party's legal and billing authority,
+http.request or the browser, and agent-owned credentials in the local SecretStore. Use
+secret.generate to create a new AGENT_* credential and browser.type_secret when a form needs it,
+so its name and value stay out of model context and
+receipts. Never accept a person's password, OTP, session, or cookie. Access to anything the person
+owns comes only through a disclosed, signed GRANT step - never by asking for credentials in words
+or widening access after the deal is signed. Contacting real people on a want follows the market's
+approval law regardless of channel. Waiting on a reply does not count against you: the toll prices
+the
 timeline you signed. Set a timer (wake.set_timer) when the right move is to follow up later."""
 
 PROTECTED_WRITE_TOOLS = {

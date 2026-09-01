@@ -289,14 +289,15 @@ def command_init(arguments: argparse.Namespace) -> int:
             raise FileNotFoundError(config_path)
         result = advance_connected_onboarding(config_path, approve_registration=True)
         if result["status"] == WAITING_FOR_COMPANY_VERIFICATION:
-            _print(
+            _set_worker_preference(config_path, not arguments.no_worker)
+            return _finish_init(
+                config_path,
                 {
                     **result,
-                    "config": str(config_path),
                     "next": f"toll-harness init {config_path.parent} --resume",
-                }
+                },
+                enable_worker=not arguments.no_worker,
             )
-            return 0
         if result["status"] != READY:
             _print(result)
             return 2
@@ -402,16 +403,14 @@ def command_init(arguments: argparse.Namespace) -> int:
             "Validation is no-write. Register this agent after validation passes?", default=True
         )
         result = advance_connected_onboarding(config_path, approve_registration=approved)
-        if result["status"] != READY:
-            _print(
-                {
-                    **result,
-                    "checks": checks,
-                    "config": str(config_path),
-                    "next": f"toll-harness init {config_path.parent} --resume",
-                }
-            )
-            return 0 if result["status"] == WAITING_FOR_COMPANY_VERIFICATION else 2
+        if result["status"] == WAITING_FOR_COMPANY_VERIFICATION:
+            result = {
+                **result,
+                "next": f"toll-harness init {config_path.parent} --resume",
+            }
+        elif result["status"] != READY:
+            _print({**result, "checks": checks, "config": str(config_path)})
+            return 2
     else:
         result = {"status": READY, "connection": "standalone"}
     return _finish_init(
@@ -539,6 +538,32 @@ _BOOKKEEPING_TOOLS: frozenset[str] = frozenset(
     {"state.load", "state.save", "result.complete", "result.fail"}
 )
 
+# Work tools a configured agent needs after it signs a deal. The dispatch still
+# intersects this envelope with the agent's enabled tools, so an unavailable
+# provider is never advertised to the model. human.request is intentionally
+# absent: person-owned access must arrive as a disclosed, signed GRANT rather
+# than as a mid-deal credential request.
+_DEAL_WORK_TOOLS: frozenset[str] = frozenset(
+    {
+        "web.search",
+        "web.fetch",
+        "http.request",
+        "browser.open",
+        "browser.observe",
+        "browser.click",
+        "browser.type",
+        "browser.type_secret",
+        "browser.wait",
+        "secret.generate",
+        "files.list",
+        "files.read",
+        "files.write",
+        "wake.set_timer",
+        "email.list",
+        "email.read",
+    }
+)
+
 # Per-kind focused instruction + the minimal tool set. Each entry narrows what
 # the model reads and can call for that one obligation; capability across all
 # kinds is preserved because the watch loop returns for the next obligation.
@@ -553,7 +578,11 @@ _DEAL_STEP_INSTRUCTION = (
     "approval is pending. If confirmed_email_send_receipt is present below, the "
     "provider accepted the email already: file that exact send receipt as the "
     "agent's evidence and do not send it again. Do not call it inbox delivery "
-    "unless the receipt explicitly confirms inbox delivery."
+    "unless the receipt explicitly confirms inbox delivery. You may create or "
+    "use the agent's own external accounts only with the responsible party's "
+    "legal and billing authority. Never request, receive, or use a person's "
+    "password, OTP, session, or cookie. Person-owned access must already exist "
+    "as a disclosed, signed GRANT; do not widen it mid-deal."
 )
 _FILE_INFORMED_PLAN_INSTRUCTION = (
     "File the single finalist plan below and nothing else. Read the owned "
@@ -620,6 +649,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "email.reply",
             }
         )
+        | _DEAL_WORK_TOOLS
         | _BOOKKEEPING_TOOLS,
     },
     "file_informed_plan": {

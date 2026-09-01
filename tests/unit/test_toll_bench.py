@@ -443,3 +443,41 @@ def test_current_step_compacts_live_payload_without_dropping_action_fields():
     }
     assert result["step_thread"]["messages"] == []
     assert result["access"]["grants"] == []
+
+
+def test_current_step_passes_open_ask_keys_through():
+    # The server added person_sees_control/open_ask_move on 2026-08-28 as the
+    # belt riding the call every agent already makes; the whitelist stripped
+    # both until v0.15.0, so railed models never saw the hint.
+    class OpenAskApi(FakeApi):
+        def current_step(self, deal_id):
+            payload = FakeApi.current_step(self, deal_id)
+            payload["person_sees_control"] = False
+            payload["open_ask_move"] = "File your outcome to OPEN this ask."
+            return payload
+
+    result = BookOfHousesTollBenchProvider(OpenAskApi()).current_step("d1")
+
+    assert result["person_sees_control"] is False
+    assert result["open_ask_move"] == "File your outcome to OPEN this ask."
+
+
+def test_check_in_returns_ask_not_open_as_structured_move():
+    # The walk refuses a flat-progress no-blocker pulse on an unopened
+    # person-held ask (422 ask_not_open, 2026-09-01). The wrapper returns the
+    # refusal as a move, not an exception.
+    class RefusingApi(FakeApi):
+        def post_check_in(self, deal_id, pulse, idempotency_key):
+            raise BookOfHousesApiError(
+                422, "ask_not_open", "File your handover outcome to OPEN the ask."
+            )
+
+    result = BookOfHousesTollBenchProvider(RefusingApi()).post_check_in(
+        "d1", {"changed": "x", "now": "y", "next": "z", "progress_percent": 50}, "ik"
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "ask_not_open",
+        "move": "File your handover outcome to OPEN the ask.",
+    }

@@ -8,6 +8,43 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [Unreleased]
+
+## [0.15.0] - 2026-09-01
+
+### Fixed
+- `current_step` now passes `person_sees_control` and `open_ask_move` through
+  to the model. The server added both on 2026-08-28 as the open-ask belt riding
+  the call every agent already makes, but the response whitelist silently
+  dropped them -- railed models never saw the hint, which is how a live deal
+  deadlocked on an unopened ask the day after the hint shipped.
+
+### Added
+- `post_check_in` returns the walk's new lying-pulse refusal (`422
+  ask_not_open`, live 2026-09-01: a flat-progress, no-blocker pulse on an
+  unopened person-held ask is refused) as a structured `{ok: false, error:
+  "ask_not_open", move: ...}` result instead of a raised error, so the model
+  reads the unblocking move -- file the outcome, or pulse with real progress
+  or an honest blocker -- as a normal tool result.
+- Servers running the same update open pre-formed CHOOSE / PROVIDE / GRANT
+  asks themselves at signing and on advance; such a step arrives already
+  `waiting_on_you` with nothing owed by the agent. No harness change was
+  needed for this -- noted here so operators expect the new arrival state.
+- `secret.generate` creates non-overwriting random `AGENT_*` credentials in
+  the local SecretStore without revealing their names or values.
+- `browser.type_secret` fills `AGENT_*` credentials directly from the local
+  SecretStore without returning the secret name or value to the model, events,
+  checkpoints, or logs.
+- Local Playwright browsers now keep an owner-only profile inside each agent's
+  isolated data directory, preserving agent-owned sessions across runs.
+
+### Changed
+- Company-contact confirmation no longer blocks the onboarding canary or
+  obligation worker; it gates only the optional Book of Houses outbound mailbox.
+- Focused signed-deal runs retain configured web, HTTP, browser, file, timer,
+  and mailbox-read capabilities. They intentionally omit `human.request`:
+  person-owned access must already exist as a disclosed, signed `GRANT`.
+
 ## [0.14.2] - 2026-08-29
 
 ### Fixed

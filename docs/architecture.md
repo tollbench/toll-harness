@@ -24,6 +24,8 @@ deliberately no automatic extraction, summarization, or version graph.
 - `ArtifactStore`: scoped working files.
 - `SecretStore`: non-enumerable, explicitly named secret access for provider implementations.
 
+Local Playwright browser profiles live beside those stores in the permanent agent's isolated data
+directory, never in Book of Houses or a shared harness directory.
 The local reference combines state and events in SQLite and stores artifacts on disk. These
 interfaces can be replaced without changing the runtime.
 

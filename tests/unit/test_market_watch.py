@@ -639,6 +639,23 @@ def test_per_obligation_dispatch_handles_one_kind_with_narrowed_tools():
         "toll_bench.list_proposals",
         "email.send",
         "email.reply",
+        "email.list",
+        "email.read",
+        "web.search",
+        "web.fetch",
+        "http.request",
+        "browser.open",
+        "browser.observe",
+        "browser.click",
+        "browser.type",
+        "browser.type_secret",
+        "browser.wait",
+        "secret.generate",
+        "files.list",
+        "files.read",
+        "files.write",
+        "wake.set_timer",
+        "human.request",
     ]
     runtime = SimpleNamespace(
         email_provider=SimpleNamespace(client=MailClient()),
@@ -667,6 +684,18 @@ def test_per_obligation_dispatch_handles_one_kind_with_narrowed_tools():
     assert "toll_bench.submit_informed_plan" not in observed["tools"]
     assert "toll_bench.current_step" in observed["tools"]
     assert "toll_bench.file_outcome" in observed["tools"]
+    assert {
+        "web.search",
+        "http.request",
+        "browser.open",
+        "browser.type_secret",
+        "secret.generate",
+        "files.write",
+        "wake.set_timer",
+        "email.list",
+    } <= set(observed["tools"])
+    # Person-owned access may arrive only as a signed GRANT, never a mid-deal ask.
+    assert "human.request" not in observed["tools"]
     # enabled_tools restored after the run.
     assert runtime.enabled_tools == original_tools
 

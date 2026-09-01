@@ -9,8 +9,9 @@ transport adapters may encode names as required by a provider. Bedrock, for exam
 | State | `state.load`, `state.save` |
 | Email | `email.list`, `email.read`, `email.send`, `email.reply` |
 | Web | `web.search`, `web.fetch` |
-| Browser | `browser.open`, `browser.observe`, `browser.click`, `browser.type`, `browser.wait` |
+| Browser | `browser.open`, `browser.observe`, `browser.click`, `browser.type`, `browser.type_secret`, `browser.wait` |
 | Files | `files.list`, `files.read`, `files.write` |
+| Secrets | `secret.generate` |
 | Human | `human.request` |
 | Result | `result.complete`, `result.fail` |
 | Operator | `operator.observe`, `operator.message` |
@@ -18,6 +19,15 @@ transport adapters may encode names as required by a provider. Bedrock, for exam
 Operator capabilities are control-plane operations and are not exposed as intelligence tools.
 Filesystem tools are restricted to the current run artifact directory. The default capability set
 does not include a shell, SSH, process control, privilege escalation, or unrestricted paths.
+
+`secret.generate` creates a random `AGENT_*` credential without revealing it and never overwrites
+an existing value. `browser.type_secret` resolves an `AGENT_*` credential from the local
+`SecretStore` and fills the selected browser element without returning the secret name or value
+to the model, events,
+checkpoints, or logs. Local Playwright sessions use an owner-only persistent profile inside the
+agent's isolated data directory, so an agent-owned login can survive later runs without moving a
+cookie or password to Book of Houses. The tool must never be used for a person's password, OTP,
+session, or cookie.
 
 Connected Toll Bench agents may enable this optional extension without changing the frozen initial
 contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schema`,

@@ -459,6 +459,13 @@ class BookOfHousesTollBenchProvider:
                     "har_responses",
                 )
             },
+            # Open-ask visibility (server contract 2026-08-28): False while a
+            # person-held ask is not yet open (the person sees NO control);
+            # open_ask_move then spells out the one move that opens it. These
+            # were stripped by this whitelist until v0.15.0 -- the reason the
+            # server's hint never reached railed models.
+            "person_sees_control": result.get("person_sees_control"),
+            "open_ask_move": result.get("open_ask_move"),
             "pulse_cadence": result.get("pulse_cadence"),
             "latest_work_pulse": result.get("latest_work_pulse"),
             "step_thread": {
@@ -502,7 +509,20 @@ class BookOfHousesTollBenchProvider:
             return {"ok": False, "error": "invalid_work_pulse_fields"}
         if pulse.get("progress_percent") not in {0, 25, 50, 75, 100}:
             return {"ok": False, "error": "invalid_work_pulse_progress"}
-        result = self.api.post_check_in(deal_id, pulse, idempotency_key)
+        try:
+            result = self.api.post_check_in(deal_id, pulse, idempotency_key)
+        except BookOfHousesApiError as error:
+            if error.status == 422 and error.code == "ask_not_open":
+                # The walk refused the pulse: this step's ask is person-held
+                # and unopened, and the pulse reported no progress and no
+                # blocker. The unblocking move is to file the outcome (or
+                # pulse with real progress / an honest blocker).
+                return {
+                    "ok": False,
+                    "error": "ask_not_open",
+                    "move": error.message,
+                }
+            raise
         work_pulse = result.get("work_pulse") or {}
         thread = result.get("step_thread") or {}
         return {

@@ -109,3 +109,45 @@ def test_init_canary_exposes_only_state_and_result_tools(tmp_path, monkeypatch):
     assert runtime.enabled_tools == ["email.send", "state.save", "result.complete"]
     assert result["canary_completed"] is True
     assert result["actions"] == ["state.save", "result.complete"]
+
+
+def test_resume_installs_worker_while_company_confirmation_is_pending(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text("version: 1\n")
+    observed = {}
+    pending = {
+        "status": cli.WAITING_FOR_COMPANY_VERIFICATION,
+        "maker_id": "maker-1",
+        "email_status": "pending_verification",
+    }
+
+    monkeypatch.setattr(cli, "_configuration_path", lambda _directory: config_path)
+    monkeypatch.setattr(
+        cli,
+        "advance_connected_onboarding",
+        lambda _path, approve_registration: pending,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_set_worker_preference",
+        lambda _path, enabled: observed.update(worker_enabled=enabled),
+    )
+
+    def finish(path, result, **kwargs):
+        observed.update(path=path, result=result, finish=kwargs)
+        return 0
+
+    monkeypatch.setattr(cli, "_finish_init", finish)
+
+    result = cli.command_init(
+        SimpleNamespace(directory=tmp_path, resume=True, no_worker=False)
+    )
+
+    assert result == 0
+    assert observed["worker_enabled"] is True
+    assert observed["path"] == config_path
+    assert observed["finish"]["enable_worker"] is True
+    assert observed["result"]["status"] == cli.WAITING_FOR_COMPANY_VERIFICATION
+    assert observed["result"]["next"].endswith("--resume")

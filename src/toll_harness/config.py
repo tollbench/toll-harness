@@ -220,7 +220,10 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     web = BasicWebProvider() if providers.get("web") == "basic" else None
     browser_name = providers.get("browser")
     if browser_name == "playwright":
-        browser = PlaywrightBrowserProvider(headless=providers.get("browser_headless", True))
+        browser = PlaywrightBrowserProvider(
+            headless=providers.get("browser_headless", True),
+            profile_directory=data_dir / "browser-profile",
+        )
     elif browser_name == "agentcore":
         from toll_harness.browser.agentcore import AgentCoreBrowserProvider
 

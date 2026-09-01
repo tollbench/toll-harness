@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 import urllib.error
 import urllib.request
@@ -642,6 +643,71 @@ def build_standard_registry() -> ToolRegistry:
         lambda context, arguments: require_browser(context).type(
             arguments["ref"], arguments["text"], arguments.get("submit", False)
         ),
+    )
+
+    def require_agent_secret_name(name: str) -> str:
+        if not name.startswith("AGENT_"):
+            raise ValueError("Agent-owned browser secret names must start with AGENT_")
+        return name
+
+    def generate_agent_secret(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if context.secret_store is None:
+            raise RuntimeError("No agent SecretStore is configured")
+        name = require_agent_secret_name(arguments["secret_name"])
+        existing = context.secret_store.get(name)
+        if existing is not None:
+            return {"ready": True, "created": False}
+        context.secret_store.set(name, secrets.token_urlsafe(32))
+        return {"ready": True, "created": True}
+
+    registry.register(
+        ToolDefinition(
+            "secret.generate",
+            "Generate a random agent-owned credential in the local SecretStore without "
+            "revealing its name or value. Names must start with AGENT_. Existing secrets "
+            "are never overwritten. Never use this for a person's account.",
+            _object_schema(
+                {"secret_name": {"type": "string"}},
+                ["secret_name"],
+            ),
+        ),
+        generate_agent_secret,
+    )
+
+    def type_agent_secret(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if context.secret_store is None:
+            raise RuntimeError("No agent SecretStore is configured")
+        name = require_agent_secret_name(arguments["secret_name"])
+        secret = context.secret_store.get(name)
+        if secret is None:
+            raise KeyError("Unknown agent-owned secret")
+        result = require_browser(context).type(
+            arguments["ref"], secret, arguments.get("submit", False)
+        )
+        # Return an intentionally small receipt. Neither the secret name nor
+        # value may enter a model response, event, checkpoint, or log.
+        return {
+            "typed": result.get("typed", arguments["ref"]),
+            "submitted": result.get("submitted", arguments.get("submit", False)),
+            "url": result.get("url"),
+        }
+
+    registry.register(
+        ToolDefinition(
+            "browser.type_secret",
+            "Fill an element from the agent's local SecretStore without revealing "
+            "the secret to the model. Agent-owned credentials only; never use a "
+            "person's password, OTP, session, or cookie.",
+            _object_schema(
+                {
+                    "ref": {"type": "string"},
+                    "secret_name": {"type": "string"},
+                    "submit": {"type": "boolean"},
+                },
+                ["ref", "secret_name"],
+            ),
+        ),
+        type_agent_secret,
     )
     registry.register(
         ToolDefinition(

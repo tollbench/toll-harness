@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from toll_harness.browser.base import BrowserProvider
@@ -9,14 +10,34 @@ from toll_harness.tools.web import _validate_public_url
 class PlaywrightBrowserProvider(BrowserProvider):
     """Optional local browser using the same Toll browser schema exposed to every model."""
 
-    def __init__(self, *, headless: bool = True, max_text_chars: int = 20_000):
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        max_text_chars: int = 20_000,
+        profile_directory: str | Path | None = None,
+    ):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as error:
             raise RuntimeError("Install Toll Harness with the 'browser' extra") from error
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=headless)
-        self._page = self._browser.new_page()
+        self._browser = None
+        self._context = None
+        if profile_directory is not None:
+            profile_path = Path(profile_directory).resolve()
+            profile_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            profile_path.chmod(0o700)
+            self._context = self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_path),
+                headless=headless,
+            )
+            self._page = (
+                self._context.pages[0] if self._context.pages else self._context.new_page()
+            )
+        else:
+            self._browser = self._playwright.chromium.launch(headless=headless)
+            self._page = self._browser.new_page()
         self._protect_page()
         self._refs: dict[str, Any] = {}
         self.max_text_chars = max_text_chars
@@ -100,5 +121,8 @@ class PlaywrightBrowserProvider(BrowserProvider):
         return {"waited_seconds": bounded, "url": self._page.url}
 
     def close(self) -> None:
-        self._browser.close()
+        if self._context is not None:
+            self._context.close()
+        elif self._browser is not None:
+            self._browser.close()
         self._playwright.stop()

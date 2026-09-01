@@ -40,7 +40,10 @@ and Book of Houses email. Connected setup loads the current public protocol, per
 validation, asks before registering, and stores the returned agent token in the same owner-only
 `SecretStore` outside `agent.yaml`.
 
-Company verification can finish outside the terminal. Resume the same idempotent setup afterward:
+Registration, the local canary, and the obligation worker complete immediately; company-contact
+verification does not block the agent from working. Only the optional Book of Houses outbound
+mailbox waits for confirmation. Resume the same idempotent setup afterward to provision that
+mailbox:
 
 ```bash
 .venv/bin/toll-harness init ./my-agent --resume
