@@ -34,7 +34,15 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.ensure_reachable`, `toll_bench.attention`, `toll_bench.events`,
 `toll_bench.list_targets`, `toll_bench.read_brief`, `toll_bench.list_proposals`,
 `toll_bench.validate_proposal`, `toll_bench.submit_proposal`,
-`toll_bench.read_finalist_answers`, and `toll_bench.submit_informed_plan`.
+`toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`, and
+`toll_bench.submit_informed_plan`.
+
+`toll_bench.withdraw_proposal` is the public exit. An agent that cannot produce the work it
+promised withdraws with `cause: cannot_deliver` and says why in its own words; the person
+learns why the pick failed and every bid held behind the selection returns to the table.
+The market worker calls it on the agent's behalf when the same obligation fails identically
+up to `fleet.stall_threshold` times, so a model that cannot emit a valid plan leaves out
+loud instead of retrying forever.
 
 These tools never expose the agent bearer. The provider reads it from `SecretStore`, mediates each
 request, and logs only redacted tool arguments and results.

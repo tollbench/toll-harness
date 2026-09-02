@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import logging
 import platform
@@ -530,6 +531,7 @@ _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "deal_step",
     "file_informed_plan",
     "unanswered_message",
+    "feedback_returned",
 )
 
 # Shared bookkeeping tools every focused obligation goal needs: load/save a
@@ -573,7 +575,7 @@ _DEAL_STEP_INSTRUCTION = (
     "only if that field is null). Obey the step's progress-pulse cadence, and "
     "use a document outcome for "
     "APPROVE review steps and a short text outcome only where permitted. If the "
-    "step is an email step, read finalist answers for the exact recipient, call "
+    "step is an email step, read the selection answers for the exact recipient, call "
     "email.send with the approved Subject and Body, and wait if exact-email "
     "approval is pending. If confirmed_email_send_receipt is present below, the "
     "provider accepted the email already: file that exact send receipt as the "
@@ -585,8 +587,9 @@ _DEAL_STEP_INSTRUCTION = (
     "as a disclosed, signed GRANT; do not widen it mid-deal."
 )
 _FILE_INFORMED_PLAN_INSTRUCTION = (
-    "File the single finalist plan below and nothing else. Read the owned "
-    "proposal and the finalist answers before filing; copy every required field "
+    "File the single plan below and nothing else. You are the selected agent on "
+    "this want. Read the owned proposal and the selection answers before filing; "
+    "copy every required field "
     "of each execution step from the owned proposal and change only what the "
     "answers require. For an email-delivery want, author exactly ONE execution "
     "step: a single review_approve step (titled like 'Review & send the email') "
@@ -603,6 +606,15 @@ _UNANSWERED_MESSAGE_INSTRUCTION = (
     "(fetch it only if that field is null). Call "
     "toll_bench.reply_step_message before any check-in or outcome; a work pulse "
     "is not a reply."
+)
+_FEEDBACK_RETURNED_INSTRUCTION = (
+    "The person failed the selected agent and said why; the feedback is in the "
+    "obligation below, in the person's own words. Your bid was held behind that "
+    "selection and is now back on the table. Read your own bid and the feedback, "
+    "then re-file ONCE only if you can fix what they named -- a re-file "
+    "supersedes your earlier bid and a second one is refused. If you cannot fix "
+    "what they named, change nothing and call result.complete with 'let it "
+    "stand'."
 )
 _GOAL_COMMON_TAIL = (
     " Do not bid on unrelated open targets and do not request the full protocol "
@@ -659,6 +671,22 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.read_finalist_answers",
                 "toll_bench.list_proposals",
                 "toll_bench.submit_informed_plan",
+                # The public exit rides the same dispatch: an agent that cannot
+                # produce this plan says so out loud rather than retrying.
+                "toll_bench.withdraw_proposal",
+            }
+        )
+        | _BOOKKEEPING_TOOLS,
+    },
+    "feedback_returned": {
+        "instruction": _FEEDBACK_RETURNED_INSTRUCTION,
+        "tools": frozenset(
+            {
+                "toll_bench.read_brief",
+                "toll_bench.list_proposals",
+                "toll_bench.validate_proposal",
+                "toll_bench.submit_proposal",
+                "toll_bench.withdraw_proposal",
             }
         )
         | _BOOKKEEPING_TOOLS,
@@ -681,7 +709,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
 # payload, the model has already inspected exactly this state and made no move
 # -- the step is waiting on the person, and re-dispatching the model over it
 # would burn a full run to reach the same conclusion while starving every
-# lower-ranked obligation (a $0 finalist plan request sat ~55 minutes behind
+# lower-ranked obligation (a $0 plan request sat ~55 minutes behind
 # one such step on 2026-08-29). Process-local by design: a restart just costs
 # one extra inspection per step.
 _IDLE_STEP_MEMO: dict[str, str] = {}
@@ -779,11 +807,157 @@ def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | No
     return obligations[0] if obligations else None
 
 
+# Circuit breaker over an obligation that keeps failing the same way. A selected
+# agent whose model could not emit a valid tool-use block for its plan payload
+# had that one obligation re-dispatched 663 times in 11 hours on a flat
+# 65-second delay -- no counter, no ceiling, and nothing telling the person
+# waiting on the plan. Now every obligation is keyed, identical failures
+# are counted, the delay doubles, and at the stall threshold the key stops being
+# dispatched at all. A plan request the model cannot produce leaves through the
+# public exit instead of retrying in silence (rule 97).
+#
+# Process-local by design, like the idle-step memo: a restart costs one extra
+# attempt per key, which is the safe direction.
+_OBLIGATION_FAILURES: dict[tuple[str, ...], dict[str, Any]] = {}
+_STALL_THRESHOLD_DEFAULT = 5
+_STALL_DELAY_CAP_SECONDS = 3600.0
+
+
+def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
+    """The one piece of work an obligation names, independent of its wording."""
+    return tuple(
+        str(obligation.get(field) or "")
+        for field in ("kind", "target_id", "proposal_id", "deal_id", "step_id")
+    )
+
+
+def _obligation_fingerprint(obligation: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(obligation, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _failure_signature(payload: Any) -> str:
+    """The failure's own words, so two different failures never count as one."""
+    if isinstance(payload, dict):
+        for field in ("error", "last_error", "reason", "message"):
+            value = payload.get(field)
+            if value:
+                return str(value)
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return str(payload or "unknown_failure")
+
+
+def _breaker_skip(obligation: dict[str, Any]) -> bool:
+    """True while this exact obligation is stalled and has not changed."""
+    key = _obligation_key(obligation)
+    state = _OBLIGATION_FAILURES.get(key)
+    if not state or not state.get("stalled"):
+        return False
+    if state.get("fingerprint") != _obligation_fingerprint(obligation):
+        # The server changed what it is asking for: this is new work, and a
+        # stalled key must never outlive the payload that stalled it.
+        _OBLIGATION_FAILURES.pop(key, None)
+        return False
+    return True
+
+
+def _breaker_reset(obligation: dict[str, Any]) -> None:
+    _OBLIGATION_FAILURES.pop(_obligation_key(obligation), None)
+
+
+def _withdraw_unproducible_plan(
+    resources: Any, obligation: dict[str, Any], attempts: int, error: str
+) -> dict[str, Any]:
+    """Leave the want out loud when this agent cannot file the plan it owes."""
+    proposal_id = str(obligation.get("proposal_id") or "")
+    if not proposal_id:
+        return {"ok": False, "error": "withdraw_skipped_without_proposal_id"}
+    reason = f"model could not produce a valid plan after {attempts} attempts: {error[:200]}"
+    try:
+        response = resources.toll_bench.withdraw_proposal(
+            proposal_id, reason=reason, cause="cannot_deliver"
+        )
+    except Exception as failure:  # noqa: BLE001 - the exit must not kill the cycle
+        _LOGGER.warning(
+            "Withdrawal of unproducible plan %s failed: %s", proposal_id, failure
+        )
+        return {"ok": False, "error": "withdraw_failed", "message": str(failure)}
+    _LOGGER.warning(
+        "Withdrew proposal %s with cause cannot_deliver after %d identical failures",
+        proposal_id,
+        attempts,
+    )
+    return {"ok": True, "proposal_id": proposal_id, "reason": reason, "response": response}
+
+
+def _breaker_record_failure(
+    resources: Any,
+    obligation: dict[str, Any],
+    error: str,
+    *,
+    threshold: int,
+) -> dict[str, Any]:
+    """Count one failure on this key and say how long to wait before retrying."""
+    key = _obligation_key(obligation)
+    state = _OBLIGATION_FAILURES.get(key)
+    if state is None or state.get("error") != error:
+        # A different failure is a different problem: the count starts over.
+        state = {"count": 0, "error": error, "stalled": False, "exited": False}
+    state["count"] = int(state["count"]) + 1
+    state["fingerprint"] = _obligation_fingerprint(obligation)
+    attempts = int(state["count"])
+    delay = min(_STALL_DELAY_CAP_SECONDS, 60.0 * (2**attempts))
+    breaker: dict[str, Any] = {
+        "key": list(key),
+        "consecutive_failures": attempts,
+        "error": error,
+        "retry_after_seconds": delay,
+        "stalled": False,
+    }
+    if attempts >= max(1, threshold) and not state["stalled"]:
+        state["stalled"] = True
+        # ONE line, at the fleet log level, carrying the count and the error.
+        _LOGGER.warning(
+            "Stalling obligation %s after %d identical failures: %s",
+            "/".join(part for part in key if part),
+            attempts,
+            error,
+        )
+    if state["stalled"]:
+        breaker["stalled"] = True
+        if obligation.get("kind") == "file_informed_plan" and not state["exited"]:
+            state["exited"] = True
+            breaker["withdrawal"] = _withdraw_unproducible_plan(
+                resources, obligation, attempts, error
+            )
+    _OBLIGATION_FAILURES[key] = state
+    return breaker
+
+
+def _configured_stall_threshold(config_path: Any) -> int:
+    """agent.yaml fleet.stall_threshold, or the default when it is not set."""
+    try:
+        config = load_config(config_path)
+    except Exception:  # noqa: BLE001 - an unreadable config must not stop the watch
+        return _STALL_THRESHOLD_DEFAULT
+    fleet = config.get("fleet") or {}
+    try:
+        return max(1, int(fleet.get("stall_threshold", _STALL_THRESHOLD_DEFAULT)))
+    except (TypeError, ValueError):
+        return _STALL_THRESHOLD_DEFAULT
+
+
 def _process_market_attention(
-    resources: Any, wait: int, previous_failure: dict[str, Any] | None = None
+    resources: Any,
+    wait: int,
+    previous_failure: dict[str, Any] | None = None,
+    *,
+    stall_threshold: int | None = None,
 ) -> dict[str, Any]:
     if resources.toll_bench is None:
         raise ValueError("This agent is not connected to Toll Bench")
+    threshold = _STALL_THRESHOLD_DEFAULT if stall_threshold is None else int(stall_threshold)
     reachability = resources.toll_bench.ensure_reachable()
     if not reachability.get("ok"):
         return {"ok": False, "reachability": reachability}
@@ -796,6 +970,25 @@ def _process_market_attention(
             "ok": True,
             "reachability": reachability,
             "attention_count": 0,
+            "run": None,
+        }
+    # Stalled keys drop out before anything is fetched or dispatched. They come
+    # back the moment the server changes what it is asking for.
+    _live: list[dict[str, Any]] = []
+    _stalled = 0
+    for item in obligations:
+        if _breaker_skip(item):
+            _stalled += 1
+            continue
+        _live.append(item)
+    obligations = _live
+    if not obligations:
+        return {
+            "ok": True,
+            "reachability": reachability,
+            "attention_count": 0,
+            "stalled_obligations": _stalled,
+            "retry_after_seconds": 300.0,
             "run": None,
         }
     finalist_proposal_ids = {
@@ -816,7 +1009,7 @@ def _process_market_attention(
             payout = status.get("payout") or {}
             if not payout.get("ready"):
                 # Free wants must not wait on payout (Steven 2026-08-28). A PAID
-                # finalist plan needs a ready payout account, but a FREE finalist
+                # selection's plan needs a ready payout account, but a FREE
                 # plan, a deal step, or a message does not. Drop only the blocked
                 # paid obligations and service the rest this cycle; the paid one
                 # resumes automatically once operator onboarding completes.
@@ -830,7 +1023,7 @@ def _process_market_attention(
                     )
                 ]
                 _LOGGER.warning(
-                    "Deferring %d paid finalist plan(s) blocked on payout; "
+                    "Deferring %d paid plan request(s) blocked on payout; "
                     "servicing %d remaining obligation(s)",
                     len(_blocked_ids),
                     len(obligations),
@@ -840,7 +1033,7 @@ def _process_market_attention(
                         "ok": False,
                         "error": "payout_not_ready",
                         "message": (
-                            "A paid finalist plan is waiting, but this agent's Stripe Connect "
+                            "A paid plan request is waiting, but this agent's Stripe Connect "
                             "payout account is not ready. Complete operator onboarding; the worker "
                             "will resume the obligation automatically."
                         ),
@@ -961,11 +1154,14 @@ def _process_market_attention(
             + _FILE_INFORMED_PLAN_INSTRUCTION
             + " "
             + _UNANSWERED_MESSAGE_INSTRUCTION
+            + " "
+            + _FEEDBACK_RETURNED_INSTRUCTION
         )
         obligation_tools = (
             _OBLIGATION_DISPATCH["deal_step"]["tools"]
             | _OBLIGATION_DISPATCH["file_informed_plan"]["tools"]
             | _OBLIGATION_DISPATCH["unanswered_message"]["tools"]
+            | _OBLIGATION_DISPATCH["feedback_returned"]["tools"]
             | {"toll_bench.guide", "human.request"}
         )
     else:
@@ -1023,13 +1219,25 @@ def _process_market_attention(
         _step_id = str(obligation.get("step_id") or "")
         if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
             _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
-    return {
-        "ok": result.status.value in {"completed", "waiting"},
+    ok = result.status.value in {"completed", "waiting"}
+    payload: dict[str, Any] = {
+        "ok": ok,
         "reachability": reachability,
         "attention_count": len(obligations),
         "dispatch": meter,
         "run": _result_payload(result),
     }
+    if _stalled:
+        payload["stalled_obligations"] = _stalled
+    if ok:
+        _breaker_reset(obligation)
+        return payload
+    breaker = _breaker_record_failure(
+        resources, obligation, _failure_signature(result.result), threshold=threshold
+    )
+    payload["breaker"] = breaker
+    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+    return payload
 
 
 def _market_target_key(target: dict[str, Any]) -> tuple[str, str, str | None]:
@@ -1307,6 +1515,7 @@ def _process_wakes(resources: Any) -> list[dict[str, Any]]:
 
 def command_market_watch(arguments: argparse.Namespace) -> int:
     resources = build_runtime(arguments.config)
+    stall_threshold = _configured_stall_threshold(arguments.config)
     previous_failure = None
     previous_scan_failure = None
     next_market_scan = 0.0
@@ -1320,7 +1529,10 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                 # obligations of this worker, checked on the same poll cadence.
                 woken = _process_wakes(resources)
                 result = _process_market_attention(
-                    resources, arguments.wait, previous_failure=previous_failure
+                    resources,
+                    arguments.wait,
+                    previous_failure=previous_failure,
+                    stall_threshold=stall_threshold,
                 )
                 # Agents look for new work ALWAYS, debt or not (Steven,
                 # 2026-08-26). Obligations are serviced first in every cycle,

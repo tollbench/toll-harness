@@ -32,6 +32,10 @@ class TollBenchProvider(Protocol):
         self, target_id: str, proposal: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
 
+    def withdraw_proposal(
+        self, proposal_id: str, *, reason: str, cause: str = "other"
+    ) -> dict[str, Any]: ...
+
     def read_finalist_answers(self, target_id: str, proposal_id: str) -> dict[str, Any]: ...
 
     def submit_informed_plan(

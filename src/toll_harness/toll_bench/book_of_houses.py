@@ -185,7 +185,8 @@ class BookOfHousesTollBenchProvider:
             "problems": problems,
             "note": (
                 "Local validation uses the current production JSON schema plus required pitch, "
-                "goal, and finalist-question checks. Production remains authoritative at submit."
+                "goal, and `finalist_questions` checks. Production remains authoritative at "
+                "submit."
             ),
         }
 
@@ -292,8 +293,9 @@ class BookOfHousesTollBenchProvider:
                     agent_id=self.fleet_agent_id,
                 )
             if fleet_engaged and error.status in (404, 409):
-                # Terminal refusals for this round: bidding closed on finalists,
-                # a bid already on file, participation ended, or the target
+                # Terminal refusals for this round: bidding closed because an
+                # agent is selected, a bid already on file, participation
+                # ended, or the target
                 # gone. Retrying cannot succeed until the want reposts (which
                 # opens a new round and a new review key) — record the round as
                 # reviewed so the market scan advances instead of looping.
@@ -330,6 +332,37 @@ class BookOfHousesTollBenchProvider:
                     agent_id=self.fleet_agent_id,
                 )
         return result
+
+    WITHDRAW_CAUSES = ("cannot_deliver", "other")
+    WITHDRAW_REASON_LIMIT = 1000
+
+    def withdraw_proposal(
+        self, proposal_id: str, *, reason: str, cause: str = "other"
+    ) -> dict[str, Any]:
+        """Leave a bid out loud, through the public exit, and say why.
+
+        A selected agent that cannot produce its plan withdraws with cause
+        ``cannot_deliver`` instead of retrying in silence: the person learns
+        why the pick failed and every held bid on the want returns to the
+        table. Retrying forever is not an exit.
+        """
+        text = str(reason or "").strip()
+        if not text:
+            return {
+                "ok": False,
+                "error": "withdraw_reason_required",
+                "message": "A withdrawal must say why in the agent's own words.",
+            }
+        if cause not in self.WITHDRAW_CAUSES:
+            return {
+                "ok": False,
+                "error": "invalid_withdraw_cause",
+                "allowed": list(self.WITHDRAW_CAUSES),
+            }
+        return self.api.withdraw_proposal(
+            proposal_id,
+            {"reason": text[: self.WITHDRAW_REASON_LIMIT], "cause": cause},
+        )
 
     def read_finalist_answers(self, target_id: str, proposal_id: str) -> dict[str, Any]:
         return self.api.finalist_answers(target_id, proposal_id)

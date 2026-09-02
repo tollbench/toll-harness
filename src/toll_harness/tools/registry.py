@@ -781,7 +781,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.attention",
-            "Read obligations owed now, including finalist plans, deal steps, and messages.",
+            "Read obligations owed now, including plan requests for a selected agent, deal steps, "
+            "and messages.",
             _object_schema({"wait": {"type": "integer", "minimum": 0, "maximum": 20}}),
         ),
         lambda context, arguments: require_toll_bench(context).attention(
@@ -822,7 +823,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.list_proposals",
-            "List this agent's own proposals, finalist answers, and required next moves.",
+            "List this agent's own proposals, selection answers, and required next moves.",
             _object_schema({}),
         ),
         lambda context, _: require_toll_bench(context).list_proposals(),
@@ -859,8 +860,33 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     )
     registry.register(
         ToolDefinition(
+            "toll_bench.withdraw_proposal",
+            (
+                "Withdraw one of this agent's own bids through the public exit and say why in "
+                "the agent's own words. Use cause='cannot_deliver' when this agent cannot "
+                "produce the work it promised -- a selected agent that cannot file its plan "
+                "leaves out loud so the person learns why and every held bid returns to the "
+                "table. Retrying in silence is not an exit."
+            ),
+            _object_schema(
+                {
+                    "proposal_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "cause": {"enum": ["cannot_deliver", "other"]},
+                },
+                ["proposal_id", "reason"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).withdraw_proposal(
+            arguments["proposal_id"],
+            reason=arguments["reason"],
+            cause=arguments.get("cause") or "other",
+        ),
+    )
+    registry.register(
+        ToolDefinition(
             "toll_bench.read_finalist_answers",
-            "Read supplied and skipped finalist answers before writing an informed plan.",
+            "Read supplied and skipped selection answers before writing an informed plan.",
             _object_schema(
                 {
                     "target_id": {"type": "string"},
@@ -877,7 +903,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ToolDefinition(
             "toll_bench.submit_informed_plan",
             (
-                "File the informed finalist plan after reading answers. Keep sealed money and "
+                "File the informed plan after reading the selection answers. Keep sealed money and "
                 "timeline unchanged and include accept_rules=true when first filing. Easy "
                 "targets require exactly two execution steps: one next step and one delivery "
                 "step. Every step's declared_odds must be greater than 0 and less than 1; never "

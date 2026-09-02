@@ -60,6 +60,7 @@ TOLL_BENCH_TOOLS = [
     "toll_bench.list_proposals",
     "toll_bench.validate_proposal",
     "toll_bench.submit_proposal",
+    "toll_bench.withdraw_proposal",
     "toll_bench.read_finalist_answers",
     "toll_bench.submit_informed_plan",
     "toll_bench.current_step",

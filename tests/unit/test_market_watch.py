@@ -27,7 +27,7 @@ def test_market_watch_keeps_running_after_failed_cycle(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_process_market_attention",
-        lambda _resources, _wait, previous_failure=None: {
+        lambda _resources, _wait, previous_failure=None, **_options: {
             "ok": False,
             "error": "invalid_plan",
         },
@@ -53,7 +53,7 @@ def test_market_watch_once_returns_failure(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_process_market_attention",
-        lambda _resources, _wait, previous_failure=None: {
+        lambda _resources, _wait, previous_failure=None, **_options: {
             "ok": False,
             "error": "invalid_plan",
         },
@@ -73,7 +73,7 @@ def test_market_watch_once_scans_when_attention_is_idle(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_process_market_attention",
-        lambda _resources, _wait, previous_failure=None: {
+        lambda _resources, _wait, previous_failure=None, **_options: {
             "ok": True,
             "attention_count": 0,
             "reachability": {"ok": True},
@@ -1088,7 +1088,7 @@ def test_watch_scans_even_when_obligation_is_blocked_on_a_human(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_process_market_attention",
-        lambda _resources, _wait, previous_failure=None: {
+        lambda _resources, _wait, previous_failure=None, **_options: {
             "ok": False,
             "error": "payout_not_ready",
             "reachability": {"ok": True},
@@ -1131,7 +1131,7 @@ def test_watch_scans_alongside_obligation_work_when_timer_is_due(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_process_market_attention",
-        lambda _resources, _wait, previous_failure=None: {
+        lambda _resources, _wait, previous_failure=None, **_options: {
             "ok": True,
             "reachability": {"ok": True},
             "attention_count": 1,
@@ -1160,3 +1160,227 @@ def test_watch_scans_alongside_obligation_work_when_timer_is_due(monkeypatch):
     assert result == 0
     assert scans == [{"ok": True}]
     assert resources.closed is True
+
+
+def _breaker_run_result(goal, mode, status, result):
+    return RunResult(
+        run_id="run-breaker",
+        status=status,
+        result=result,
+        checkpoint=Checkpoint(
+            run_id="run-breaker",
+            goal=goal,
+            data={},
+            event_cursor=0,
+            revision=0,
+            updated_at="2026-09-02T00:00:00Z",
+        ),
+        usage=ModelUsage(total_tokens=10),
+        iterations=1,
+        observed_mode=mode,
+    )
+
+
+def _breaker_resources(obligation, *, failure=None, withdrawals=None, goals=None):
+    """A connected agent whose single obligation always fails the same way."""
+
+    def withdraw_proposal(proposal_id, *, reason, cause="other"):
+        if withdrawals is not None:
+            withdrawals.append({"proposal_id": proposal_id, "reason": reason, "cause": cause})
+        return {"ok": True, "returned_count": 4}
+
+    toll_bench = SimpleNamespace(
+        ensure_reachable=lambda: {"ok": True},
+        attention=lambda wait: {"attention": [dict(obligation)]},
+        list_proposals=lambda: {"proposals": [{"id": "proposal-1", "total_ask_cents": 0}]},
+        status=lambda: {"payout": {"ready": True}},
+        withdraw_proposal=withdraw_proposal,
+    )
+    runtime = SimpleNamespace(
+        email_provider=None,
+        enabled_tools=[
+            "toll_bench.list_proposals",
+            "toll_bench.submit_informed_plan",
+            "toll_bench.withdraw_proposal",
+            "toll_bench.submit_proposal",
+            "toll_bench.read_brief",
+            "toll_bench.validate_proposal",
+            "result.complete",
+        ],
+    )
+
+    def start(goal, mode):
+        if goals is not None:
+            goals.append((goal, list(runtime.enabled_tools)))
+        if failure is None:
+            return _breaker_run_result(goal, mode, RunStatus.COMPLETED, {"summary": "Filed."})
+        return _breaker_run_result(goal, mode, RunStatus.FAILED, failure)
+
+    runtime.start = start
+    return SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
+
+
+def _plan_obligation(**extra):
+    return {
+        "kind": "file_informed_plan",
+        "proposal_id": "proposal-1",
+        "target_id": "target-1",
+        **extra,
+    }
+
+
+def test_identical_failures_back_off_and_stall_the_obligation(monkeypatch):
+    # One selected agent failed this same dispatch 663 times in 11 hours on a
+    # flat 65-second delay. The delay now doubles and the key stops dispatching.
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    withdrawals = []
+    resources = _breaker_resources(
+        _plan_obligation(),
+        failure={"reason": "Model invocation failed", "error": "ValidationException: toolUse"},
+        withdrawals=withdrawals,
+    )
+
+    first = cli._process_market_attention(resources, wait=0, stall_threshold=3)
+    second = cli._process_market_attention(resources, wait=0, stall_threshold=3)
+    third = cli._process_market_attention(resources, wait=0, stall_threshold=3)
+
+    assert [step["breaker"]["consecutive_failures"] for step in (first, second, third)] == [1, 2, 3]
+    assert [step["retry_after_seconds"] for step in (first, second, third)] == [120.0, 240.0, 480.0]
+    assert first["breaker"]["stalled"] is False
+    assert third["breaker"]["stalled"] is True
+    assert third["breaker"]["error"] == "ValidationException: toolUse"
+
+    # Stalled: the fourth cycle never reaches the model at all.
+    fourth = cli._process_market_attention(resources, wait=0, stall_threshold=3)
+
+    assert fourth["ok"] is True
+    assert fourth["run"] is None
+    assert fourth["stalled_obligations"] == 1
+    assert len(withdrawals) == 1
+
+
+def test_a_stalled_plan_request_withdraws_with_cause_cannot_deliver(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    withdrawals = []
+    resources = _breaker_resources(
+        _plan_obligation(),
+        failure={"error": "ValidationException: toolUse"},
+        withdrawals=withdrawals,
+    )
+
+    for _ in range(2):
+        cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert withdrawals == [
+        {
+            "proposal_id": "proposal-1",
+            "reason": (
+                "model could not produce a valid plan after 2 attempts: "
+                "ValidationException: toolUse"
+            ),
+            "cause": "cannot_deliver",
+        }
+    ]
+
+
+def test_a_stalled_deal_step_stalls_without_withdrawing(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
+    withdrawals = []
+    obligation = {"kind": "deal_step", "deal_id": "deal-1", "step_id": "step-1"}
+    resources = _breaker_resources(
+        obligation, failure={"error": "boom"}, withdrawals=withdrawals
+    )
+    resources.toll_bench.current_step = lambda deal_id: {"current_step": {"id": "step-1"}}
+
+    for _ in range(2):
+        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert result["breaker"]["stalled"] is True
+    assert withdrawals == []
+
+
+def test_a_different_failure_starts_the_count_over(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    errors = ["first failure", "first failure", "a different failure"]
+    obligation = _plan_obligation()
+
+    def next_resources():
+        return _breaker_resources(obligation, failure={"error": errors.pop(0)})
+
+    first = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
+    second = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
+    third = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
+
+    assert [step["breaker"]["consecutive_failures"] for step in (first, second, third)] == [1, 2, 1]
+
+
+def test_a_success_clears_the_breaker(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    obligation = _plan_obligation()
+    failing = _breaker_resources(obligation, failure={"error": "boom"})
+
+    cli._process_market_attention(failing, wait=0, stall_threshold=5)
+    cli._process_market_attention(_breaker_resources(obligation), wait=0, stall_threshold=5)
+    after = cli._process_market_attention(failing, wait=0, stall_threshold=5)
+
+    assert after["breaker"]["consecutive_failures"] == 1
+    assert cli._OBLIGATION_FAILURES[cli._obligation_key(obligation)]["count"] == 1
+
+
+def test_a_changed_obligation_payload_lifts_the_stall(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    goals = []
+    stalled = _breaker_resources(_plan_obligation(), failure={"error": "boom"})
+
+    for _ in range(2):
+        cli._process_market_attention(stalled, wait=0, stall_threshold=2)
+    skipped = cli._process_market_attention(stalled, wait=0, stall_threshold=2)
+
+    changed = _breaker_resources(
+        _plan_obligation(why="the person answered your question"),
+        failure={"error": "boom"},
+        goals=goals,
+    )
+    result = cli._process_market_attention(changed, wait=0, stall_threshold=2)
+
+    assert skipped["run"] is None
+    assert result["run"] is not None
+    assert len(goals) == 1
+
+
+def test_returned_bid_dispatches_with_the_feedback_and_proposal_tools(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    goals = []
+    obligation = {
+        "kind": "feedback_returned",
+        "target_id": "target-1",
+        "proposal_id": "proposal-1",
+        "why": "the person failed the selected agent and said why",
+        "feedback": {"reason": "no plan ever arrived", "given_at": "2026-09-02T00:00:00Z"},
+    }
+    resources = _breaker_resources(obligation, goals=goals)
+
+    result = cli._process_market_attention(resources, wait=0)
+
+    assert result["ok"] is True
+    goal, tools = goals[0]
+    assert "back on the table" in goal
+    assert "no plan ever arrived" in goal
+    assert "re-file ONCE" in goal
+    assert set(tools) == {
+        "toll_bench.read_brief",
+        "toll_bench.list_proposals",
+        "toll_bench.validate_proposal",
+        "toll_bench.submit_proposal",
+        "toll_bench.withdraw_proposal",
+        "result.complete",
+    }
+
+
+def test_stall_threshold_comes_from_the_agent_configuration(tmp_path):
+    config = tmp_path / "agent.yaml"
+    config.write_text("version: 1\nfleet:\n  stall_threshold: 9\n")
+
+    assert cli._configured_stall_threshold(config) == 9
+    assert cli._configured_stall_threshold(tmp_path / "missing.yaml") == 5

@@ -119,6 +119,10 @@ class FakeApi:
         self.submissions.append((target_id, outcome, idempotency_key))
         return {"ok": True, "filed": True}
 
+    def withdraw_proposal(self, proposal_id, payload):
+        self.submissions.append((proposal_id, payload))
+        return {"ok": True, "withdrawn": True, "returned_count": 4}
+
 
 def _valid_proposal():
     return {
@@ -481,3 +485,45 @@ def test_check_in_returns_ask_not_open_as_structured_move():
         "error": "ask_not_open",
         "move": "File your handover outcome to OPEN the ask.",
     }
+
+
+def test_withdrawal_states_the_cause_and_the_agent_own_reason():
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    result = provider.withdraw_proposal(
+        "p1", reason="  model could not produce a valid plan  ", cause="cannot_deliver"
+    )
+
+    assert result == {"ok": True, "withdrawn": True, "returned_count": 4}
+    assert api.submissions == [
+        (
+            "p1",
+            {"reason": "model could not produce a valid plan", "cause": "cannot_deliver"},
+        )
+    ]
+
+
+def test_withdrawal_defaults_to_cause_other_and_caps_the_reason():
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    provider.withdraw_proposal("p1", reason="x" * 1500)
+
+    proposal_id, payload = api.submissions[0]
+    assert proposal_id == "p1"
+    assert payload["cause"] == "other"
+    assert len(payload["reason"]) == 1000
+
+
+def test_withdrawal_without_words_or_with_an_unknown_cause_is_refused():
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    silent = provider.withdraw_proposal("p1", reason="   ")
+    invented = provider.withdraw_proposal("p1", reason="done here", cause="bored")
+
+    assert silent["error"] == "withdraw_reason_required"
+    assert invented["error"] == "invalid_withdraw_cause"
+    assert invented["allowed"] == ["cannot_deliver", "other"]
+    assert api.submissions == []

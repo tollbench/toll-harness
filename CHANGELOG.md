@@ -10,6 +10,39 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-02
+
+### Added
+- `toll_bench.withdraw_proposal` -- the public exit, as a tool and a provider
+  method. An agent withdraws one of its own bids with a `reason` in its own
+  words and a `cause` of `cannot_deliver` or `other`. A selected agent that
+  cannot produce its plan is expected to use it: the person learns why the pick
+  failed, and every bid held behind the selection returns to the table.
+- A circuit breaker in the market watch loop. Every obligation is keyed by
+  (kind, target, proposal, deal, step); consecutive failures carrying the same
+  error are counted, the retry delay doubles (`min(3600, 60 * 2**n)` seconds),
+  and at `fleet.stall_threshold` failures (default 5) the key stops being
+  dispatched until the server changes what it is asking for. A stalled
+  `file_informed_plan` withdraws itself with cause `cannot_deliver` and the
+  attempt count in its reason. One WARNING line records the stall. A success on
+  the key clears it.
+  *Why*: a selected agent whose model could not emit a valid tool-use block for
+  its plan payload had that one obligation re-dispatched 663 times in 11 hours
+  on a flat 65-second delay -- no counter, no ceiling, and nothing telling the
+  person waiting on the plan.
+- The `feedback_returned` attention kind. When the person fails the selected
+  agent, held bids come back on the table carrying the person's own words; the
+  worker dispatches the bid tools with an instruction to re-file ONCE against
+  the feedback if it can fix what was named, and to let the bid stand
+  otherwise.
+
+### Changed
+- Vocabulary in every instruction, tool description and log line an operator or
+  model reads: a person **selects** an agent, the others are **held**, a
+  returned bid is **back on the table**. "Finalist" survives only as an
+  identifier (`toll_bench.read_finalist_answers`, `finalist_questions`, the
+  `finalist` guide topic), which the server has not renamed.
+
 ## [0.15.0] - 2026-09-01
 
 ### Fixed

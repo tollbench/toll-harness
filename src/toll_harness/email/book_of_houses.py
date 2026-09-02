@@ -195,6 +195,15 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def withdraw_proposal(self, proposal_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        proposal = urllib.parse.quote(proposal_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/proposals/{proposal}/withdraw",
+            payload=payload,
+            authenticated=True,
+        )
+
     def current_step(self, deal_id: str) -> dict[str, Any]:
         deal = urllib.parse.quote(deal_id, safe="")
         return self._request(
