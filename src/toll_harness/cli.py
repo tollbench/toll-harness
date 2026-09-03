@@ -633,7 +633,10 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "the bench refuses it (REJ-26). Do not author a separate compose/draft step. "
     "If the person failed a prior attempt with a reason (prior_attempt in the "
     "brief), the new plan must answer that reason. For any other easy want, use exactly two "
-    "execution steps. Every declared_odds value is your chance the PERSON ends up with the thing, judged from that step (never the chance you clear the step), strictly between 0 and 1; a plan is filed all at once, so its line may not fall from one step to the next (REJ-29)."
+    "execution steps. Every declared_odds value is your chance the PERSON ends up with "
+    "the thing, judged from that step (never the chance you clear the step), strictly "
+    "between 0 and 1; a plan is filed all at once, so its line may not fall from one "
+    "step to the next (REJ-29)."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
