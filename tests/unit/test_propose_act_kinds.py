@@ -22,6 +22,40 @@ def _provider():
     return BookOfHousesTollBenchProvider(api), api
 
 
+def test_a_meeting_is_intent_only_at_the_same_door():
+    """RULE 223: the agent says who, how long and roughly when. Nothing else
+    reaches the wire, and the platform runs the protocol."""
+    provider, api = _provider()
+    out = provider.propose_act('d-1', 's-1', {
+        'kind': 'meeting', 'with': 'Ruby@Example.com', 'with_name': 'Ruby',
+        'duration_min': 30, 'window': 'next week', 'title': 'Catch up',
+        'purpose': 'the call the person asked for'}, 'k-3')
+    assert out['ok'] is True
+    (_deal, _step, payload, key) = api.calls[0]
+    assert payload['kind'] == 'meeting' and payload['with'] == 'Ruby@Example.com'
+    assert payload['window'] == 'next week' and payload['duration_min'] == 30
+    assert key == 'k-3'
+
+
+def test_a_meeting_needs_the_invitee():
+    provider, api = _provider()
+    out = provider.propose_act('d-1', 's-1', {'kind': 'meeting', 'title': 'x'}, 'k-4')
+    assert out == {'ok': False, 'error': 'missing_act_field', 'field': 'with'}
+    assert api.calls == []
+
+
+def test_a_meeting_never_carries_a_slot_or_a_body():
+    """The harness refuses to smuggle a time or an email body onto a meeting
+    act: those are the platform's, by rule."""
+    provider, api = _provider()
+    out = provider.propose_act('d-1', 's-1', {
+        'kind': 'meeting', 'with': 'r@x.co', 'start': {'dateTime': 'x'},
+        'body_text': 'When: Friday 11'}, 'k-5')
+    assert out['ok'] is True
+    payload = api.calls[0][2]
+    assert 'start' not in payload and 'body_text' not in payload
+
+
 def test_an_email_act_still_goes_through_unchanged():
     provider, api = _provider()
     out = provider.propose_act('d-1', 's-1', {
@@ -66,7 +100,7 @@ def test_a_kind_the_door_does_not_have_is_named_not_guessed():
     provider, api = _provider()
     out = provider.propose_act('d-1', 's-1', {'kind': 'carrier_pigeon'}, 'k-5')
     assert out['error'] == 'unknown_act_kind'
-    assert out['kinds'] == ['email', 'calendar_event']
+    assert out['kinds'] == ['email', 'calendar_event', 'meeting']
     assert api.calls == []
 
 

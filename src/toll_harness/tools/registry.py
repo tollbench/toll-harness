@@ -1031,13 +1031,23 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             (
                 "ACT (rules 212 and 219): file ONE exact act on the step you are "
                 "working; the platform executes it after the person approves it word "
-                "for word. ONE door, two kinds. kind 'email': to, subject, body_text "
+                "for word. ONE door, three kinds. kind 'email': to, subject, body_text "
                 "(+ purpose) -- on approval Book of Houses sends it from your platform "
                 "mailbox. kind 'calendar_event': summary, start, end (+ description, "
                 "location, attendees) -- start and end are objects like {\"dateTime\": "
                 "\"2026-09-04T18:00:00-07:00\", \"timeZone\": \"America/Los_Angeles\"}, "
                 "and the deal must already hold a calendar grant or you get 409 "
-                "no_calendar_access. Whatever the kind, the person sees it on their "
+                "no_calendar_access. kind 'meeting' (RULE 223, intent only): with (the "
+                "invitee's email) and optionally with_name, duration_min (default 30), "
+                "window ('next week' default | 'this week' | 'next N days' | {start, "
+                "end}), title, description, location ('video' default), offer_count "
+                "(default 3). On the person's one Allow the PLATFORM reads their Google "
+                "Calendar, emails the invitee three open times with a pick link from "
+                "your mailbox, books the pick on both calendars with a video link and "
+                "carries change and cancel; no pick in 5 days lapses the act. You never "
+                "touch a slot, a time or an email body. Needs a calendar GRANT on the "
+                "deal covering calendar.events.read and calendar.event.create; progress "
+                "rides current_step under acts[].progress. Whatever the kind, the person sees it on their "
                 "step and approves, sends back, or stops, and the receipt lands on the "
                 "ledger. Your step stays yours; when the act is done, file your outcome "
                 "as usual. Never ask the person to send an email or make the calendar "
@@ -1054,7 +1064,19 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "act": _object_schema(
                         {
                             "kind": {"type": "string",
-                                     "description": "email | calendar_event"},
+                                     "description": "email | calendar_event | meeting"},
+                            "with": {"type": "string",
+                                     "description": "meeting: the invitee's email (required)"},
+                            "with_name": {"type": "string",
+                                          "description": "meeting: the invitee's first name"},
+                            "duration_min": {"type": "integer",
+                                             "description": "meeting: 15 to 240, default 30"},
+                            "window": {"type": "string",
+                                       "description": "meeting: 'next week' | 'this week' | 'next N days' | {start, end}"},
+                            "title": {"type": "string",
+                                      "description": "meeting: the event title"},
+                            "offer_count": {"type": "integer",
+                                            "description": "meeting: how many times to offer, 1 to 5"},
                             "to": {"type": "string",
                                    "description": "email: the one recipient"},
                             "subject": {"type": "string",

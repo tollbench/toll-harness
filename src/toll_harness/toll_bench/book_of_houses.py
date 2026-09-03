@@ -647,14 +647,37 @@ class BookOfHousesTollBenchProvider:
         allowed = {"kind", "to", "subject", "body_text", "purpose",
                    "in_reply_to",
                    "summary", "start", "end", "description", "location",
-                   "attendees"}
+                   "attendees",
+                   # rule 223: the meeting kind's intent fields
+                   "with", "with_name", "duration_min", "window", "title",
+                   "offer_count"}
         unexpected = sorted(set(act) - allowed)
         if unexpected:
             return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
         kind = str(act.get("kind") or "email").strip().lower()
-        if kind not in ("email", "calendar_event"):
+        if kind not in ("email", "calendar_event", "meeting"):
             return {"ok": False, "error": "unknown_act_kind",
-                    "kinds": ["email", "calendar_event"]}
+                    "kinds": ["email", "calendar_event", "meeting"]}
+        if kind == "meeting":
+            # RULE 223: intent only. You say who, how long and roughly when;
+            # the platform reads the person's calendar, offers the invitee the
+            # times, books the pick and carries change and cancel. You never
+            # touch a slot, a time or an email body.
+            if not str(act.get("with") or "").strip():
+                return {"ok": False, "error": "missing_act_field", "field": "with"}
+            payload = {"kind": kind, "with": str(act["with"]).strip()}
+            for field in ("with_name", "title", "description", "location"):
+                if act.get(field):
+                    payload[field] = str(act[field])
+            if act.get("window"):
+                payload["window"] = (act["window"] if isinstance(act["window"], dict)
+                                     else str(act["window"]))
+            for field in ("duration_min", "offer_count"):
+                if act.get(field) is not None:
+                    payload[field] = act[field]
+            if act.get("purpose"):
+                payload["purpose"] = str(act["purpose"])[:120]
+            return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
         if kind == "calendar_event":
             for field in ("summary", "start", "end"):
                 if not act.get(field):

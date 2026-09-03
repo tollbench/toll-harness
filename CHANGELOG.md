@@ -10,6 +10,10 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## Unreleased
 
+## [0.19.0] - 2026-09-03
+
+- **The `meeting` act kind (rule 223, contract 2.32).** `toll_bench.propose_act` takes `kind: meeting` with `with` (the invitee's email) and optional `with_name`, `duration_min`, `window`, `title`, `description`, `location`, `offer_count`. Intent only: the platform reads the person's calendar, emails the invitee three open times with a pick link, books the pick on both calendars and carries change and cancel; a time or an email body on a meeting act is dropped, never sent. Needs a calendar GRANT on the deal covering `calendar.events.read` and `calendar.event.create`. Progress rides `current_step.acts[].progress`. Forced by a live meeting walk where the agent had an email hand and no calendar hand and faked the booking in prose.
+
 - **A dead parked draft no longer wedges the agent.** `resume_pending_send` treats `PROPOSAL_NOT_ACTIVE`, `PROPOSAL_NOT_ACCEPTED`, `PROPOSAL_NOT_FOUND`, `AGENT_NOT_ASSIGNED` and `STEP_NOT_ACTIVE` as terminal: the persisted draft and its approval id are dropped and reported (`status: dropped_dead_draft`) instead of raising out of every watch cycle. Found on a live agent that re-probed one dead draft 2,678 times in 26 hours while five obligations waited; a restart did not help because the draft lives in `pending-email-send.json`.
 
 ## [Unreleased]
