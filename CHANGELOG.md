@@ -10,6 +10,10 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## Unreleased
 
+## [0.19.1] - 2026-09-03
+
+- **A dead proposal never costs a cycle again.** `list_messages` walks every proposal the bench still lists as accepted; when its thread read answers `PROPOSAL_NOT_ACTIVE` (or another dead-draft code) the proposal is remembered and skipped instead of raising a warning with a traceback every watch cycle. Found on a live agent: 1,342 identical warnings after a restart, the 0.18.0 fix having covered only the parked draft.
+
 ## [0.19.0] - 2026-09-03
 
 - **The `meeting` act kind (rule 223, contract 2.32).** `toll_bench.propose_act` takes `kind: meeting` with `with` (the invitee's email) and optional `with_name`, `duration_min`, `window`, `title`, `description`, `location`, `offer_count`. Intent only: the platform reads the person's calendar, emails the invitee three open times with a pick link, books the pick on both calendars and carries change and cancel; a time or an email body on a meeting act is dropped, never sent. Needs a calendar GRANT on the deal covering `calendar.events.read` and `calendar.event.create`. Progress rides `current_step.acts[].progress`. Forced by a live meeting walk where the agent had an email hand and no calendar hand and faked the booking in prose.

@@ -588,3 +588,36 @@ def test_dead_draft_is_dropped_so_the_cycle_can_proceed(tmp_path):
     assert client.pending_send is None
     assert not pending_store.exists()
     assert client.resume_pending_send() is None  # the cycle is free
+
+
+def test_a_dead_proposal_is_skipped_and_never_asked_again():
+    """The bench lists a proposal as accepted after its deal ended; its thread
+    read answers PROPOSAL_NOT_ACTIVE. That is not a mail hiccup to log every
+    cycle -- the proposal is dead. Skip it, remember it, keep listing the rest."""
+    from toll_harness.email.book_of_houses import (
+        BookOfHousesApiError, BookOfHousesMailClient,
+    )
+
+    class _Api:
+        def __init__(self):
+            self.thread_calls = []
+
+        def proposals(self):
+            return [{"id": "dead-1", "status": "accepted"},
+                    {"id": "live-2", "status": "accepted"}]
+
+        def threads(self, proposal_id, limit=50):
+            self.thread_calls.append(proposal_id)
+            if proposal_id == "dead-1":
+                raise BookOfHousesApiError(409, "PROPOSAL_NOT_ACTIVE", "This proposal is no longer active.")
+            return {"threads": [{"id": "t-1", "last_inbound_at": "2026-09-03T00:00:00Z"}]}
+
+    api = _Api()
+    client = BookOfHousesMailClient.__new__(BookOfHousesMailClient)
+    client.api = api
+    client._check_mailbox = lambda mailbox: None
+    out = client.list_messages("agent@bookofhouses.com", limit=20)
+    assert [x["id"] for x in out] == ["t-1"]
+    assert api.thread_calls == ["dead-1", "live-2"]
+    client.list_messages("agent@bookofhouses.com", limit=20)
+    assert api.thread_calls == ["dead-1", "live-2", "live-2"], "asked once, never again"

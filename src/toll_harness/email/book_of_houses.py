@@ -508,13 +508,24 @@ class BookOfHousesRestMailClient:
         self._check_mailbox(mailbox)
         limit = min(max(int(parameters.get("limit", 20)), 1), 100)
         threads: list[dict[str, Any]] = []
+        dead = self.__dict__.setdefault("_dead_proposals", set())
         for proposal in self.api.proposals():
             if proposal.get("status") != "accepted":
                 continue
             proposal_id = str(proposal.get("id") or "")
-            if not proposal_id:
+            if not proposal_id or proposal_id in dead:
                 continue
-            result = self.api.threads(proposal_id, limit=limit)
+            try:
+                result = self.api.threads(proposal_id, limit=limit)
+            except BookOfHousesApiError as error:
+                # The bench still lists the proposal as accepted but its deal is
+                # over: every thread read answered PROPOSAL_NOT_ACTIVE, once a
+                # cycle, forever (Cindy, 2026-09-03: 1,342 of them after a
+                # restart). Remember it and stop asking; nothing here is owed.
+                if error.code in self.DEAD_DRAFT_CODES:
+                    dead.add(proposal_id)
+                    continue
+                raise
             for item in result.get("threads") or []:
                 if isinstance(item, dict):
                     threads.append(item)
