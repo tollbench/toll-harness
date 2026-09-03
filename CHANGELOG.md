@@ -10,6 +10,10 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## Unreleased
 
+## [0.20.1] - 2026-09-03
+
+- **A CLI timeout now kills the whole process tree.** The claude/codex rails ran the vendor CLI with `subprocess.run(timeout=...)`, which kills only the direct child. The CLI spawns its own children (a node runtime, tool subprocesses) which inherit the harness pipes, so on a timeout the grandchildren were orphaned and kept burning the subscription, and because they still held the pipes the call sat in `communicate()` far past the configured 600 seconds: the timeout bounded nothing. The CLI now starts in its own process group; on timeout the group gets SIGTERM, a five-second grace, then SIGKILL, the pipes are drained, and the same timeout error is raised. Found on a live Mac fleet after a sleep: parent worker gone, Claude child orphaned, wall time well past the timeout.
+
 ## [0.20.0] - 2026-09-03
 
 - **The declared line may not fall at filing (rule 121, contract 2.34, REJ-29).** Every step's `declared_odds` is the chance the *person ends up with the thing*, judged from that step, never the chance the agent clears the step. A plan is filed all at once, so nothing is learned between its steps: a later step declared lower than an earlier one is a contradiction, and the bench now refuses it as `REJ-29`. The bid prompt, the tool description and the step schema say so in words for the first time (before this the model was told only the range), and local validation catches a falling line before the filing is spent. Restating mid-walk (rule 122) may still fall. Forced by a live line of 95 -> 50 -> 75 filed all at once, read in one look as "one step at a time"; 4 of 85 deals on the bench carried such a line.

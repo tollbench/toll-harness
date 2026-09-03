@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import uuid
@@ -125,6 +127,75 @@ def _parse_envelope(raw: str) -> tuple[str, list[ToolCall], list[JsonObject]]:
     return commentary, calls, normalized
 
 
+# How long to give the CLI's process group after SIGTERM before SIGKILL.
+_KILL_GRACE_SECONDS = 5.0
+
+
+def _run_in_own_process_group(
+    argv: Sequence[str],
+    *,
+    input: str,
+    timeout: float,
+    cwd: str,
+    capture_output: bool = True,
+    text: bool = True,
+) -> subprocess.CompletedProcess:
+    """subprocess.run, except the CLI gets its OWN process group and a timeout
+    kills the whole tree.
+
+    WHY (0.20.1). `subprocess.run(timeout=...)` kills only the direct child. The
+    claude/codex CLIs spawn their own children (a node runtime, tool
+    subprocesses) which inherit our stdout/stderr pipes. Two things then went
+    wrong on a live Mac fleet: the grandchildren were orphaned and kept burning
+    the subscription, and because they still held the pipes, run() sat in
+    communicate() long past the 600s it was configured for -- the timeout
+    bounded nothing. A sleeping laptop made both worse.
+
+    Here the child starts in a new session (its own process group), and on
+    timeout the WHOLE group gets SIGTERM, a short grace, then SIGKILL, after
+    which the pipes are drained and TimeoutExpired is re-raised so the caller
+    maps it to a timeout error exactly as before. The injectable `runner` used
+    by the tests bypasses this on purpose.
+    """
+    proc = subprocess.Popen(
+        list(argv),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        try:
+            proc.communicate(timeout=_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(list(argv), proc.returncode, out, err)
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGTERM the child's whole group, wait briefly, then SIGKILL what is left."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig, wait in ((signal.SIGTERM, _KILL_GRACE_SECONDS), (signal.SIGKILL, 1.0)):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 class _CliRailAdapter(ModelAdapter):
     """Shared plumbing: render prompt, run the vendor CLI, parse the envelope."""
 
@@ -164,7 +235,7 @@ class _CliRailAdapter(ModelAdapter):
         return self._model_id
 
     def _run(self, argv: list[str], prompt: str) -> subprocess.CompletedProcess:
-        runner = self._runner or subprocess.run
+        runner = self._runner or _run_in_own_process_group
         try:
             return runner(
                 argv,

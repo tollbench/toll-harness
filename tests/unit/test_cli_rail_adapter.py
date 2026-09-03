@@ -226,3 +226,57 @@ def test_config_builds_cli_rail_adapters(tmp_path):
     external = _build_model(config, root=tmp_path, data_dir=tmp_path / "data")
     assert isinstance(external, ExternalAgentAdapter)
     assert external.command == ["sh", "-c", "cat"]
+
+
+def test_timeout_kills_the_whole_cli_process_tree_and_returns_promptly(tmp_path):
+    # 0.20.1: the vendor CLI spawns its own children which inherit our pipes.
+    # subprocess.run(timeout=) killed only the direct child, so the grandchild
+    # kept the pipes open and run() sat in communicate() far past the timeout
+    # while the orphan burned the subscription. The rail now runs the CLI in
+    # its own process group and kills the group.
+    import os
+    import subprocess
+    import time
+
+    from toll_harness.models.base import ModelInvocationError
+    from toll_harness.models.cli_rail import _CliRailAdapter
+
+    pid_file = tmp_path / "grandchild.pid"
+    fake_cli = tmp_path / "fake-cli.sh"
+    fake_cli.write_text(
+        "#!/bin/sh\n"
+        "sleep 120 &\n"            # the grandchild, holding our stdout/stderr
+        f"echo $! > {pid_file}\n"
+        "sleep 120\n"              # the CLI itself never finishes
+    )
+    fake_cli.chmod(0o755)
+
+    adapter = _CliRailAdapter(binary=str(fake_cli), workdir=tmp_path, timeout_seconds=1)
+    started = time.monotonic()
+    try:
+        adapter._run([str(fake_cli)], "prompt")
+        raise AssertionError("expected a timeout")
+    except ModelInvocationError as error:
+        assert error.code == "timeout"
+    elapsed = time.monotonic() - started
+
+    # Bounded by the timeout plus the kill grace, not by the grandchild's sleep.
+    assert elapsed < 20, elapsed
+    grandchild = int(pid_file.read_text().strip())
+    # Give the kernel a beat, then the grandchild must be gone (or a zombie
+    # of a dead group, which os.kill(pid, 0) still reports as gone on reap).
+    deadline = time.monotonic() + 3
+    alive = True
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild, 0)
+            # It may still exist as a zombie until reaped; check its state.
+            with open(f"/proc/{grandchild}/stat") as fh:
+                alive = fh.read().split(")")[1].split()[0] not in ("Z", "X")
+        except (ProcessLookupError, FileNotFoundError):
+            alive = False
+        if not alive:
+            break
+        time.sleep(0.2)
+    assert not alive, "grandchild survived the timeout"
+    assert isinstance(subprocess.CompletedProcess, type)
