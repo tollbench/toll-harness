@@ -906,8 +906,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "File the informed plan after reading the selection answers. Keep sealed money and "
                 "timeline unchanged and include accept_rules=true when first filing. Easy "
                 "targets require exactly two execution steps: one next step and one delivery "
-                "step. Every step's declared_odds must be greater than 0 and less than 1; never "
-                "use 1. Never retry an unchanged plan after a validation error."
+                "step. Every step's declared_odds is YOUR chance the PERSON ends up with the thing, "
+                "judged from that step -- never the chance you clear the step -- greater than 0 "
+                "and less than 1; never use 1. Because nothing is learned between steps at "
+                "filing, the line may not fall: a later step declared lower than an earlier one "
+                "is refused (REJ-29). Never retry an unchanged plan after a validation error."
             ),
             _object_schema(
                 {
@@ -946,6 +949,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                                             "type": "number",
                                             "exclusiveMinimum": 0,
                                             "exclusiveMaximum": 1,
+                                            "description": (
+                                                "Your chance the PERSON ends up with the thing, judged "
+                                                "from this step; not the chance you clear this step. "
+                                                "Filed all at once, the line may not fall from one step "
+                                                "to the next (REJ-29). Equal is fine."
+                                            ),
                                         }
                                     },
                                     "required": [

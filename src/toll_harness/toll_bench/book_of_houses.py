@@ -180,13 +180,50 @@ class BookOfHousesTollBenchProvider:
                             ),
                         }
                     )
+        # RULE 121, ENFORCED AT THE BENCH AS REJ-29 (contract 2.34, 2026-09-03).
+        # Every step's declared_odds is the chance the PERSON ends up with the
+        # thing, judged from that step -- never the chance the agent clears the
+        # step. A plan is filed all at once, so nothing is learned between its
+        # steps: a later step declared LOWER than an earlier one can only mean
+        # the steps were priced one at a time. Caught here so the filing is not
+        # spent on it. Equal is fine. Restating mid-walk (rule 122) may fall.
+        # Same order as the bench: an illegal number anywhere is the schema's
+        # report (REJ-16 there) and the line is never compared; only a plan
+        # whose numbers are all legal gets the line check.
+        odds_line = [
+            step.get("declared_odds") for step in steps if isinstance(step, dict)
+        ] if isinstance(steps, list) else []
+        all_legal = odds_line and all(
+            not isinstance(v, bool) and isinstance(v, (int, float)) and 0 < v < 1
+            for v in odds_line
+        )
+        if all_legal:
+            prev_val, prev_idx = None, None
+            for i, v in enumerate(odds_line):
+                if prev_val is not None and v < prev_val - 1e-12:
+                    problems.append(
+                        {
+                            "path": f"steps.{i}.declared_odds",
+                            "message": (
+                                f"step {i + 1} declares {v * 100:.0f}% but step {prev_idx + 1} "
+                                f"declared {prev_val * 100:.0f}%. Every declared_odds is your "
+                                "chance the PERSON ends up with the thing, judged from that "
+                                "step, not the chance you clear the step. Nothing is learned "
+                                "between steps at filing time, so the line cannot fall: price "
+                                "the whole outcome from each step (rule 121; the bench refuses "
+                                "this as REJ-29)"
+                            ),
+                        }
+                    )
+                    break
+                prev_val, prev_idx = v, i
         return {
             "ok": not problems,
             "problems": problems,
             "note": (
                 "Local validation uses the current production JSON schema plus required pitch, "
-                "goal, and `finalist_questions` checks. Production remains authoritative at "
-                "submit."
+                "goal, `finalist_questions` and declared-odds-line checks. Production remains "
+                "authoritative at submit."
             ),
         }
 

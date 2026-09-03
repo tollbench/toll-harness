@@ -170,6 +170,65 @@ def test_submit_proposal_validates_current_schema_before_writing():
     assert api.acks == 2
 
 
+def _step(n, odds):
+    return {"title": f"Step {n}", "ask": "APPROVE", "outcome_promise": f"Deliver part {n}",
+            "line_item_amount": 0, "person_minutes": 10, "agent_court_estimate": 2.0,
+            "declared_odds": odds,
+            "har_blocks": [{"id": f"blk-{n}", "format": "review_approve", "title": "Review"}]}
+
+
+def _plan_with_line(odds_line):
+    return {**_valid_proposal(), "total_ask_cents": 0, "finish_line_cents": 0,
+            "allocation": {"ad_spend": 0, "tools": 0, "agent_work": 0},
+            "steps": [_step(i + 1, o) for i, o in enumerate(odds_line)]}
+
+
+def _rej29_problems(result):
+    return [p for p in result.get("problems", []) if "REJ-29" in p.get("message", "")]
+
+
+def test_local_validation_refuses_a_declared_line_that_falls_before_spending_the_filing():
+    # Rule 121 / REJ-29 (contract 2.34): a plan is filed all at once, so a later
+    # step declared LOWER than an earlier one means the steps were priced one at
+    # a time, not the outcome. The line that forced it: 95 -> 50 -> 75.
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    result = provider.submit_proposal("t1", _plan_with_line([0.95, 0.50, 0.75]), "key-1")
+
+    assert result["error"] == "local_validation_failed"
+    hits = _rej29_problems(result)
+    assert len(hits) == 1
+    assert hits[0]["path"] == "steps.1.declared_odds"
+    assert "step 2 declares 50% but step 1 declared 95%" in hits[0]["message"]
+    assert "not the chance you clear the step" in hits[0]["message"]
+    assert api.submissions == []  # nothing reached the bench
+
+
+def test_local_validation_lets_a_rising_or_flat_line_through():
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    rising = provider.submit_proposal("t1", _plan_with_line([0.25, 0.40, 0.70]), "key-1")
+    flat = provider.submit_proposal("t1", _plan_with_line([0.85, 0.85]), "key-2")
+
+    assert _rej29_problems(rising) == []
+    assert _rej29_problems(flat) == []
+
+
+def test_local_validation_never_compares_a_line_with_an_illegal_number():
+    # An illegal number is the schema's report (REJ-16 at the bench), never a
+    # line report: the line check only runs when every number is legal. The
+    # fake schema here does not carry the range, so all this test owns is
+    # that no REJ-29 problem appears for 0.9 -> 1.5 -> 0.5.
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    result = provider.submit_proposal("t1", _plan_with_line([0.9, 1.5, 0.5]), "key-1")
+
+    assert _rej29_problems(result) == []
+
+
 def test_submit_proposal_caps_only_this_harness_fleet_at_four(tmp_path):
     api = FakeApi()
     fleet = FleetStore(tmp_path / "fleet.sqlite3")

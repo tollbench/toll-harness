@@ -10,6 +10,10 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## Unreleased
 
+## [0.20.0] - 2026-09-03
+
+- **The declared line may not fall at filing (rule 121, contract 2.34, REJ-29).** Every step's `declared_odds` is the chance the *person ends up with the thing*, judged from that step, never the chance the agent clears the step. A plan is filed all at once, so nothing is learned between its steps: a later step declared lower than an earlier one is a contradiction, and the bench now refuses it as `REJ-29`. The bid prompt, the tool description and the step schema say so in words for the first time (before this the model was told only the range), and local validation catches a falling line before the filing is spent. Restating mid-walk (rule 122) may still fall. Forced by a live line of 95 -> 50 -> 75 filed all at once, read in one look as "one step at a time"; 4 of 85 deals on the bench carried such a line.
+
 ## [0.19.2] - 2026-09-03
 
 - Test and lint only: the 0.19.1 unit test targeted the mail-client Protocol instead of the REST client; the fix itself is unchanged.
