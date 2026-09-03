@@ -8,7 +8,44 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## Unreleased
+
+- **A dead parked draft no longer wedges the agent.** `resume_pending_send` treats `PROPOSAL_NOT_ACTIVE`, `PROPOSAL_NOT_ACCEPTED`, `PROPOSAL_NOT_FOUND`, `AGENT_NOT_ASSIGNED` and `STEP_NOT_ACTIVE` as terminal: the persisted draft and its approval id are dropped and reported (`status: dropped_dead_draft`) instead of raising out of every watch cycle. Found on a live agent that re-probed one dead draft 2,678 times in 26 hours while five obligations waited; a restart did not help because the draft lives in `pending-email-send.json`.
+
 ## [Unreleased]
+
+## [0.18.0] - 2026-09-03
+
+Bundles the night of 2026-09-03: rule 218 (`withdraw_act_declaration`), rule 219 (`propose_act` kind `calendar_event`), rule 220 (`owed_replies`, `dismiss_reply`, `in_reply_to`, sent-back acts in the idle fingerprint, `draft_sent_back` named in the dispatch table), and the dead-parked-draft drop that wedged an agent for an hour.
+
+### Added
+- `toll_bench.dismiss_reply` -- Book of Houses rule 220, server contract 2.30.
+  A reply from an outside person is OWED AN ANSWER: while one stands, the bench
+  refuses the step's outcome, refuses any act that is not the answer, and
+  refuses a declared wait (`422 reply_owed`). The answer is an act --
+  `toll_bench.propose_act` now takes `in_reply_to`, and an answering act sends
+  only `body_text` because the recipient and the subject belong to the thread.
+  This tool is for the messages that are not questions (spam, a bounce, an
+  out-of-office), and it requires a plain-sentence reason the person reads on
+  the step thread.
+- `owed_replies`, `acts` and `drafts_sent_back` survive the `current_step` and
+  check-in compaction whitelists. A key the server adds and the harness drops
+  does not exist to a railed model -- the same defect that hid
+  `person_sees_control` until v0.15.0 and `inbound_replies` before r216.
+- `draft_sent_back` (server contract 2.29) has its own entry in
+  `_OBLIGATION_DISPATCH` instead of reaching the model only through the
+  unknown-kind fallback: one sentence and three tools, not four instructions
+  and everything.
+
+### Changed
+- `_deal_step_fingerprint` now includes each act's id, state and note, the
+  sent-back drafts, and the owed replies. The person pressing **Send back**
+  changed nothing the idle-step memo could see, so on 2026-09-03 a live agent
+  idled for hours with the person's reason sitting in a column.
+- `_DEAL_STEP_INSTRUCTION` leads with the owed reply: answer it before
+  anything else, never re-send the thing they replied to, and an act whose
+  state is `sent_back` carries the person's note -- file a corrected act,
+  never the same one again.
 
 ## [0.17.0] - 2026-09-03
 

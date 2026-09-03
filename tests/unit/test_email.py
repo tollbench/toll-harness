@@ -550,3 +550,39 @@ def test_legacy_pending_send_file_without_attachments_still_loads(tmp_path):
 
     assert resumed["success"] is True
     assert "attachment_file_ids" not in resumed["payload"]
+
+
+def test_dead_draft_is_dropped_so_the_cycle_can_proceed(tmp_path):
+    """A parked draft whose proposal is no longer an active countersigned deal can
+    never be approved. Before 2026-09-03 the PROPOSAL_NOT_ACTIVE refusal fell
+    through to `raise` and, because the draft is persisted, every watch cycle
+    died on it (2,678 refused probes in 26 hours on one agent). Now it is
+    dropped, reported, and the next cycle is free."""
+    from toll_harness.email.book_of_houses import BookOfHousesApiError
+
+    class DeadProposalApi(FakeApi):
+        def send_email(self, payload):
+            raise BookOfHousesApiError(
+                409, "PROPOSAL_NOT_ACTIVE", "The proposal is not an active countersigned deal."
+            )
+
+    api = DeadProposalApi()
+    mailbox = "canonical@bookofhouses.com"
+    pending_store = tmp_path / "agent-id" / "pending-email-send.json"
+    client = BookOfHousesRestMailClient(
+        api, expected_mailbox=mailbox, pending_store=pending_store
+    )
+    client.configure_send_context(proposal_id="p-dead", step_id="s-dead")
+    client.pending_send = {"to": "person@example.com", "subject": "Old invite", "text": "x",
+                           "proposal_id": "p-dead", "step_id": "s-dead", "idempotency_key": "send-9"}
+    client._persist_pending_send()
+    assert pending_store.exists()
+
+    dropped = client.resume_pending_send()
+
+    assert dropped["status"] == "dropped_dead_draft"
+    assert dropped["code"] == "PROPOSAL_NOT_ACTIVE"
+    assert dropped["dropped"]["subject"] == "Old invite"
+    assert client.pending_send is None
+    assert not pending_store.exists()
+    assert client.resume_pending_send() is None  # the cycle is free

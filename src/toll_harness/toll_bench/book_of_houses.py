@@ -532,6 +532,18 @@ class BookOfHousesTollBenchProvider:
             # and the check-in 201; dropping it here would make the agent poll
             # for the one payload it must act on.
             "inbound_replies": result.get("inbound_replies") or [],
+            # r220 (server contract 2.30): the replies you OWE AN ANSWER. While
+            # one stands the bench refuses your outcome, any act that is not
+            # the answer, and a declared wait (reply_owed). Each entry carries
+            # the exact propose_act body that pays it.
+            "owed_replies": result.get("owed_replies") or [],
+            # r220 second half: every act on this step and where it stands.
+            # A sent_back act carries the person's own words in `note` and is
+            # DEAD -- this whitelist is exactly why that reason never reached
+            # a railed model and one idled for hours.
+            "acts": result.get("acts") or [],
+            # contract 2.29: the same rows, email-only, in the older shape.
+            "drafts_sent_back": result.get("drafts_sent_back") or [],
         }
 
     def reply_step_message(
@@ -581,6 +593,12 @@ class BookOfHousesTollBenchProvider:
             # arrived while it stood ride the same 201.
             "waiting_outside": result.get("waiting_outside"),
             "inbound_replies": result.get("inbound_replies") or [],
+            # r220: the debts and the acts ride the check-in 201 too, so an
+            # agent that pulses and never reads current_step still learns it
+            # owes somebody an answer and that a draft came back.
+            "owed_replies": result.get("owed_replies") or [],
+            "acts": result.get("acts") or [],
+            "drafts_sent_back": result.get("drafts_sent_back") or [],
         }
 
     def wait_outside(
@@ -620,16 +638,52 @@ class BookOfHousesTollBenchProvider:
     def propose_act(
         self, deal_id: str, step_id: str, act: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
-        """ACT (rule 212): you propose, the platform executes. File the exact
-        email on the step you are working; the person approves it word for
-        word and Book of Houses sends it from your platform mailbox."""
-        allowed = {"kind", "to", "subject", "body_text", "purpose"}
+        """ACT (rules 212 and 219): you propose, the platform executes. ONE
+        door for every kind. kind 'email' -- the exact email on the step you
+        are working, which the person approves word for word and Book of
+        Houses sends from your platform mailbox. kind 'calendar_event' -- the
+        exact event, on a step whose deal already holds a calendar grant,
+        which the person approves and Book of Houses puts on their calendar."""
+        allowed = {"kind", "to", "subject", "body_text", "purpose",
+                   "in_reply_to",
+                   "summary", "start", "end", "description", "location",
+                   "attendees"}
         unexpected = sorted(set(act) - allowed)
         if unexpected:
             return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
         kind = str(act.get("kind") or "email").strip().lower()
-        if kind != "email":
-            return {"ok": False, "error": "unknown_act_kind", "kinds": ["email"]}
+        if kind not in ("email", "calendar_event"):
+            return {"ok": False, "error": "unknown_act_kind",
+                    "kinds": ["email", "calendar_event"]}
+        if kind == "calendar_event":
+            for field in ("summary", "start", "end"):
+                if not act.get(field):
+                    return {"ok": False, "error": "missing_act_field", "field": field}
+            payload: dict[str, Any] = {
+                "kind": kind, "summary": str(act["summary"])[:400],
+                "start": act["start"], "end": act["end"]}
+            for field in ("description", "location"):
+                if act.get(field):
+                    payload[field] = str(act[field])
+            if isinstance(act.get("attendees"), list) and act["attendees"]:
+                payload["attendees"] = act["attendees"]
+            if act.get("purpose"):
+                payload["purpose"] = str(act["purpose"])[:120]
+            return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
+        answering = str(act.get("in_reply_to") or "").strip()
+        if answering:
+            # RULE 220: an ANSWER. The bench fills the recipient and the
+            # subject from the thread -- they are the thread's, not ours -- so
+            # only the words are required here.
+            if not str(act.get("body_text") or "").strip():
+                return {"ok": False, "error": "missing_act_field",
+                        "field": "body_text"}
+            payload = {"kind": kind, "in_reply_to": answering,
+                       "body_text": act["body_text"]}
+            if act.get("purpose"):
+                payload["purpose"] = str(act["purpose"])[:120]
+            return self.api.propose_act(deal_id, step_id, payload,
+                                        idempotency_key)
         for field in ("to", "subject", "body_text"):
             if not str(act.get(field) or "").strip():
                 return {"ok": False, "error": "missing_act_field", "field": field}
@@ -638,6 +692,55 @@ class BookOfHousesTollBenchProvider:
         if act.get("purpose"):
             payload["purpose"] = str(act["purpose"])[:120]
         return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
+
+    def dismiss_reply(
+        self, deal_id: str, step_id: str, reply_id: str,
+        dismissal: dict[str, Any], idempotency_key: str,
+    ) -> dict[str, Any]:
+        """RULE 220: a reply from an outside person is owed an answer, and
+        until you give it the bench refuses everything else on that step
+        (reply_owed). Answer it with propose_act carrying in_reply_to. Use
+        THIS only for a message that is not a question -- spam, a bounce, an
+        out-of-office -- and say why in ONE plain sentence: the person reads
+        it on the step thread beside the reply."""
+        allowed = {"reason"}
+        unexpected = sorted(set(dismissal) - allowed)
+        if unexpected:
+            return {"ok": False, "error": "invalid_dismissal_fields",
+                    "unexpected_fields": unexpected}
+        reason = str(dismissal.get("reason") or "").strip()
+        if not reason:
+            return {"ok": False, "error": "missing_dismissal_field",
+                    "field": "reason"}
+        if not str(reply_id or "").strip():
+            return {"ok": False, "error": "missing_reply_id"}
+        return self.api.dismiss_reply(
+            deal_id, step_id, str(reply_id).strip(), {"reason": reason[:280]},
+            idempotency_key)
+
+    def withdraw_act_declaration(
+        self, deal_id: str, step_id: str, withdrawal: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """RULE 218: a step that declared an act does not close without it.
+        If the act is no longer part of the step, take the declaration back
+        here and say why in one plain sentence -- the person reads it on the
+        step thread beside the plan that promised it."""
+        allowed = {"kind", "reason"}
+        unexpected = sorted(set(withdrawal) - allowed)
+        if unexpected:
+            return {"ok": False, "error": "invalid_withdrawal_fields",
+                    "unexpected_fields": unexpected}
+        kind = str(withdrawal.get("kind") or "email").strip().lower()
+        if kind != "email":
+            return {"ok": False, "error": "unknown_act_kind", "kinds": ["email"]}
+        reason = str(withdrawal.get("reason") or "").strip()
+        if not reason:
+            return {"ok": False, "error": "missing_withdrawal_field",
+                    "field": "reason"}
+        return self.api.withdraw_act_declaration(
+            deal_id, step_id, {"kind": kind, "reason": reason[:280]},
+            idempotency_key)
 
     def file_outcome(
         self, target_id: str, outcome: dict[str, Any], idempotency_key: str

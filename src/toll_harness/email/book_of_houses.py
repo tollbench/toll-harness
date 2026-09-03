@@ -270,6 +270,40 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def dismiss_reply(
+        self, deal_id: str, step_id: str, reply_id: str,
+        payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """RULE 220: say why an inbound reply deserves no answer. A reply from
+        an outside person is owed an answer before anything else on that step;
+        this door is for spam, bounces and auto-replies only."""
+        deal = urllib.parse.quote(deal_id, safe="")
+        step = urllib.parse.quote(step_id, safe="")
+        reply = urllib.parse.quote(reply_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/steps/{step}/replies/{reply}/dismiss",
+            payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def withdraw_act_declaration(
+        self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """RULE 218: take back an act your plan declared on this step. The
+        bench refuses your outcome (acts_not_filed) until a declared act has
+        been approved and sent -- withdraw it with a reason instead."""
+        deal = urllib.parse.quote(deal_id, safe="")
+        step = urllib.parse.quote(step_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/steps/{step}/acts/withdraw",
+            payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
     def file_outcome(
         self, target_id: str, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -586,6 +620,34 @@ class BookOfHousesRestMailClient:
                 }
             raise
 
+    # Refusals that mean the parked draft is DEAD, not waiting: nothing the
+    # person does can ever approve it, so keeping it wedges the agent.
+    DEAD_DRAFT_CODES = frozenset({
+        "PROPOSAL_NOT_ACTIVE",
+        "PROPOSAL_NOT_ACCEPTED",
+        "PROPOSAL_NOT_FOUND",
+        "AGENT_NOT_ASSIGNED",
+        "STEP_NOT_ACTIVE",
+    })
+
+    def _handle_dead_draft(self, error: BookOfHousesApiError) -> dict[str, Any]:
+        """The parked draft belongs to a deal that is over (or was never live).
+        Drop the draft and the stale approval id so the watch cycle proceeds to
+        the work that is actually owed; report what was dropped and why."""
+        dropped = dict(self.pending_send or {})
+        approval_id = self.send_context.get("approval_id")
+        self._clear_pending_send()
+        self.send_context.pop("approval_id", None)
+        return {
+            "ok": False,
+            "success": False,
+            "status": "dropped_dead_draft",
+            "approval_id": approval_id,
+            "code": error.code,
+            "reason": error.message,
+            "dropped": {k: dropped.get(k) for k in ("to", "subject", "proposal_id", "step_id") if k in dropped},
+        }
+
     def _handle_rejected_approval(self, error: BookOfHousesApiError) -> dict[str, Any]:
         """The person rejected the parked draft. A rejection is an answer, not
         a wait state: drop the pending send and the stale approval id so the
@@ -628,6 +690,16 @@ class BookOfHousesRestMailClient:
             if error.code == "EMAIL_APPROVAL_REJECTED":
                 self._next_resume_probe = 0.0
                 return self._handle_rejected_approval(error)
+            if error.code in self.DEAD_DRAFT_CODES:
+                # The draft can never be sent: its proposal/step is no longer an
+                # active countersigned deal (or was never this agent's). Before
+                # 2026-09-03 this code fell through to `raise`, which killed
+                # every watch cycle before any obligation was selected -- and
+                # because the draft is persisted, a restart did not help. One
+                # agent (Kari) re-probed a dead draft 2,678 times in 26 hours
+                # while five live obligations waited. Drop it and move on.
+                self._next_resume_probe = 0.0
+                return self._handle_dead_draft(error)
             if error.code in {"EMAIL_REQUIRES_HUMAN_APPROVAL", "EMAIL_APPROVAL_PENDING"}:
                 self._next_resume_probe = time.monotonic() + self.RESUME_PROBE_SECONDS
                 return {

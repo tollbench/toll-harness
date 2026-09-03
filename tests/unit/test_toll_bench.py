@@ -103,6 +103,12 @@ class FakeApi:
         return {"ok": True, "step_state": "waiting_outside",
                 "waiting_outside": payload}
 
+    def withdraw_act_declaration(self, deal_id, step_id, payload, idempotency_key):
+        self.submissions.append((deal_id, step_id, payload, idempotency_key))
+        return {"ok": True, "kind": payload.get("kind"),
+                "reason": payload.get("reason"), "message_id": "m-218",
+                "still_owed": []}
+
     def post_step_message(self, deal_id, step_id, reply, idempotency_key):
         self.submissions.append((deal_id, step_id, reply, idempotency_key))
         return {"ok": True, "message": {"id": "m1", "body": reply}}
@@ -469,6 +475,47 @@ def test_current_step_passes_open_ask_keys_through():
 
     assert result["person_sees_control"] is False
     assert result["open_ask_move"] == "File your outcome to OPEN this ask."
+
+
+def test_withdraw_act_declaration_sends_the_kind_and_the_reason():
+    # r218: a step that declared an act does not close without it. The way out
+    # for an agent that changed its mind is words, not silence -- and the
+    # reason is what the person reads beside the plan that promised the act.
+    api = FakeApi()
+
+    result = BookOfHousesTollBenchProvider(api).withdraw_act_declaration(
+        "d1", "s1",
+        {"kind": "email",
+         "reason": "Steven and Ruby already met, so no introduction is needed."},
+        "wd-1")
+
+    assert result["message_id"] == "m-218"
+    assert api.submissions == [(
+        "d1", "s1",
+        {"kind": "email",
+         "reason": "Steven and Ruby already met, so no introduction is needed."},
+        "wd-1")]
+
+
+def test_withdraw_act_declaration_refuses_a_reasonless_or_unknown_withdrawal():
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    assert provider.withdraw_act_declaration(
+        "d1", "s1", {"kind": "email", "reason": "  "},
+        "w")["error"] == "missing_withdrawal_field"
+    assert provider.withdraw_act_declaration(
+        "d1", "s1", {"kind": "carrier_pigeon", "reason": "no"},
+        "w")["error"] == "unknown_act_kind"
+    assert provider.withdraw_act_declaration(
+        "d1", "s1", {"kind": "email", "reason": "no", "what": "extra"},
+        "w")["error"] == "invalid_withdrawal_fields"
+
+
+def test_the_deal_step_instruction_names_the_r218_refusal():
+    from toll_harness.cli import _DEAL_STEP_INSTRUCTION
+
+    assert "acts_not_filed" in _DEAL_STEP_INSTRUCTION
+    assert "toll_bench.withdraw_act_declaration" in _DEAL_STEP_INSTRUCTION
 
 
 def test_wait_outside_declares_the_wait_on_the_step(monkeypatch=None):

@@ -529,6 +529,7 @@ _LOGGER = logging.getLogger("toll_harness.cli")
 # next cycle for the remaining obligations.
 _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "deal_step",
+    "draft_sent_back",
     "file_informed_plan",
     "unanswered_message",
     "feedback_returned",
@@ -570,6 +571,15 @@ _DEAL_WORK_TOOLS: frozenset[str] = frozenset(
 # the model reads and can call for that one obligation; capability across all
 # kinds is preserved because the watch loop returns for the next obligation.
 _DEAL_STEP_INSTRUCTION = (
+    "If owed_replies is non-empty, answer it before anything else: file an "
+    "email act with in_reply_to (toll_bench.propose_act, kind email, "
+    "in_reply_to set to that reply's id and your body_text); the bench refuses "
+    "any other filing on the step until you do (reply_owed). Never re-send the "
+    "thing they replied to. If the message is not a question -- spam, a bounce, "
+    "an out-of-office -- say why in one plain sentence with "
+    "toll_bench.dismiss_reply. "
+    "An act with state sent_back carries the person's note: read it, file a "
+    "corrected act, never re-file the same one and never wait on the dead one. "
     "Handle the single active deal step below and nothing else. The step's "
     "current state and history are included below as current_step (fetch it "
     "only if that field is null). Obey the step's progress-pulse cadence, and "
@@ -580,7 +590,10 @@ _DEAL_STEP_INSTRUCTION = (
     "exact to, subject and body_text (one act per email; read the selection answers "
     "for the recipients). The person approves it word for word on their step and "
     "Book of Houses sends it from your mailbox; wait for that (poll current_step), "
-    "then file your outcome quoting the send receipt. If the person sends it back, "
+    "then file your outcome quoting the send receipt. If the step declared an act, "
+    "the bench refuses your outcome until that act is approved and sent "
+    "(acts_not_filed); file the act first, or withdraw the declaration with a "
+    "reason (toll_bench.withdraw_act_declaration). If the person sends it back, "
     "read their note on the step thread and file a corrected act. Never write "
     "'click Approve to send' or 'from your mailbox' to the person: Approve on a "
     "document does not send anything. If confirmed_email_send_receipt is present "
@@ -593,7 +606,12 @@ _DEAL_STEP_INSTRUCTION = (
     "while the ball is outside. While the wait stands no overdue mark is "
     "written against you and the deal cannot end out of time; it ends by "
     "itself on your next check-in, on your outcome, or when the reply lands "
-    "(watch waiting_outside and inbound_replies on current_step). "
+    "(watch waiting_outside, inbound_replies and owed_replies on "
+    "current_step). "
+    "A CALENDAR EVENT IS AN ACT TOO (rule 219): on a step whose deal holds a "
+    "calendar grant, call toll_bench.propose_act with kind calendar_event and "
+    "the exact summary, start and end -- never ask the person to put it on "
+    "their own calendar, and never use a second door for it. "
     "You may create or "
     "use the agent's own external accounts only with the responsible party's "
     "legal and billing authority. Never request, receive, or use a person's "
@@ -664,6 +682,23 @@ def _dispatch_meter(kind: str, goal: str, tools: list[str]) -> dict[str, Any]:
         )
     return meter
 
+# RULE 220 (second half). The person pressed Send back on an act and said why.
+# That draft is DEAD -- it can never be approved and a send comes back
+# EMAIL_APPROVAL_REJECTED -- so the only move is a NEW act carrying the change
+# they asked for. Forced live on 2026-09-03: three drafts came back with "we
+# need the time to be 11-1130" and the agent waited for approval on drafts that
+# could not be approved.
+_DRAFT_SENT_BACK_INSTRUCTION = (
+    "The person sent one of your acts back and said why. Read the reason: it is "
+    "in `note` on that act in the `acts` list, and in `sent_back_reason` on "
+    "`drafts_sent_back`, both on toll_bench.current_step. That act is DEAD -- it "
+    "can never be approved and a send is refused -- so do NOT wait on it and do "
+    "NOT re-file the same words. File ONE new act with toll_bench.propose_act "
+    "carrying exactly the change they asked for, on the same step, and nothing "
+    "else. If their reason is not something you can act on, say so on the step "
+    "thread rather than re-filing."
+)
+
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
     "deal_step": {
         "instruction": _DEAL_STEP_INSTRUCTION,
@@ -671,6 +706,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             {
                 "toll_bench.current_step",
                 "toll_bench.propose_act",
+                "toll_bench.dismiss_reply",
                 "toll_bench.file_outcome",
                 "toll_bench.post_check_in",
                 "toll_bench.reply_step_message",
@@ -709,6 +745,21 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
         )
         | _BOOKKEEPING_TOOLS,
     },
+    # Server contract 2.29 raises this kind when the person sends one of your
+    # drafts back. It reached the model only through the unknown-kind fallback
+    # (f635ae0), which hands over four instructions and every tool at once --
+    # capability, but no aim. This is the same move, said in one sentence.
+    "draft_sent_back": {
+        "instruction": _DRAFT_SENT_BACK_INSTRUCTION,
+        "tools": frozenset(
+            {
+                "toll_bench.read_brief",
+                "toll_bench.current_step",
+                "toll_bench.propose_act",
+            }
+        )
+        | _BOOKKEEPING_TOOLS,
+    },
     "unanswered_message": {
         "instruction": _UNANSWERED_MESSAGE_INSTRUCTION,
         "tools": frozenset(
@@ -740,6 +791,10 @@ _IDLE_PULSE_MARGIN_SECONDS = 90.0
 def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
     """Digest of every part of a current_step payload an agent can act on.
 
+    INCLUDES the person's decisions on the agent's acts (r220): a send-back
+    with a reason is exactly the new input the model has to act on, and it was
+    invisible here until 2026-09-03.
+
     Deliberately EXCLUDES latest_work_pulse AND the agent's own thread
     messages: pulses and self-authored messages are the agent's output, not
     input it can act on, and counting them would let a model that re-posts
@@ -761,6 +816,29 @@ def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
         ],
         "unread_from_person": thread.get("unread_from_person"),
         "unanswered_elsewhere": thread.get("unanswered_elsewhere"),
+        # r220: the person's decision on an act IS new input. Before this the
+        # fingerprint ignored acts entirely, so pressing Send back changed
+        # nothing the memo could see and a live agent idled for hours with the
+        # reason sitting in a column. id + state + note, because a redraft is
+        # driven by the words, not just by the state flipping.
+        "acts": [
+            (item.get("act_id"), item.get("state"), item.get("note"))
+            for item in (step_payload.get("acts") or [])
+            if isinstance(item, dict)
+        ],
+        "drafts_sent_back": [
+            (item.get("approval_id") or item.get("id"),
+             item.get("sent_back_reason"))
+            for item in (step_payload.get("drafts_sent_back") or [])
+            if isinstance(item, dict)
+        ],
+        # An unanswered reply from an outside person is a debt the model must
+        # act on, and the bench refuses every other filing until it does.
+        "owed_replies": [
+            (item.get("id"), item.get("answered_at"))
+            for item in (step_payload.get("owed_replies") or [])
+            if isinstance(item, dict)
+        ],
         "grants": (step_payload.get("access") or {}).get("grants"),
         "released_materials_count": step_payload.get("released_materials_count"),
         "deal": step_payload.get("deal"),

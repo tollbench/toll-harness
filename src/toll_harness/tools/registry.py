@@ -1029,14 +1029,23 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ToolDefinition(
             "toll_bench.propose_act",
             (
-                "ACT (rule 212): file ONE exact act on the step you are working; the "
-                "platform executes it after the person approves it word for word. "
-                "kind 'email': to, subject, body_text (+ purpose). The person sees the "
-                "email on their step and approves, sends back, or stops; on approval "
-                "Book of Houses sends it from your platform mailbox and the receipt "
-                "lands on the ledger. Your step stays yours; when the act is done, "
-                "file your outcome as usual. Never ask the person to send an email "
-                "themselves."
+                "ACT (rules 212 and 219): file ONE exact act on the step you are "
+                "working; the platform executes it after the person approves it word "
+                "for word. ONE door, two kinds. kind 'email': to, subject, body_text "
+                "(+ purpose) -- on approval Book of Houses sends it from your platform "
+                "mailbox. kind 'calendar_event': summary, start, end (+ description, "
+                "location, attendees) -- start and end are objects like {\"dateTime\": "
+                "\"2026-09-04T18:00:00-07:00\", \"timeZone\": \"America/Los_Angeles\"}, "
+                "and the deal must already hold a calendar grant or you get 409 "
+                "no_calendar_access. Whatever the kind, the person sees it on their "
+                "step and approves, sends back, or stops, and the receipt lands on the "
+                "ledger. Your step stays yours; when the act is done, file your outcome "
+                "as usual. Never ask the person to send an email or make the calendar "
+                "entry themselves. RULE 220 -- ANSWERING A REPLY IS AN ACT: when "
+                "owed_replies on this step is not empty, the ONLY act it takes is "
+                "the answer. Send kind email with in_reply_to set to that reply's "
+                "id and your body_text; everything else on the step is refused "
+                "422 reply_owed until you do."
             ),
             _object_schema(
                 {
@@ -1044,13 +1053,39 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "step_id": {"type": "string"},
                     "act": _object_schema(
                         {
-                            "kind": {"type": "string", "description": "email"},
-                            "to": {"type": "string"},
-                            "subject": {"type": "string"},
-                            "body_text": {"type": "string"},
+                            "kind": {"type": "string",
+                                     "description": "email | calendar_event"},
+                            "to": {"type": "string",
+                                   "description": "email: the one recipient"},
+                            "subject": {"type": "string",
+                                        "description": "email: the subject line"},
+                            "body_text": {"type": "string",
+                                          "description": "email: exactly what is sent"},
+                            "in_reply_to": {
+                                "type": "string",
+                                "description": (
+                                    "email, RULE 220: the id of an owed reply "
+                                    "on this step (from owed_replies). Makes "
+                                    "this act the ANSWER to it -- send only "
+                                    "body_text; the recipient and the subject "
+                                    "come from the thread and the answer is "
+                                    "sent on it."),
+                            },
+                            "summary": {"type": "string",
+                                        "description": "calendar_event: the event title"},
+                            "start": {"type": "object",
+                                      "description": "calendar_event: {dateTime, timeZone}"},
+                            "end": {"type": "object",
+                                    "description": "calendar_event: {dateTime, timeZone}"},
+                            "description": {"type": "string",
+                                            "description": "calendar_event: optional notes"},
+                            "location": {"type": "string",
+                                         "description": "calendar_event: optional place"},
+                            "attendees": {"type": "array", "items": {"type": "string"},
+                                          "description": "calendar_event: optional"},
                             "purpose": {"type": "string"},
                         },
-                        ["kind", "to", "subject", "body_text"],
+                        ["kind"],
                     ),
                     "idempotency_key": {"type": "string"},
                 },
@@ -1060,6 +1095,78 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         lambda context, arguments: require_toll_bench(context).propose_act(
             arguments["deal_id"], arguments["step_id"], arguments["act"],
             arguments["idempotency_key"],
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.withdraw_act_declaration",
+            (
+                "RULE 218: a step that declared an act does not close without "
+                "it. If a step of your plan carries acts, the bench refuses "
+                "your outcome (422 acts_not_filed) until that act has been "
+                "approved by the person and sent by the platform. File the act "
+                "(toll_bench.propose_act) -- or, if it is no longer part of the "
+                "step, withdraw the declaration here with a reason: ONE plain "
+                "sentence the person reads on the step thread beside the plan "
+                "that promised it. It moves no clock, opens no ask and releases "
+                "no money, and the step stays yours."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "step_id": {"type": "string"},
+                    "withdrawal": _object_schema(
+                        {
+                            "kind": {"type": "string", "description": "email"},
+                            "reason": {"type": "string"},
+                        },
+                        ["kind", "reason"],
+                    ),
+                    "idempotency_key": {"type": "string"},
+                },
+                ["deal_id", "step_id", "withdrawal", "idempotency_key"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).withdraw_act_declaration(
+            arguments["deal_id"], arguments["step_id"], arguments["withdrawal"],
+            arguments["idempotency_key"],
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.dismiss_reply",
+            (
+                "RULE 220: a reply from an outside person is OWED AN ANSWER. "
+                "While one stands, that step refuses your outcome, refuses any "
+                "act that is not the answer, and refuses a declared wait -- all "
+                "422 reply_owed. Answer it with toll_bench.propose_act carrying "
+                "in_reply_to. Use THIS tool only for a message that is not a "
+                "question -- spam, a bounce, an out-of-office we could not "
+                "detect -- and say why in ONE plain sentence. Your sentence "
+                "lands on the step thread where the person reads it beside the "
+                "reply, and on the permanent record under your name. It moves "
+                "no clock, opens no ask and releases no money. Never dismiss a "
+                "real question to get past the gate."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "step_id": {"type": "string"},
+                    "reply_id": {"type": "string",
+                                 "description": "the id from owed_replies"},
+                    "dismissal": _object_schema(
+                        {"reason": {"type": "string"}},
+                        ["reason"],
+                    ),
+                    "idempotency_key": {"type": "string"},
+                },
+                ["deal_id", "step_id", "reply_id", "dismissal",
+                 "idempotency_key"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).dismiss_reply(
+            arguments["deal_id"], arguments["step_id"], arguments["reply_id"],
+            arguments["dismissal"], arguments["idempotency_key"],
         ),
     )
     registry.register(
