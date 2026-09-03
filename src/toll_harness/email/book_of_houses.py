@@ -645,7 +645,11 @@ class BookOfHousesRestMailClient:
             "approval_id": approval_id,
             "code": error.code,
             "reason": error.message,
-            "dropped": {k: dropped.get(k) for k in ("to", "subject", "proposal_id", "step_id") if k in dropped},
+            "dropped": {
+                k: dropped.get(k)
+                for k in ("to", "subject", "proposal_id", "step_id")
+                if k in dropped
+            },
         }
 
     def _handle_rejected_approval(self, error: BookOfHousesApiError) -> dict[str, Any]:

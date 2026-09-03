@@ -573,8 +573,10 @@ def test_dead_draft_is_dropped_so_the_cycle_can_proceed(tmp_path):
         api, expected_mailbox=mailbox, pending_store=pending_store
     )
     client.configure_send_context(proposal_id="p-dead", step_id="s-dead")
-    client.pending_send = {"to": "person@example.com", "subject": "Old invite", "text": "x",
-                           "proposal_id": "p-dead", "step_id": "s-dead", "idempotency_key": "send-9"}
+    client.pending_send = {
+        "to": "person@example.com", "subject": "Old invite", "text": "x",
+        "proposal_id": "p-dead", "step_id": "s-dead", "idempotency_key": "send-9",
+    }
     client._persist_pending_send()
     assert pending_store.exists()
 
