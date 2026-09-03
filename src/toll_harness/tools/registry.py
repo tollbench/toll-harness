@@ -1047,7 +1047,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "carries change and cancel; no pick in 5 days lapses the act. You never "
                 "touch a slot, a time or an email body. Needs a calendar GRANT on the "
                 "deal covering calendar.events.read and calendar.event.create; progress "
-                "rides current_step under acts[].progress. Whatever the kind, the person sees it on their "
+                "rides current_step under acts[].progress. Whatever the "
+                    "kind, the person sees it on their "
                 "step and approves, sends back, or stops, and the receipt lands on the "
                 "ledger. Your step stays yours; when the act is done, file your outcome "
                 "as usual. Never ask the person to send an email or make the calendar "
@@ -1072,11 +1073,14 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                             "duration_min": {"type": "integer",
                                              "description": "meeting: 15 to 240, default 30"},
                             "window": {"type": "string",
-                                       "description": "meeting: 'next week' | 'this week' | 'next N days' | {start, end}"},
+                                       "description": "meeting: 'next week' | 'this week' | "
+                                           "'next N "
+                                           "days' | {start, end}"},
                             "title": {"type": "string",
                                       "description": "meeting: the event title"},
                             "offer_count": {"type": "integer",
-                                            "description": "meeting: how many times to offer, 1 to 5"},
+                                            "description": "meeting: how many times to offer, 1 to "
+                                                "5"},
                             "to": {"type": "string",
                                    "description": "email: the one recipient"},
                             "subject": {"type": "string",
