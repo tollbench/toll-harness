@@ -98,6 +98,11 @@ class FakeApi:
             "released_materials_count": 0,
         }
 
+    def declare_outside_wait(self, deal_id, step_id, payload, idempotency_key):
+        self.submissions.append((deal_id, step_id, payload, idempotency_key))
+        return {"ok": True, "step_state": "waiting_outside",
+                "waiting_outside": payload}
+
     def post_step_message(self, deal_id, step_id, reply, idempotency_key):
         self.submissions.append((deal_id, step_id, reply, idempotency_key))
         return {"ok": True, "message": {"id": "m1", "body": reply}}
@@ -464,6 +469,91 @@ def test_current_step_passes_open_ask_keys_through():
 
     assert result["person_sees_control"] is False
     assert result["open_ask_move"] == "File your outcome to OPEN this ask."
+
+
+def test_wait_outside_declares_the_wait_on_the_step(monkeypatch=None):
+    # r216: waiting on the outside world is a state, not silence. Before this
+    # the only way to say "I emailed Ruby and cannot go on" was to say nothing,
+    # which reads exactly like a stalled agent.
+    api = FakeApi()
+
+    result = BookOfHousesTollBenchProvider(api).wait_outside(
+        "d1", "s1",
+        {"on": "email_reply", "who": "Ruby",
+         "what": "Ruby picks one of the three times I sent her",
+         "until": "2026-09-06"},
+        "wait-1")
+
+    assert result["step_state"] == "waiting_outside"
+    assert api.submissions == [(
+        "d1", "s1",
+        {"on": "email_reply", "who": "Ruby",
+         "what": "Ruby picks one of the three times I sent her",
+         "until": "2026-09-06"},
+        "wait-1")]
+
+
+def test_wait_outside_refuses_an_unknown_kind_or_a_missing_sentence():
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    assert provider.wait_outside(
+        "d1", "s1", {"on": "vibes", "who": "Ruby", "what": "x"},
+        "w")["error"] == "unknown_wait_kind"
+    assert provider.wait_outside(
+        "d1", "s1", {"on": "email_reply", "who": "Ruby", "what": "  "},
+        "w")["error"] == "missing_wait_field"
+    assert provider.wait_outside(
+        "d1", "s1", {"on": "email_reply", "who": "Ruby", "what": "x",
+                     "reason": "extra"},
+        "w")["error"] == "invalid_wait_fields"
+
+
+def test_wait_outside_can_end_the_wait_without_the_other_fields():
+    api = FakeApi()
+
+    BookOfHousesTollBenchProvider(api).wait_outside(
+        "d1", "s1", {"end": True}, "wait-end")
+
+    assert api.submissions == [("d1", "s1", {"end": True}, "wait-end")]
+
+
+def test_the_wait_and_the_awaited_reply_survive_the_payload_whitelist():
+    # The whitelist is why person_sees_control never reached railed models
+    # until v0.15.0: a key the server adds and the harness drops does not
+    # exist. waiting_outside and inbound_replies must not repeat that.
+    class WaitingApi(FakeApi):
+        def current_step(self, deal_id):
+            payload = FakeApi.current_step(self, deal_id)
+            payload["waiting_outside"] = {
+                "on": "email_reply", "who": "Ruby", "what": "she answers",
+                "since": "2026-09-03T12:00:00Z", "until": "2026-09-06T12:00:00Z"}
+            payload["inbound_replies"] = [{"message_id": "m9"}]
+            return payload
+
+        def post_check_in(self, deal_id, pulse, idempotency_key):
+            payload = FakeApi.post_check_in(self, deal_id, pulse, idempotency_key)
+            payload["waiting_outside"] = None
+            payload["inbound_replies"] = [{"message_id": "m9"}]
+            return payload
+
+    provider = BookOfHousesTollBenchProvider(WaitingApi())
+
+    step = provider.current_step("d1")
+    assert step["waiting_outside"]["who"] == "Ruby"
+    assert step["inbound_replies"] == [{"message_id": "m9"}]
+
+    pulse = provider.post_check_in(
+        "d1", {"changed": "a", "now": "b", "next": "c",
+               "progress_percent": 25}, "p1")
+    assert pulse["waiting_outside"] is None
+    assert pulse["inbound_replies"] == [{"message_id": "m9"}]
+
+
+def test_the_deal_step_instruction_tells_the_agent_to_declare_the_wait():
+    from toll_harness.cli import _DEAL_STEP_INSTRUCTION
+
+    assert "toll_bench.wait_outside" in _DEAL_STEP_INSTRUCTION
+    assert "Never sit silent at agent_working" in _DEAL_STEP_INSTRUCTION
 
 
 def test_check_in_returns_ask_not_open_as_structured_move():

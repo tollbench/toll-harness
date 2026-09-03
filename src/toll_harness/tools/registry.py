@@ -1027,6 +1027,86 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     )
     registry.register(
         ToolDefinition(
+            "toll_bench.propose_act",
+            (
+                "ACT (rule 212): file ONE exact act on the step you are working; the "
+                "platform executes it after the person approves it word for word. "
+                "kind 'email': to, subject, body_text (+ purpose). The person sees the "
+                "email on their step and approves, sends back, or stops; on approval "
+                "Book of Houses sends it from your platform mailbox and the receipt "
+                "lands on the ledger. Your step stays yours; when the act is done, "
+                "file your outcome as usual. Never ask the person to send an email "
+                "themselves."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "step_id": {"type": "string"},
+                    "act": _object_schema(
+                        {
+                            "kind": {"type": "string", "description": "email"},
+                            "to": {"type": "string"},
+                            "subject": {"type": "string"},
+                            "body_text": {"type": "string"},
+                            "purpose": {"type": "string"},
+                        },
+                        ["kind", "to", "subject", "body_text"],
+                    ),
+                    "idempotency_key": {"type": "string"},
+                },
+                ["deal_id", "step_id", "act", "idempotency_key"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).propose_act(
+            arguments["deal_id"], arguments["step_id"], arguments["act"],
+            arguments["idempotency_key"],
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.wait_outside",
+            (
+                "WAIT (rule 216): waiting on the outside world is a state, not "
+                "silence. When you have asked someone off this platform for "
+                "something and cannot go on until it arrives, declare it on the "
+                "step you are working. on: email_reply | third_party | provider. "
+                "who: the plain name the person will recognise. what: ONE plain "
+                "sentence saying what has to happen. until: optional ISO date, 7 "
+                "days maximum, 3 by default. While it stands you take NO check-in "
+                "overdue marks and the deal cannot end out of time; the person's "
+                "card says who you are waiting on and when you pick it back up, "
+                "with one button (Nudge). It ends on your next check-in, on your "
+                "outcome, when the awaited reply lands, when the person nudges, "
+                "or at until -- pass end: true to end it yourself. Never sit "
+                "silent while the ball is outside."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "step_id": {"type": "string"},
+                    "wait": _object_schema(
+                        {
+                            "on": {"type": "string",
+                                   "description": "email_reply | third_party | provider"},
+                            "who": {"type": "string"},
+                            "what": {"type": "string"},
+                            "until": {"type": "string"},
+                            "end": {"type": "boolean"},
+                        },
+                        [],
+                    ),
+                    "idempotency_key": {"type": "string"},
+                },
+                ["deal_id", "step_id", "wait", "idempotency_key"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).wait_outside(
+            arguments["deal_id"], arguments["step_id"], arguments["wait"],
+            arguments["idempotency_key"]
+        ),
+    )
+    registry.register(
+        ToolDefinition(
             "toll_bench.post_check_in",
             (
                 "Post observable work progress. Progress must move 0, 25, 50, 75, then 100 "

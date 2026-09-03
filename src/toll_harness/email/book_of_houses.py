@@ -239,6 +239,37 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def declare_outside_wait(
+        self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """WAIT (rule 216): declare that you are waiting on the outside world,
+        or end the wait. The clocks stop counting it against you while it
+        stands."""
+        deal = urllib.parse.quote(deal_id, safe="")
+        step = urllib.parse.quote(step_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/steps/{step}/wait",
+            payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def propose_act(
+        self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """ACT (rule 212): file one exact act on the step; the platform executes
+        it after the person approves. Kind 'email' today."""
+        deal = urllib.parse.quote(deal_id, safe="")
+        step = urllib.parse.quote(step_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/steps/{step}/acts",
+            payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
     def file_outcome(
         self, target_id: str, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:

@@ -523,6 +523,15 @@ class BookOfHousesTollBenchProvider:
             "world_file_missing": result.get("world_file_missing", False),
             "world_file_url": result.get("world_file_url"),
             "tip_invited": result.get("tip_invited"),
+            # r216 (server contract 2.26): the declared wait on the outside
+            # world, null when there is none. This whitelist is why
+            # person_sees_control never reached railed models until v0.15.0 --
+            # a key the server adds and the harness drops does not exist.
+            "waiting_outside": result.get("waiting_outside"),
+            # The thing an email_reply wait is waiting FOR. It rides this call
+            # and the check-in 201; dropping it here would make the agent poll
+            # for the one payload it must act on.
+            "inbound_replies": result.get("inbound_replies") or [],
         }
 
     def reply_step_message(
@@ -567,7 +576,68 @@ class BookOfHousesTollBenchProvider:
             "pulse_cadence": result.get("pulse_cadence"),
             "unread_from_person": thread.get("unread_from_person", 0),
             "unanswered_elsewhere": thread.get("unanswered_elsewhere") or [],
+            # r216: this check-in just ended any declared wait (the server ends
+            # it, cause `agent`), so this reads null -- and the replies that
+            # arrived while it stood ride the same 201.
+            "waiting_outside": result.get("waiting_outside"),
+            "inbound_replies": result.get("inbound_replies") or [],
         }
+
+    def wait_outside(
+        self,
+        deal_id: str,
+        step_id: str,
+        wait: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """WAIT (rule 216): waiting on the outside world is a state, not
+        silence. You emailed someone off the platform and cannot go on until
+        they answer -- say so. The person's card stops saying "agent working",
+        and while the wait stands you take no check-in overdue marks and the
+        deal cannot end out of time. Pass end=True to end it yourself."""
+        allowed = {"on", "who", "what", "until", "end"}
+        unexpected = sorted(set(wait) - allowed)
+        if unexpected:
+            return {"ok": False, "error": "invalid_wait_fields",
+                    "unexpected_fields": unexpected}
+        if wait.get("end"):
+            return self.api.declare_outside_wait(
+                deal_id, step_id, {"end": True}, idempotency_key)
+        kind = str(wait.get("on") or "").strip().lower()
+        if kind not in {"email_reply", "third_party", "provider"}:
+            return {"ok": False, "error": "unknown_wait_kind",
+                    "kinds": ["email_reply", "third_party", "provider"]}
+        for field in ("who", "what"):
+            if not str(wait.get(field) or "").strip():
+                return {"ok": False, "error": "missing_wait_field", "field": field}
+        payload = {"on": kind, "who": str(wait["who"])[:80],
+                   "what": str(wait["what"])[:280]}
+        if wait.get("until"):
+            payload["until"] = str(wait["until"])
+        return self.api.declare_outside_wait(
+            deal_id, step_id, payload, idempotency_key)
+
+    def propose_act(
+        self, deal_id: str, step_id: str, act: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """ACT (rule 212): you propose, the platform executes. File the exact
+        email on the step you are working; the person approves it word for
+        word and Book of Houses sends it from your platform mailbox."""
+        allowed = {"kind", "to", "subject", "body_text", "purpose"}
+        unexpected = sorted(set(act) - allowed)
+        if unexpected:
+            return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
+        kind = str(act.get("kind") or "email").strip().lower()
+        if kind != "email":
+            return {"ok": False, "error": "unknown_act_kind", "kinds": ["email"]}
+        for field in ("to", "subject", "body_text"):
+            if not str(act.get(field) or "").strip():
+                return {"ok": False, "error": "missing_act_field", "field": field}
+        payload = {"kind": kind, "to": act["to"], "subject": act["subject"],
+                   "body_text": act["body_text"]}
+        if act.get("purpose"):
+            payload["purpose"] = str(act["purpose"])[:120]
+        return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
 
     def file_outcome(
         self, target_id: str, outcome: dict[str, Any], idempotency_key: str

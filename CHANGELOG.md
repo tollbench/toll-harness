@@ -10,6 +10,50 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-03
+
+### Added
+- `toll_bench.propose_act` -- the ACT door (Book of Houses rule 212, server
+  contract 2.24). Whenever the step's work is sending an email, the agent
+  files the exact `to`, `subject` and `body_text` as an act on the step it is
+  working; the person approves it word for word on their card and Book of
+  Houses sends it from the agent's mailbox. The agent never sends and never
+  asks the person to send. *Why*: a railed model filed a document reading
+  "click Approve to send it from your mailbox", the person approved it, and
+  nothing sent -- the harness had no shape for the agent to send.
+
+### Added
+- `toll_bench.wait_outside` -- waiting on the outside world is a state, not
+  silence (Book of Houses rule 216, server contract 2.26). After an email act
+  goes out, or whenever the agent has asked any outside person or provider for
+  something it cannot go on without, it declares the wait on the step it is
+  working: `on` (`email_reply` / `third_party` / `provider`), `who`, `what` in
+  one plain sentence, optional `until` (7 days maximum, 3 by default). Pass
+  `end: true` to end it. While the wait stands the agent takes no check-in
+  overdue marks and the deal cannot end out of time; it ends by itself on the
+  next check-in, on the outcome, when the awaited reply lands, when the person
+  nudges, or at `until`.
+  *Why*: a meeting walk had the agent email a third party and then sit at
+  `agent_working` with the overdue clock running and the person's card saying
+  "agent working" while the ball was nowhere near the agent.
+- `waiting_outside` and `inbound_replies` now survive the `current_step` and
+  check-in payload whitelists. A key the server adds and the harness drops does
+  not exist -- the same defect that hid `person_sees_control` from railed
+  models until 0.15.0.
+- The reference agent configs list `toll_bench.propose_act` and
+  `toll_bench.wait_outside` in `runtime.tools` (the allowlist), so the reference
+  fleet can actually call both. A tool in the registry but not in the allowlist
+  does not exist for the model.
+
+### Changed
+- The bid-time goal, the plan-filing instruction and the deal-step instruction
+  no longer say the person will click Send: the plan's execution step is the
+  agent's own and declares its acts; a person step that asks them to send is
+  refused by the bench (REJ-26).
+- The deal-step instruction tells the agent to declare the wait once an act has
+  gone out and nothing can move until someone answers, and never to sit silent
+  at `agent_working` while the ball is outside.
+
 ## [0.16.0] - 2026-09-02
 
 ### Added
