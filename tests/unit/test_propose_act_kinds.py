@@ -71,8 +71,7 @@ def test_a_kind_the_door_does_not_have_is_named_not_guessed():
 
 
 def test_the_tool_offers_both_kinds():
-    from toll_harness.tools.registry import (add_toll_bench_tools,
-                                             build_standard_registry)
+    from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
     registry = add_toll_bench_tools(build_standard_registry())
     tool = next(d for d in registry.definitions()
                 if d.name == 'toll_bench.propose_act')
