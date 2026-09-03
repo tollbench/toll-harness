@@ -595,7 +595,8 @@ def test_a_dead_proposal_is_skipped_and_never_asked_again():
     read answers PROPOSAL_NOT_ACTIVE. That is not a mail hiccup to log every
     cycle -- the proposal is dead. Skip it, remember it, keep listing the rest."""
     from toll_harness.email.book_of_houses import (
-        BookOfHousesApiError, BookOfHousesMailClient,
+        BookOfHousesApiError,
+        BookOfHousesRestMailClient,
     )
 
     class _Api:
@@ -609,11 +610,12 @@ def test_a_dead_proposal_is_skipped_and_never_asked_again():
         def threads(self, proposal_id, limit=50):
             self.thread_calls.append(proposal_id)
             if proposal_id == "dead-1":
-                raise BookOfHousesApiError(409, "PROPOSAL_NOT_ACTIVE", "This proposal is no longer active.")
+                raise BookOfHousesApiError(
+                    409, "PROPOSAL_NOT_ACTIVE", "This proposal is no longer active.")
             return {"threads": [{"id": "t-1", "last_inbound_at": "2026-09-03T00:00:00Z"}]}
 
     api = _Api()
-    client = BookOfHousesMailClient.__new__(BookOfHousesMailClient)
+    client = BookOfHousesRestMailClient.__new__(BookOfHousesRestMailClient)
     client.api = api
     client._check_mailbox = lambda mailbox: None
     out = client.list_messages("agent@bookofhouses.com", limit=20)
