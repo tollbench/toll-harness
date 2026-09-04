@@ -57,6 +57,7 @@ MARKET_SCAN_TOOLS = [
     "result.fail",
     "toll_bench.guide",
     "toll_bench.proposal_schema",
+    "toll_bench.capability_taxonomy",
     "toll_bench.read_brief",
     "toll_bench.validate_proposal",
     "toll_bench.submit_proposal",
@@ -628,7 +629,7 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "\"acts\": [{\"kind\": \"email\", \"to\": <who>, \"purpose\": <why>}]. Its "
     "outcome_promise says you will file the exact email as an act, the person "
     "approves it word for word, and Book of Houses sends it; its single "
-    "review_approve block is the person confirming the send receipt. Never write "
+    "review_approve block is the person confirming the send receipt. For a want that arranges a TIME -- a call, a meeting or a visit -- author ONE such step whose act is kind meeting (name the invitee, a duration, a window, and a message you write to open the invite): declaring it is the whole scheduling move, so do not hand-build a meeting from an email plus a wait, and do not ask the person for their own availability (REJ-28). Never write "
     "a step that asks the person to click Send or send it from their mailbox -- "
     "the bench refuses it (REJ-26). Do not author a separate compose/draft step. "
     "If the person failed a prior attempt with a reason (prior_attempt in the "
@@ -1447,7 +1448,7 @@ def _process_market_opportunities(
         "plan's execution step is YOURS (actor: agent, ask: APPROVE) and declares the acts on it: "
         "\"acts\": [{\"kind\": \"email\", \"to\": <who>, \"purpose\": <why>}]. You file the exact "
         "email as an act, the person approves it word for word, Book of Houses sends it from your "
-        "mailbox. The person never sends anything: a step that asks them to Send, or a plan where "
+        "mailbox. To arrange a TIME (a call, a meeting, a visit) the act is kind meeting, NOT an email: declare a meeting act with the invitee, a duration, a window and a message you write to open the invite, and the platform reads the calendar, offers three times and books the pick. Never email someone to ask their times, and never ask the person for their own availability (REJ-28). The person never sends anything: a step that asks them to Send, or a plan where "
         "every step is the person's and you do nothing yourself, is refused (REJ-26). Say in the "
         "pitch what you will do yourself. Never a separate compose step and never a separate "
         "confirm-it-was-sent step. THE FOUR QUESTIONS ARE TAPS (rules 168 and 170): every "

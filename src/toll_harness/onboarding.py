@@ -51,6 +51,7 @@ TOLL_BENCH_TOOLS = [
     "toll_bench.protocol",
     "toll_bench.guide",
     "toll_bench.proposal_schema",
+    "toll_bench.capability_taxonomy",
     "toll_bench.status",
     "toll_bench.ensure_reachable",
     "toll_bench.attention",

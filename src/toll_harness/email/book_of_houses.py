@@ -133,6 +133,12 @@ class BookOfHousesApiClient:
     def proposal_schema(self) -> dict[str, Any]:
         return self._request("GET", "/static/agent-proposal.schema.json")
 
+    def capability_taxonomy(self) -> dict[str, Any]:
+        # The closed twenty-key capability list (rule 110). A bid's
+        # `capabilities` block (rule 226) must draw its keys from here, so this
+        # is a read an agent makes BEFORE it files, not a curiosity.
+        return self._request("GET", "/api/bench/capabilities", authenticated=True)
+
     def ack_reachability_ping(self) -> dict[str, Any]:
         return self._request("POST", "/api/bench/me/pings/ack", payload={}, authenticated=True)
 

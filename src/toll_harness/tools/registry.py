@@ -840,10 +840,25 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     )
     registry.register(
         ToolDefinition(
+            "toll_bench.capability_taxonomy",
+            (
+                "Read the closed capability list (rule 110): the only keys a bid's "
+                "`capabilities` block may use (rule 226). Twenty keys in three tiers. Call "
+                "this before filing and copy the KEYS, not the labels -- an invented key is "
+                "refused by name at the door."
+            ),
+            _object_schema({}, []),
+        ),
+        lambda context, arguments: require_toll_bench(context).capability_taxonomy(),
+    )
+    registry.register(
+        ToolDefinition(
             "toll_bench.submit_proposal",
             (
                 "File one final sealed proposal. Read the live protocol and brief, then "
-                "validate the exact proposal first. finalist_questions is one array of four, "
+                "validate the exact proposal first. THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
+                "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the closed capability taxonomy -- call toll_bench.capability_taxonomy or read the schema, never invent a key); wins (up to 3 {deal_id, note}, each naming one of THIS AGENT'S OWN deals that ended resolved -- it is checked against the record, so cite a real one or send [] if there are none, which is not a penalty); research_links (1..3 {url, note} actually looked up for THIS want); and skill_research (what this agent learned about this want before writing the plan, 1..600 chars). Do the research before filing -- that is the point of the blocks. "
+                "finalist_questions is one array of four, "
                 "and each entry is a HAR block {id, format, title, config} -- the same shape "
                 "a step's har_blocks carries -- or a legacy plain string. AT MOST TWO of the "
                 "four may be a text box (short_answer, written_response, or a string), so "
@@ -1069,9 +1084,17 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "Calendar, emails the invitee three open times with a pick link from "
                 "your mailbox, books the pick on both calendars with a video link and "
                 "carries change and cancel; no pick in 5 days lapses the act. You never "
-                "touch a slot, a time or an email body. Needs a calendar GRANT on the "
-                "deal covering calendar.events.read and calendar.event.create; progress "
-                "rides current_step under acts[].progress. Whatever the "
+                "touch a slot, a time or an email body. A meeting is ONE move: "
+                "declaring it is enough, with no companion grant to hand-author. It "
+                "runs WITH or WITHOUT a connected calendar -- with one connected the "
+                "platform finds the open times itself; with none it asks the person "
+                "for a few times on the card and runs the same invite, pick and "
+                "confirm. Optionally pass message: the words that OPEN the invite "
+                "email, written by you (who you are, why you are writing); the "
+                "platform owns the three times, the pick link and the AI-disclosure "
+                "line and appends them, the person approves the whole email, and you "
+                "must NOT put times or dates in message. progress rides current_step "
+                "under acts[].progress. Whatever the "
                     "kind, the person sees it on their "
                 "step and approves, sends back, or stops, and the receipt lands on the "
                 "ledger. Your step stays yours; when the act is done, file your outcome "
@@ -1105,6 +1128,9 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                             "offer_count": {"type": "integer",
                                             "description": "meeting: how many times to offer, 1 to "
                                                 "5"},
+                            "message": {"type": "string",
+                                        "description": "meeting: the words that open the invite "
+                                            "email; written by you, no times or dates"},
                             "to": {"type": "string",
                                    "description": "email: the one recipient"},
                             "subject": {"type": "string",

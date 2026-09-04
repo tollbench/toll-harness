@@ -141,6 +141,23 @@ def _valid_proposal():
         "pitch_body": "A concise description of the proposed work.",
         "smart_goals": ["one"],
         "finalist_questions": [_block_questions()],
+        # Contract 2.42 / rule 226 -- the five homework blocks. A proposal
+        # without them is no longer valid anywhere, so the fixture that stands
+        # for "a valid proposal" has to carry them. `wins` is [] on purpose:
+        # that is the legal, unpenalised answer for an agent with no finished
+        # walks, and it keeps the fixture free of a deal id nothing owns.
+        "strategy": "Walk the shortlist in one pass, confirm the shape with the "
+                    "person, then deliver.",
+        "capabilities": ["maps_and_places", "artifact_uploads"],
+        "wins": [],
+        "research_links": [
+            {
+                "url": "https://example.org/city-guide",
+                "note": "The published stop list this shortlist starts from.",
+            }
+        ],
+        "skill_research": "The stops cluster in two districts, so one route covers "
+                          "them without doubling back.",
     }
 
 
@@ -895,3 +912,36 @@ def test_withdrawal_without_words_or_with_an_unknown_cause_is_refused():
     assert invented["error"] == "invalid_withdraw_cause"
     assert invented["allowed"] == ["cannot_deliver", "other"]
     assert api.submissions == []
+
+def test_a_bid_without_its_homework_is_refused_at_home():
+    """Rule 226. Each of the five blocks is caught locally, by name.
+
+    What forced the local check: the server refuses these (REJ-31) and the
+    refusal is free, but a bid that fails at home costs no round trip and the
+    agent learns the field name in the same breath. `wins` is the one block
+    that may be an empty LIST -- that is the honest answer for an agent with no
+    finished walks -- so it is checked for presence, never for content.
+    """
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+    for field in ("strategy", "capabilities", "wins", "research_links", "skill_research"):
+        proposal = _valid_proposal()
+        del proposal[field]
+        result = provider.validate_proposal(proposal)
+        assert not result["ok"], f"{field} missing should not validate"
+        assert any(problem["path"] == field for problem in result["problems"]), (
+            f"{field} missing was not reported by name"
+        )
+
+    blank = _valid_proposal()
+    blank["strategy"] = "   "
+    assert not provider.validate_proposal(blank)["ok"]
+
+    empty_links = _valid_proposal()
+    empty_links["research_links"] = []
+    assert not provider.validate_proposal(empty_links)["ok"]
+
+    # The zero case: no finished walks is legal and must still validate.
+    no_wins = _valid_proposal()
+    no_wins["wins"] = []
+    assert provider.validate_proposal(no_wins)["ok"]
+

@@ -56,6 +56,26 @@ def test_a_meeting_never_carries_a_slot_or_a_body():
     assert 'start' not in payload and 'body_text' not in payload
 
 
+def test_a_meeting_carries_the_agent_written_invite_message():
+    """RULE 223 / contract 2.38: the agent writes the words that OPEN the
+    invite email; the platform owns the times, the pick link and the AI
+    disclosure. The message rides the meeting act."""
+    provider, api = _provider()
+    out = provider.propose_act('d-1', 's-1', {
+        'kind': 'meeting', 'with': 'r@x.co',
+        'message': "Hi Ruby, I'm helping the person set up a quick call."}, 'k-6')
+    assert out['ok'] is True
+    payload = api.calls[0][2]
+    assert payload['message'].startswith('Hi Ruby')
+
+
+def test_a_runaway_meeting_message_is_capped():
+    provider, api = _provider()
+    provider.propose_act('d-1', 's-1', {
+        'kind': 'meeting', 'with': 'r@x.co', 'message': 'x' * 5000}, 'k-7')
+    assert len(api.calls[0][2]['message']) == 4000
+
+
 def test_an_email_act_still_goes_through_unchanged():
     provider, api = _provider()
     out = provider.propose_act('d-1', 's-1', {
@@ -111,7 +131,8 @@ def test_the_tool_offers_both_kinds():
                 if d.name == 'toll_bench.propose_act')
     assert 'calendar_event' in tool.description
     act = tool.input_schema['properties']['act']
-    for field in ('summary', 'start', 'end', 'to', 'subject', 'body_text'):
+    for field in ('summary', 'start', 'end', 'to', 'subject', 'body_text',
+                  'with', 'message'):
         assert field in act['properties'], field
     # required-ness is per kind, so the schema asks only for the kind itself
     assert act['required'] == ['kind']

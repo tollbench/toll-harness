@@ -19,6 +19,21 @@ from toll_harness.fleet import FleetStore
 # area?" -- a two-way choice -- as a blank box, bundled four separate facts into
 # one question, asked a yes/no as prose, and asked for dates in a text box.
 FINALIST_QUESTIONS_REQUIRED = 4
+
+# CONTRACT 2.42 / rule 226 -- the five bid-homework blocks. All required on a
+# NEW bid (REJ-31 at the server door), and all FROZEN afterwards: the informed
+# plan revises steps and never these, which is why they are carried across
+# verbatim when a plan revision is rebuilt from the sealed original below.
+# `wins` may legitimately be an empty list -- an agent with no resolved walks
+# yet cites none and is not penalised -- so it is checked for PRESENCE, not
+# for content.
+HOMEWORK_FIELDS = (
+    "strategy",
+    "capabilities",
+    "wins",
+    "research_links",
+    "skill_research",
+)
 FINALIST_QUESTION_TEXT_MAX = 2
 FINALIST_TITLE_MAX = 300
 FINALIST_DESCRIPTION_MAX = 400
@@ -354,6 +369,9 @@ class BookOfHousesTollBenchProvider:
     def proposal_schema(self) -> dict[str, Any]:
         return self.api.proposal_schema()
 
+    def capability_taxonomy(self) -> dict[str, Any]:
+        return self.api.capability_taxonomy()
+
     def status(self) -> dict[str, Any]:
         return self.api.me()
 
@@ -429,6 +447,24 @@ class BookOfHousesTollBenchProvider:
         for field in ("pitch_title", "pitch_body"):
             if not str(proposal.get(field) or "").strip():
                 problems.append({"path": field, "message": "is required and cannot be blank"})
+        # Rule 226. Caught at home so a missing block costs a local round trip
+        # rather than a server rejection. `wins` is present-not-empty by
+        # design: [] is the honest answer for an agent with no finished walks.
+        for field in HOMEWORK_FIELDS:
+            value = proposal.get(field)
+            if value is None:
+                problems.append(
+                    {"path": field, "message": "is required (contract 2.42, rule 226)"}
+                )
+            elif field == "wins":
+                if not isinstance(value, list):
+                    problems.append({"path": field, "message": "must be an array"})
+            elif isinstance(value, str):
+                if not value.strip():
+                    problems.append({"path": field, "message": "cannot be blank"})
+            elif isinstance(value, list):
+                if not value:
+                    problems.append({"path": field, "message": "cannot be empty"})
         total = proposal.get("total_ask_cents")
         allocation = proposal.get("allocation")
         if isinstance(total, int) and not isinstance(total, bool) and isinstance(allocation, dict):
@@ -753,6 +789,11 @@ class BookOfHousesTollBenchProvider:
                 "pitch_title",
                 "pitch_body",
                 "person_cost_estimate",
+                # Frozen at bid time (rule 226) but still required by the
+                # published schema, so a revision rebuilt from the sealed
+                # original must carry them or it fails validation at home
+                # before it ever reaches the server.
+                *HOMEWORK_FIELDS,
             )
             if original.get(key) is not None
         }
@@ -972,7 +1013,7 @@ class BookOfHousesTollBenchProvider:
                    "attendees",
                    # rule 223: the meeting kind's intent fields
                    "with", "with_name", "duration_min", "window", "title",
-                   "offer_count"}
+                   "offer_count", "message"}
         unexpected = sorted(set(act) - allowed)
         if unexpected:
             return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
@@ -991,6 +1032,8 @@ class BookOfHousesTollBenchProvider:
             for field in ("with_name", "title", "description", "location"):
                 if act.get(field):
                     payload[field] = str(act[field])
+            if act.get("message"):
+                payload["message"] = str(act["message"])[:4000]
             if act.get("window"):
                 payload["window"] = (act["window"] if isinstance(act["window"], dict)
                                      else str(act["window"]))
