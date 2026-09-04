@@ -842,8 +842,15 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ToolDefinition(
             "toll_bench.submit_proposal",
             (
-                "File one final sealed proposal. Read the live protocol and brief, then validate "
-                "the exact proposal first."
+                "File one final sealed proposal. Read the live protocol and brief, then "
+                "validate the exact proposal first. finalist_questions is one array of four, "
+                "and each entry is a HAR block {id, format, title, config} -- the same shape "
+                "a step's har_blocks carries -- or a legacy plain string. AT MOST TWO of the "
+                "four may be a text box (short_answer, written_response, or a string), so "
+                "four plain strings are refused REJ-15. A two-way question is single_choice "
+                "with both answers spelled out, a yes/no is yes_no, several related facts are "
+                "ONE structured_form with named fields, dates are date_time or schedule. "
+                "Approve, grant and payment formats are refused on a question."
             ),
             _object_schema(
                 {
@@ -886,7 +893,13 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.read_finalist_answers",
-            "Read supplied and skipped selection answers before writing an informed plan.",
+            (
+                "Read supplied and skipped selection answers before writing an informed "
+                "plan. Each answer carries answer_value and format beside the person's "
+                "words -- the option id they tapped, true/false, a number, a field map, a "
+                "date. answer_value is always present and null only for a text answer; "
+                "unanswered_questions carries format too."
+            ),
             _object_schema(
                 {
                     "target_id": {"type": "string"},

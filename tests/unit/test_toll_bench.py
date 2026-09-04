@@ -140,8 +140,180 @@ def _valid_proposal():
         "pitch_title": "One clear idea",
         "pitch_body": "A concise description of the proposed work.",
         "smart_goals": ["one"],
-        "finalist_questions": [["one?", "two?", "three?", "four?"]],
+        "finalist_questions": [_block_questions()],
     }
+
+
+def _block_questions():
+    """Contract 2.37: four questions the person taps, one of them a text box."""
+    return [
+        {
+            "id": "q1",
+            "format": "single_choice",
+            "title": "Should the search cover the city limits or the wider metro area?",
+            "config": {
+                "options": [
+                    {"id": "city_limits", "label": "The city limits"},
+                    {"id": "metro", "label": "The wider metro area"},
+                ]
+            },
+        },
+        {
+            "id": "q2",
+            "format": "yes_no",
+            "title": "Does one representative dish at each stop count?",
+        },
+        {
+            "id": "q3",
+            "format": "date_time",
+            "title": "Which dates in the next 30 days can you reserve?",
+        },
+        {
+            "id": "q4",
+            "format": "short_answer",
+            "title": "What would make this outing one you tell someone about?",
+        },
+    ]
+
+
+def _with_questions(questions):
+    return {**_valid_proposal(), "finalist_questions": [questions]}
+
+
+def _finalist_problems(result):
+    return [
+        problem
+        for problem in result.get("problems", [])
+        if problem["path"].startswith("finalist_questions")
+    ]
+
+
+def test_block_shaped_finalist_questions_pass_local_validation():
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_valid_proposal())
+
+    assert result["ok"] is True
+    assert _finalist_problems(result) == []
+
+
+def test_four_plain_strings_are_refused_because_a_question_is_a_tap():
+    # Contract 2.37 (rules 168 and 170). The legacy string shape reads old rows;
+    # it is no longer a way to file, because four strings are four blank boxes.
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(
+        _with_questions(["How many seats?", "Who owns it?", "What budget?", "What tone?"])
+    )
+
+    assert result["ok"] is False
+    messages = [problem["message"] for problem in _finalist_problems(result)]
+    assert any("4 of the four questions are text boxes" in m for m in messages)
+    assert any("REJ-15" in m for m in messages)
+
+
+def test_a_third_text_question_trips_the_two_text_cap():
+    questions = _block_questions()
+    questions[0] = {"id": "q1", "format": "written_response", "title": "Tell me about it."}
+    questions[1] = "And what else should I know about it, in your own words?"
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    assert result["ok"] is False
+    assert any(
+        "3 of the four questions are text boxes" in problem["message"]
+        for problem in _finalist_problems(result)
+    )
+
+
+def test_a_text_question_that_reads_as_a_choice_names_the_format():
+    # What forced the rule: a hot-pot bid asked a two-way choice as a blank box.
+    questions = _block_questions()
+    questions[3] = (
+        "Should 'Portland area' mean Portland city limits or the wider metro area?"
+    )
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    assert result["ok"] is False
+    assert any(
+        "single_choice" in problem["message"] and "reads as a choice" in problem["message"]
+        for problem in _finalist_problems(result)
+    )
+
+
+def test_a_yes_no_worded_text_question_names_yes_no():
+    questions = _block_questions()
+    questions[3] = "Does one representative bowl at each restaurant count?"
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    assert any(
+        "`yes_no`" in problem["message"] for problem in _finalist_problems(result)
+    )
+
+
+def test_an_approve_format_is_refused_on_a_question():
+    questions = _block_questions()
+    questions[1] = {"id": "q2", "format": "review_approve", "title": "Approve this plan"}
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    assert result["ok"] is False
+    assert any(
+        "is not a question" in problem["message"]
+        for problem in _finalist_problems(result)
+    )
+
+
+def test_a_choice_question_needs_real_options_and_no_other_sentinel():
+    questions = _block_questions()
+    questions[0] = {
+        "id": "q1",
+        "format": "single_choice",
+        "title": "Which area should I cover?",
+        "config": {"options": [{"id": "__other__", "label": "Other (type in)"}]},
+    }
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    messages = [problem["message"] for problem in _finalist_problems(result)]
+    assert any("at least 2 real options" in m for m in messages)
+    assert any("__other__" in m for m in messages)
+
+
+def test_a_question_block_needs_id_format_and_title():
+    questions = _block_questions()
+    questions[2] = {"title": "When can you go?"}
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    result = provider.validate_proposal(_with_questions(questions))
+
+    messages = [problem["message"] for problem in _finalist_problems(result)]
+    assert any("non-empty `id`" in m for m in messages)
+    assert any("non-empty `format`" in m for m in messages)
+
+
+def test_a_stale_production_schema_never_refuses_a_block_question():
+    # The bench's own JSON schema may still spell the field as four strings.
+    # finalist_questions has its own gate here, so a block shape passes at home.
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+    schema = api.proposal_schema()
+    schema["properties"]["finalist_questions"] = {
+        "type": "array",
+        "items": {"type": "array", "items": {"type": "string"}},
+    }
+    api.proposal_schema = lambda: schema
+
+    result = provider.validate_proposal(_valid_proposal())
+
+    assert result["ok"] is True
 
 
 def test_reachability_completes_exact_two_ping_handshake_and_is_idempotent():

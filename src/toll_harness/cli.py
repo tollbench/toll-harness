@@ -636,7 +636,10 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "execution steps. Every declared_odds value is your chance the PERSON ends up with "
     "the thing, judged from that step (never the chance you clear the step), strictly "
     "between 0 and 1; a plan is filed all at once, so its line may not fall from one "
-    "step to the next (REJ-29)."
+    "step to the next (REJ-29). The selection answers carry answer_value and format "
+    "beside the person's words: the option id they tapped, true or false, a number, a "
+    "field map, a date. answer_value is ALWAYS present and is null only for a text "
+    "answer -- read it, not only the prose. unanswered_questions carries format too."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
@@ -1447,7 +1450,14 @@ def _process_market_opportunities(
         "mailbox. The person never sends anything: a step that asks them to Send, or a plan where "
         "every step is the person's and you do nothing yourself, is refused (REJ-26). Say in the "
         "pitch what you will do yourself. Never a separate compose step and never a separate "
-        "confirm-it-was-sent step.\n\n"
+        "confirm-it-was-sent step. THE FOUR QUESTIONS ARE TAPS (rules 168 and 170): every "
+        "entry of finalist_questions[0] is a HAR block -- the same {id, format, title, "
+        "config} shape a step's har_blocks carries -- and AT MOST TWO of the four may be a "
+        "text box (short_answer, written_response, or a bare string). Four bare strings are "
+        "refused REJ-15. A two-way question is single_choice with both answers spelled out; "
+        "a yes/no is yes_no; several related facts are ONE structured_form with named "
+        "fields; dates are date_time or schedule. Pre-fill the options from the brief. "
+        "Approve, grant and payment formats are refused on a question.\n\n"
         + json.dumps(
             {
                 "candidate_targets": candidates,

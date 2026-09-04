@@ -6,6 +6,295 @@ from typing import Any
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 
+# RULES 168 AND 170, APPLIED TO THE FOUR QUESTIONS (contract 2.37, 2026-09-04).
+# The finalist questions were the last person-facing ask outside HAR: four plain
+# strings the selection modal drew as four blank text boxes. Each question is now
+# either a HAR block -- the SAME {id, format, title, description?, required?,
+# config?} shape a step's har_blocks carries -- or a legacy plain string, which
+# counts as a text box. At most TWO of the four may be text, so four plain
+# strings can no longer be filed: the string shape is for reading old rows, not
+# for filing. The bench refuses the rest as REJ-15; it is checked here so the one
+# filing a target allows is never spent on it. What forced it: a hot-pot bid
+# asked "Should 'Portland area' mean Portland city limits or the wider metro
+# area?" -- a two-way choice -- as a blank box, bundled four separate facts into
+# one question, asked a yes/no as prose, and asked for dates in a text box.
+FINALIST_QUESTIONS_REQUIRED = 4
+FINALIST_QUESTION_TEXT_MAX = 2
+FINALIST_TITLE_MAX = 300
+FINALIST_DESCRIPTION_MAX = 400
+# The canonical HAR format slugs (the step contract's enum).
+HAR_FORMAT_SLUGS = frozenset(
+    {
+        "short_answer",
+        "written_response",
+        "single_choice",
+        "multiple_choice",
+        "rank",
+        "structured_form",
+        "date_time",
+        "location",
+        "file_upload",
+        "media_upload",
+        "download_return",
+        "external_link",
+        "code_reference",
+        "confirm_correct",
+        "review_approve",
+        "agreement",
+        "signature",
+        "connect_account",
+        "grant_access",
+        "invite_share",
+        "payment_authorize",
+        "schedule",
+        "communication",
+        "yes_no",
+        "number",
+    }
+)
+# A question is asked, never approved, granted or paid: those belong on a step of
+# the plan, where the person has already chosen this agent.
+FINALIST_REFUSED_FORMATS = frozenset(
+    {
+        "review_approve",
+        "confirm_correct",
+        "agreement",
+        "signature",
+        "grant_access",
+        "connect_account",
+        "payment_authorize",
+    }
+)
+FINALIST_TEXT_FORMATS = frozenset({"short_answer", "written_response"})
+# Rule 170: a choice control must offer real options, not an empty dropdown that
+# forces a type-in. Same minimums the step blocks carry.
+FINALIST_CHOICE_MIN_OPTIONS = {"single_choice": 2, "multiple_choice": 3, "rank": 3}
+# The renderer adds "Other (type in)" itself; an agent must not ship the sentinel.
+HAR_OTHER_SENTINEL = "__other__"
+# Rule B: a text box whose wording is really a two-way question.
+FINALIST_BINARY_LEADS = frozenset(
+    {"do", "does", "is", "are", "should", "can", "could", "would", "will"}
+)
+
+
+def _reads_as_a_choice(text: Any) -> str | None:
+    """Return the format a text question should have used, or None.
+
+    Rule B of contract 2.37. "A or B?", "either X or Y", "which of ..." is a
+    single_choice; a Do/Does/Is/Are/Should/Can/Could/Would/Will question is a
+    yes_no. The choice test runs first, because "Should it mean X or Y?" is a
+    choice before it is a yes/no.
+    """
+    lowered = " ".join(str(text or "").lower().split())
+    if not lowered:
+        return None
+    ends_in_question = lowered.endswith("?")
+    if "which of" in lowered:
+        return "single_choice"
+    if "either " in lowered and " or " in lowered:
+        return "single_choice"
+    if ends_in_question and " or " in lowered:
+        return "single_choice"
+    lead = lowered.split(" ", 1)[0].strip("\"'([")
+    if ends_in_question and lead in FINALIST_BINARY_LEADS:
+        return "yes_no"
+    return None
+
+
+def _count_real_options(options: Any) -> int:
+    """Count options that are not the renderer's own "Other (type in)"."""
+    if not isinstance(options, list):
+        return 0
+    total = 0
+    for option in options:
+        if isinstance(option, dict):
+            marker = option.get("id") or option.get("value")
+        else:
+            marker = option
+        if isinstance(marker, str) and marker.strip() == HAR_OTHER_SENTINEL:
+            continue
+        total += 1
+    return total
+
+
+def _has_other_sentinel(options: Any) -> bool:
+    if not isinstance(options, list):
+        return False
+    for option in options:
+        marker = option.get("id") or option.get("value") if isinstance(option, dict) else option
+        if isinstance(marker, str) and marker.strip() == HAR_OTHER_SENTINEL:
+            return True
+    return False
+
+
+def _finalist_block_problems(block: dict[str, Any], pos: str) -> list[dict[str, str]]:
+    problems: list[dict[str, str]] = []
+    for key in ("id", "title"):
+        value = block.get(key)
+        if not isinstance(value, str) or not value.strip():
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        f"a question block needs a non-empty `{key}`; the three required "
+                        "fields are id, format and title (REJ-15)"
+                    ),
+                }
+            )
+    title = block.get("title")
+    if isinstance(title, str) and len(title.strip()) > FINALIST_TITLE_MAX:
+        problems.append(
+            {"path": pos, "message": f"title exceeds {FINALIST_TITLE_MAX} chars (REJ-15)"}
+        )
+    description = block.get("description")
+    if isinstance(description, str) and len(description.strip()) > FINALIST_DESCRIPTION_MAX:
+        problems.append(
+            {
+                "path": pos,
+                "message": f"description exceeds {FINALIST_DESCRIPTION_MAX} chars (REJ-15)",
+            }
+        )
+    fmt = block.get("format")
+    if not isinstance(fmt, str) or not fmt.strip():
+        problems.append(
+            {
+                "path": pos,
+                "message": (
+                    "a question block needs a non-empty `format`, one of the HAR format "
+                    "slugs (REJ-15)"
+                ),
+            }
+        )
+        return problems
+    fmt = fmt.strip()
+    if fmt in FINALIST_REFUSED_FORMATS:
+        problems.append(
+            {
+                "path": pos,
+                "message": (
+                    f"format `{fmt}` is not a question: approve, grant and payment formats "
+                    "belong on a step of the plan, never on a question asked before the "
+                    "person has chosen you (REJ-15)"
+                ),
+            }
+        )
+        return problems
+    if fmt not in HAR_FORMAT_SLUGS:
+        problems.append(
+            {"path": pos, "message": f"`{fmt}` is not a HAR format slug (REJ-15)"}
+        )
+        return problems
+    config = block.get("config") if isinstance(block.get("config"), dict) else {}
+    if fmt in FINALIST_CHOICE_MIN_OPTIONS:
+        need = FINALIST_CHOICE_MIN_OPTIONS[fmt]
+        found = _count_real_options(config.get("options"))
+        if found < need:
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        f"a `{fmt}` question needs at least {need} real options in "
+                        f"config.options (found {found}); an empty dropdown is a text box "
+                        "wearing a control (rule 170, REJ-15)"
+                    ),
+                }
+            )
+        if _has_other_sentinel(config.get("options")):
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        "the renderer adds \"Other (type in)\" itself; a `__other__` option "
+                        "of your own is refused (REJ-15)"
+                    ),
+                }
+            )
+    if fmt == "number":
+        unit = config.get("unit")
+        if not isinstance(unit, str) or not unit.strip():
+            problems.append(
+                {
+                    "path": pos,
+                    "message": "a `number` question needs a non-empty config.unit (REJ-15)",
+                }
+            )
+    return problems
+
+
+def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
+    """Local mirror of the bench's REJ-15 gate on finalist_questions."""
+    path = "finalist_questions"
+    if (
+        not isinstance(questions, list)
+        or len(questions) != 1
+        or not isinstance(questions[0], list)
+        or len(questions[0]) != FINALIST_QUESTIONS_REQUIRED
+    ):
+        return [
+            {"path": path, "message": "must contain exactly one array of four questions"}
+        ]
+    problems: list[dict[str, str]] = []
+    text_questions = 0
+    for index, question in enumerate(questions[0]):
+        pos = f"{path}[1][{index + 1}]"
+        wording: Any = None
+        if isinstance(question, str):
+            text = question.strip()
+            if not text:
+                problems.append({"path": pos, "message": "must be a non-empty string"})
+                continue
+            if len(text) > FINALIST_TITLE_MAX:
+                problems.append(
+                    {"path": pos, "message": f"exceeds {FINALIST_TITLE_MAX} chars"}
+                )
+                continue
+            text_questions += 1
+            wording = text
+        elif isinstance(question, dict):
+            problems.extend(_finalist_block_problems(question, pos))
+            fmt = question.get("format")
+            if isinstance(fmt, str) and fmt.strip() in FINALIST_TEXT_FORMATS:
+                text_questions += 1
+                wording = question.get("title")
+        else:
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        "must be a HAR block object with id, format and title, or a plain "
+                        "string (REJ-15)"
+                    ),
+                }
+            )
+            continue
+        suggested = _reads_as_a_choice(wording)
+        if suggested:
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        f"reads as a choice but is a text box: file it as a `{suggested}` "
+                        "block with the answers spelled out, so the person taps instead of "
+                        "typing (rule 170, REJ-15)"
+                    ),
+                }
+            )
+    if text_questions > FINALIST_QUESTION_TEXT_MAX:
+        problems.append(
+            {
+                "path": path,
+                "message": (
+                    f"{text_questions} of the four questions are text boxes; at most "
+                    f"{FINALIST_QUESTION_TEXT_MAX} may be (short_answer, written_response, "
+                    "or a legacy plain string, which counts as one). The person taps: file "
+                    "the rest as HAR blocks -- single_choice, multiple_choice, rank, "
+                    "yes_no, number, date_time, schedule, or one structured_form when "
+                    "several related facts belong together (rule 168, REJ-15)"
+                ),
+            }
+        )
+    return problems
+
 
 class BookOfHousesTollBenchProvider:
     """Maps the public, agent-scoped Book of Houses API to Toll Harness tools."""
@@ -125,23 +414,18 @@ class BookOfHousesTollBenchProvider:
                 "message": error.message,
             }
             for error in errors
+            # finalist_questions has its own gate below, which knows the block
+            # shape of contract 2.37. A production schema that still spells the
+            # field as four plain strings must not refuse a block-shaped
+            # question at home, and it must not double-report one either.
+            if not (
+                list(error.absolute_path)[:1] == ["finalist_questions"]
+            )
         ]
         smart_goals = proposal.get("smart_goals")
         if not isinstance(smart_goals, list) or len(smart_goals) != 1:
             problems.append({"path": "smart_goals", "message": "must contain exactly one goal"})
-        questions = proposal.get("finalist_questions")
-        if (
-            not isinstance(questions, list)
-            or len(questions) != 1
-            or not isinstance(questions[0], list)
-            or len(questions[0]) != 4
-        ):
-            problems.append(
-                {
-                    "path": "finalist_questions",
-                    "message": "must contain exactly one array of four questions",
-                }
-            )
+        problems.extend(finalist_question_problems(proposal.get("finalist_questions")))
         for field in ("pitch_title", "pitch_body"):
             if not str(proposal.get(field) or "").strip():
                 problems.append({"path": field, "message": "is required and cannot be blank"})
@@ -221,8 +505,9 @@ class BookOfHousesTollBenchProvider:
             "ok": not problems,
             "problems": problems,
             "note": (
-                "Local validation uses the current production JSON schema plus required pitch, "
-                "goal, `finalist_questions` and declared-odds-line checks. Production remains "
+                "Local validation uses the current production JSON schema plus required "
+                "pitch, goal, `finalist_questions` (block shape, the two-text cap, and the "
+                "choice-worded text box) and declared-odds-line checks. Production remains "
                 "authoritative at submit."
             ),
         }

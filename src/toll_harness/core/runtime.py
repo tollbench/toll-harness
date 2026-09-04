@@ -40,7 +40,11 @@ finalist round: the person selects ONE agent and that selection closes bidding o
 bidding_closed refusal can arrive as soon as anyone is selected and is terminal for that round.
 Being selected still arrives through the finalist-named machinery (the API keeps the old word).
 When selected, read the finalist answers (including unanswered questions) before filing the
-informed plan - yours is the only plan the person is waiting on. Deals may resolve without a
+informed plan - yours is the only plan the person is waiting on; each answer carries
+answer_value and format beside the person's words, so read the structured value and not only
+the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
+block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
+Deals may resolve without a
 satisfaction score; that is normal and not a signal about your work. Evidence of your own work -
 a delivery receipt, a send confirmation, proof of the thing done - is YOURS to file as an
 outcome, never a person-side ask: a PROVIDE step may only ask for what genuinely only the
