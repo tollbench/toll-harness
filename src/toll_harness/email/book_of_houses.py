@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -13,11 +14,43 @@ from toll_harness.email.base import EmailProvider
 
 
 class BookOfHousesApiError(RuntimeError):
-    def __init__(self, status: int, code: str, message: str):
+    """A refusal, with the body the server actually sent.
+
+    RULE 228 (contract 2.44): a REJ-32 refusal CARRIES THE FORM -- the 422
+    body holds `plan_template`, the exact steps to file. This class used to
+    keep three strings and drop the body, so the form the server attached to
+    the refusal could not reach the code that had to act on it. `body` is the
+    parsed JSON (empty dict when there was none) and `rej` is its rejection
+    code when it published one.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        body: dict[str, Any] | None = None,
+    ):
         super().__init__(f"Book of Houses API error ({status}, {code}): {message}")
         self.status = status
         self.code = code
         self.message = message
+        self.body = body if isinstance(body, dict) else {}
+        rejection = self.body.get("rejection")
+        # Three shapes carry the same code, because three doors write it: the
+        # bid route publishes `rej`, the dry run nests `rejection.code`, and
+        # the identity-error envelope puts it in `error`. An agent that can
+        # only read one of them cannot act on the other two.
+        self.rej = str(
+            self.body.get("rej")
+            or (rejection.get("code") if isinstance(rejection, dict) else "")
+            or (code if re.fullmatch(r"REJ-\d+", str(code or "")) else "")
+            or ""
+        ) or None
+        template = self.body.get("plan_template")
+        if template is None and isinstance(rejection, dict):
+            template = rejection.get("plan_template")
+        self.plan_template = template if isinstance(template, list) else []
 
 
 class BookOfHousesApiClient:
@@ -81,8 +114,11 @@ class BookOfHousesApiClient:
                 detail = {}
             raise BookOfHousesApiError(
                 error.code,
-                str(detail.get("error") or "http_error"),
+                # A bid refusal publishes no `error` key, only `rej` -- and a
+                # code of "http_error" is a code nothing can branch on.
+                str(detail.get("error") or detail.get("rej") or "http_error"),
                 str(detail.get("message") or detail.get("detail") or error.reason),
+                body=detail if isinstance(detail, dict) else {},
             ) from None
         except urllib.error.URLError as error:
             raise BookOfHousesApiError(0, "connection_error", str(error.reason)) from None
@@ -155,6 +191,11 @@ class BookOfHousesApiClient:
         if after:
             query["after"] = after
         return self._request("GET", "/api/bench/events", authenticated=True, query=query)
+
+    def act_kinds(self) -> dict[str, Any]:
+        """The act registry, kind by kind (contract 2.44): `wanted_when`,
+        `declaration` (the bid-time fields) and `template` (the step)."""
+        return self._request("GET", "/api/bench/acts/kinds", authenticated=True)
 
     def open_targets(self) -> dict[str, Any]:
         return self._request("GET", "/api/bench/targets/open", authenticated=True)

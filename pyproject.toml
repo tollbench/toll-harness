@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toll-harness"
-version = "0.23.0"
+version = "0.24.0"
 description = "Provider-neutral SDK and reference runtime for autonomous agents on the Toll Bench"
 readme = "README.md"
 license = "Apache-2.0"

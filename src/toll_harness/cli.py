@@ -59,6 +59,7 @@ MARKET_SCAN_TOOLS = [
     "toll_bench.proposal_schema",
     "toll_bench.capability_taxonomy",
     "toll_bench.read_brief",
+    "toll_bench.list_act_kinds",
     "toll_bench.validate_proposal",
     "toll_bench.submit_proposal",
 ]
@@ -609,6 +610,14 @@ _DEAL_STEP_INSTRUCTION = (
     "itself on your next check-in, on your outcome, or when the reply lands "
     "(watch waiting_outside, inbound_replies and owed_replies on "
     "current_step). "
+    "A BLOCK STEP IS THE PLATFORM'S (rule 229): where your plan declared a "
+    "registry block, the platform filed that act itself when the step opened "
+    "and files this step's outcome when it executes. Read declared_acts and "
+    "acts on current_step: while that act is held, approved or executed you "
+    "file NOTHING on the step -- no second act, no outcome. After a deny or a "
+    "failure the step is yours again with the person's words in acts[].note "
+    "and the move in acts[].next, no review round spent: file ONE changed act "
+    "that answers them, or say on the thread why there is nothing to change. "
     "A CALENDAR EVENT IS AN ACT TOO (rule 219): on a step whose deal holds a "
     "calendar grant, call toll_bench.propose_act with kind calendar_event and "
     "the exact summary, start and end -- never ask the person to put it on "
@@ -629,7 +638,11 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "\"acts\": [{\"kind\": \"email\", \"to\": <who>, \"purpose\": <why>}]. Its "
     "outcome_promise says you will file the exact email as an act, the person "
     "approves it word for word, and Book of Houses sends it; its single "
-    "review_approve block is the person confirming the send receipt. For a want that arranges a TIME -- a call, a meeting or a visit -- author ONE such step whose act is kind meeting (name the invitee, a duration, a window, and a message you write to open the invite): declaring it is the whole scheduling move, so do not hand-build a meeting from an email plus a wait, and do not ask the person for their own availability (REJ-28). Never write "
+    "review_approve block is the person confirming the send receipt. For a want that arranges a "
+    "TIME -- a call, a meeting or a visit -- author ONE such step whose act is kind meeting "
+    "(name the invitee, a duration, a window, and a message you write to open the invite): "
+    "declaring it is the whole scheduling move, so do not hand-build a meeting from an email "
+    "plus a wait, and do not ask the person for their own availability (REJ-28). Never write "
     "a step that asks the person to click Send or send it from their mailbox -- "
     "the bench refuses it (REJ-26). Do not author a separate compose/draft step. "
     "If the person failed a prior attempt with a reason (prior_attempt in the "
@@ -640,7 +653,16 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "step to the next (REJ-29). The selection answers carry answer_value and format "
     "beside the person's words: the option id they tapped, true or false, a number, a "
     "field map, a date. answer_value is ALWAYS present and is null only for a text "
-    "answer -- read it, not only the prose. unanswered_questions carries format too."
+    "answer -- read it, not only the prose. unanswered_questions carries format too. "
+    "THE WANT NAMES ITS BLOCKS (rules 228 and 229): read the brief "
+    "(toll_bench.read_brief). When its plan_template is not empty, every template step "
+    "must be in this plan, copied as given, with only its <angle bracket> blanks filled "
+    "-- the fields inside acts, declared_odds and declared_odds_reason. The platform "
+    "writes a block step's title, promise and har_blocks at signing, files the act when "
+    "the step opens and files that step's outcome when it runs, so your hands on it are "
+    "its fields and its words. A meeting message carries no dates and no times, and "
+    "`with` is left out unless the invitee's address is known. A plan missing a required "
+    "block is refused REJ-32."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
@@ -731,6 +753,11 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             {
                 "toll_bench.read_finalist_answers",
                 "toll_bench.list_proposals",
+                # Contract 2.44: the required blocks and the step to file for
+                # each one ride the brief, so the plan cannot be filed without
+                # reading it.
+                "toll_bench.read_brief",
+                "toll_bench.list_act_kinds",
                 "toll_bench.submit_informed_plan",
                 # The public exit rides the same dispatch: an agent that cannot
                 # produce this plan says so out loud rather than retrying.
@@ -1409,6 +1436,11 @@ def _market_scan_candidates(
             "round": target.get("round"),
             "reposted_at": target.get("reposted_at"),
             "open_bid_count": target.get("open_bid_count"),
+            # Contract 2.44: the want names the blocks it cannot be delivered
+            # without. It rides the open listing as well as the brief, so the
+            # model knows before it fetches anything that this one needs a
+            # meeting act and not an email.
+            "required_blocks": target.get("required_blocks"),
         }
         for target in selected
     ]
@@ -1448,7 +1480,12 @@ def _process_market_opportunities(
         "plan's execution step is YOURS (actor: agent, ask: APPROVE) and declares the acts on it: "
         "\"acts\": [{\"kind\": \"email\", \"to\": <who>, \"purpose\": <why>}]. You file the exact "
         "email as an act, the person approves it word for word, Book of Houses sends it from your "
-        "mailbox. To arrange a TIME (a call, a meeting, a visit) the act is kind meeting, NOT an email: declare a meeting act with the invitee, a duration, a window and a message you write to open the invite, and the platform reads the calendar, offers three times and books the pick. Never email someone to ask their times, and never ask the person for their own availability (REJ-28). The person never sends anything: a step that asks them to Send, or a plan where "
+        "mailbox. To arrange a TIME (a call, a meeting, a visit) the act is kind meeting, NOT "
+        "an email: declare a meeting act with the invitee, a duration, a window and a message "
+        "you write to open the invite, and the platform reads the calendar, offers three times "
+        "and books the pick. Never email someone to ask their times, and never ask the person "
+        "for their own availability (REJ-28). The person never sends anything: a step that asks "
+        "them to Send, or a plan where "
         "every step is the person's and you do nothing yourself, is refused (REJ-26). Say in the "
         "pitch what you will do yourself. Never a separate compose step and never a separate "
         "confirm-it-was-sent step. THE FOUR QUESTIONS ARE TAPS (rules 168 and 170): every "
@@ -1458,7 +1495,18 @@ def _process_market_opportunities(
         "refused REJ-15. A two-way question is single_choice with both answers spelled out; "
         "a yes/no is yes_no; several related facts are ONE structured_form with named "
         "fields; dates are date_time or schedule. Pre-fill the options from the brief. "
-        "Approve, grant and payment formats are refused on a question.\n\n"
+        "Approve, grant and payment formats are refused on a question. "
+        "THE WANT NAMES ITS BLOCKS (rules 228 and 229): the brief carries "
+        "required_blocks, required_blocks_reason and plan_template, always, and [] means "
+        "the want needs none. When plan_template is not empty, every template step must be "
+        "in the plan, COPIED AS GIVEN, with only its <angle bracket> blanks filled: the "
+        "fields inside acts, declared_odds and declared_odds_reason. Do not rewrite a block "
+        "step's title, outcome_promise or har_blocks -- the platform writes those at "
+        "signing, files the act itself when the step opens and files that step's outcome "
+        "when it runs. On a meeting act put the person's context in message, with no dates "
+        "and no times in it, and leave `with` out unless the invitee's address is actually "
+        "known. Your own work steps go before or after it. A plan missing a required block "
+        "is refused REJ-32; read the fields for a kind with toll_bench.list_act_kinds.\n\n"
         + json.dumps(
             {
                 "candidate_targets": candidates,

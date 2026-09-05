@@ -815,10 +815,42 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.read_brief",
-            "Read the current full brief and this agent's bid state for one open target.",
+            (
+                "Read the current full brief and this agent's bid state for one open "
+                "target. THE BRIEF NAMES THE BLOCKS (contract 2.44, rules 228 and 229): "
+                "required_blocks is the act kinds this want cannot be delivered without, "
+                "required_blocks_reason says why in one sentence per kind, and "
+                "plan_template is one ready-to-file step per required block with "
+                "<angle bracket> blanks. All three are always present, and [] means the "
+                "want needs no block. When plan_template is not empty, COPY each step "
+                "into the plan as given and fill ONLY the blanks -- the fields inside "
+                "acts, declared_odds and declared_odds_reason. The platform rewrites a "
+                "block step's title, promise and har_blocks at signing, so rewriting "
+                "them here changes nothing. A plan missing a required block is refused "
+                "REJ-32."
+            ),
             _object_schema({"target_id": {"type": "string"}}, ["target_id"]),
         ),
         lambda context, arguments: require_toll_bench(context).read_brief(arguments["target_id"]),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.list_act_kinds",
+            (
+                "The act registry: every kind the platform can perform, with wanted_when "
+                "(which wants need it), declaration (the bid-time fields to put in a "
+                "step's acts, no context needed) and template (the step, ready to file). "
+                "Read it before declaring a block; the fields belong to the kind, and "
+                "fields it refuses come back REJ-33 in the kind's own sentence. For "
+                "meeting: with (the invitee's email, OPTIONAL -- leave it out and the "
+                "person is asked for it on their card), with_name, duration_min (15 to "
+                "240), window ('next week' | 'this week' | 'next N days' | {start, end}), "
+                "title, and message, your words that open the invitation, carrying NO "
+                "dates and NO times."
+            ),
+            _object_schema({}, []),
+        ),
+        lambda context, _: require_toll_bench(context).list_act_kinds(),
     )
     registry.register(
         ToolDefinition(
@@ -856,8 +888,22 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.submit_proposal",
             (
                 "File one final sealed proposal. Read the live protocol and brief, then "
-                "validate the exact proposal first. THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
-                "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the closed capability taxonomy -- call toll_bench.capability_taxonomy or read the schema, never invent a key); wins (up to 3 {deal_id, note}, each naming one of THIS AGENT'S OWN deals that ended resolved -- it is checked against the record, so cite a real one or send [] if there are none, which is not a penalty); research_links (1..3 {url, note} actually looked up for THIS want); and skill_research (what this agent learned about this want before writing the plan, 1..600 chars). Do the research before filing -- that is the point of the blocks. "
+                "validate the exact proposal first. THE WANT NAMES ITS BLOCKS (contract "
+                "2.44, rule 228): when the brief's plan_template is not empty, every "
+                "template step must be in this plan, copied as given with only its "
+                "<angle bracket> blanks filled -- a plan declaring no act of a required "
+                "kind is refused REJ-32, and the refusal hands back the same template. "
+                "THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
+                "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent "
+                "will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the "
+                "closed capability taxonomy -- call toll_bench.capability_taxonomy or read the "
+                "schema, never invent a key); wins (up to 3 {deal_id, note}, each naming one of "
+                "THIS AGENT'S OWN deals that ended resolved -- it is checked against the "
+                "record, so cite a real one or send [] if there are none, which is not a "
+                "penalty); research_links (1..3 {url, note} actually looked up for THIS want); "
+                "and skill_research (what this agent learned about this want before writing the "
+                "plan, 1..600 chars). Do the research before filing -- that is the point of the "
+                "blocks. "
                 "finalist_questions is one array of four, "
                 "and each entry is a HAR block {id, format, title, config} -- the same shape "
                 "a step's har_blocks carries -- or a legacy plain string. AT MOST TWO of the "
@@ -1099,7 +1145,13 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "step and approves, sends back, or stops, and the receipt lands on the "
                 "ledger. Your step stays yours; when the act is done, file your outcome "
                 "as usual. Never ask the person to send an email or make the calendar "
-                "entry themselves. RULE 220 -- ANSWERING A REPLY IS AN ACT: when "
+                "entry themselves. A BLOCK STEP IS NOT YOURS TO FILE (rule 229): when a "
+                "step of your plan declared a registry block, the PLATFORM files that act "
+                "the moment the step opens and files the step outcome when it executes. "
+                "Read declared_acts and acts on current_step: a standing or performed "
+                "block means file nothing, wait. After a deny or a failure the step is "
+                "yours again, and then you file ONE changed act. "
+                "RULE 220 -- ANSWERING A REPLY IS AN ACT: when "
                 "owed_replies on this step is not empty, the ONLY act it takes is "
                 "the answer. Send kind email with in_reply_to set to that reply's "
                 "id and your body_text; everything else on the step is refused "
@@ -1349,7 +1401,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.file_outcome",
             (
                 "File the current step's final handover after a 100% pulse. Send exactly one of "
-                "text or document; APPROVE review steps require a sectioned document."
+                "text or document; APPROVE review steps require a sectioned document. NOT ON A "
+                "BLOCK STEP (rule 229): where your plan declared a registry block, the platform "
+                "files the outcome itself from the receipt words when the act executes, and that "
+                "row reads actor: platform. File nothing there."
             ),
             _object_schema(
                 {

@@ -44,6 +44,13 @@ informed plan - yours is the only plan the person is waiting on; each answer car
 answer_value and format beside the person's words, so read the structured value and not only
 the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
 block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
+The want names the blocks it cannot be delivered without: read required_blocks and
+plan_template on the brief, copy each template step into your plan as given and fill only its
+angle-bracket blanks, or the plan is refused REJ-32 (rules 228 and 229). A declared block is the
+platform's from there: it writes that step's title, promise and blocks at signing, files the act
+itself when the step opens and files that step's outcome when the act runs, so you file neither
+an act nor an outcome on it. After a deny or a failure the step is yours again, with the person's
+words on current_step, and you file ONE changed act.
 Deals may resolve without a
 satisfaction score; that is normal and not a signal about your work. Evidence of your own work -
 a delivery receipt, a send confirmation, proof of the thing done - is YOURS to file as an

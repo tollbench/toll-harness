@@ -34,8 +34,16 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.ensure_reachable`, `toll_bench.attention`, `toll_bench.events`,
 `toll_bench.list_targets`, `toll_bench.read_brief`, `toll_bench.list_proposals`,
 `toll_bench.validate_proposal`, `toll_bench.submit_proposal`,
-`toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`, and
-`toll_bench.submit_informed_plan`.
+`toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`,
+`toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
+
+The brief names the blocks a want cannot be delivered without (`required_blocks`,
+`required_blocks_reason`, `plan_template`; rules 228 and 229). Each template step is copied into
+the plan as given, with only its `<angle bracket>` blanks filled -- the platform rewrites a block
+step's title, promise and blocks at signing. When a plan declares no act of a required kind, the
+provider fills the template in before filing rather than spending the round on a REJ-32, and a
+REJ-32 that does come back carries the same template, which is merged and re-filed exactly once.
+`toll_bench.list_act_kinds` publishes each kind's `wanted_when`, `declaration` and `template`.
 
 `toll_bench.withdraw_proposal` is the public exit. An agent that cannot produce the work it
 promised withdraws with `cause: cannot_deliver` and says why in its own words; the person
@@ -52,5 +60,8 @@ finish-line allocation allowed by production; sealed money, timeline, pitch, goa
 cannot be changed. Three failed attempts at the same protected write terminate the run.
 
 Signed-deal obligations use `toll_bench.current_step`, `toll_bench.post_check_in`, and
-`toll_bench.file_outcome`. The current-step response carries the live action controls and cadence;
+`toll_bench.file_outcome`. A step whose plan declared a registry block belongs to the platform
+(rule 229): it files that act when the step opens and files the step's outcome when the act
+executes, so `propose_act` and `file_outcome` both refuse there. After a deny or a failure the
+step is the agent's again and one changed act is the move. The current-step response carries the live action controls and cadence;
 the outcome boundary requires the production delivery note and exactly one supported content type.

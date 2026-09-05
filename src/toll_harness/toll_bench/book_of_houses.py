@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
+from toll_harness.toll_bench import blocks
+
+_LOGGER = logging.getLogger("toll_harness.toll_bench")
+
+# The refusal codes the block door speaks (contract 2.44, rules 228 and 229).
+REJ_REQUIRED_BLOCK = "REJ-32"
+REJ_BLOCK_DECLARATION = "REJ-33"
+REJ_HOLLOW_BLOCK = "REJ-34"
+
+# An act in one of these states is standing: it is the person's move or it has
+# already run. Filing another copy of the same kind is a duplicate.
+LIVE_ACT_STATES: frozenset[str] = frozenset(
+    {"pending", "held", "approved", "executed", "sent"}
+)
+
+# Kinds the platform files and closes on a block step when the catalog cannot
+# be read. Today the registry publishes a `declaration` for exactly one.
+BLOCK_KINDS_FALLBACK: frozenset[str] = frozenset({"meeting"})
 
 # RULES 168 AND 170, APPLIED TO THE FOUR QUESTIONS (contract 2.37, 2026-09-04).
 # The finalist questions were the last person-facing ask outside HAR: four plain
@@ -335,6 +354,17 @@ class BookOfHousesTollBenchProvider:
         # this long for its ack.
         self._reachable_cached: dict[str, Any] | None = None
         self._reachable_until = 0.0
+        # Contract 2.44 state. The act registry is fetched once per process;
+        # the block memo is what the last current_step said about which steps
+        # the platform is running itself (rule 229), so the harness never
+        # files an act or an outcome on a block it does not own; and the
+        # refusal counter is what keeps ONE correction from becoming a loop
+        # (a harness filed and withdrew about a hundred times in 90 minutes on
+        # 2026-09-04).
+        self._act_kinds: dict[str, Any] | None = None
+        self._platform_blocks: dict[str, dict[str, Any]] = {}
+        self._last_step_id: str | None = None
+        self._block_refusals: dict[str, int] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -412,6 +442,105 @@ class BookOfHousesTollBenchProvider:
 
     def read_brief(self, target_id: str) -> dict[str, Any]:
         return self.api.target_brief(target_id)
+
+    def list_act_kinds(self) -> dict[str, Any]:
+        """The act registry (contract 2.44). Each kind publishes `wanted_when`
+        (which wants need it), `declaration` (the bid-time fields, no context
+        needed) and `template` (the step, ready to file). Read it before
+        declaring a block: the fields are the kind's, not the harness's."""
+        if self._act_kinds is None:
+            self._act_kinds = self.api.act_kinds()
+        return self._act_kinds
+
+    def _block_kinds(self) -> frozenset[str]:
+        """The kinds the PLATFORM writes, files, runs and closes (rule 229).
+
+        A kind that publishes a `declaration` or a `template` is a block: its
+        step is written at signing and its act is filed by the platform when
+        the step opens. Read once, best effort; the fallback is the one kind
+        that publishes them today.
+        """
+        try:
+            catalog = self.list_act_kinds().get("kinds") or {}
+        except Exception:  # noqa: BLE001 - a catalog read must never block work
+            return BLOCK_KINDS_FALLBACK
+        found = {
+            str(name).strip().lower()
+            for name, entry in catalog.items()
+            if isinstance(entry, dict) and (entry.get("declaration") or entry.get("template"))
+        }
+        return frozenset(found) or BLOCK_KINDS_FALLBACK
+
+    def _brief_for(self, target_id: str) -> dict[str, Any]:
+        """The live brief, or an empty dict. Never raises except on a 404.
+
+        The blocks a want requires ride the brief, so the bid path reads it
+        once and uses it for the fleet round, the required blocks and the
+        template. A brief we cannot read means no local block repair, never a
+        refused filing.
+        """
+        try:
+            response = self.api.target_brief(target_id)
+        except BookOfHousesApiError:
+            raise
+        except Exception as error:  # noqa: BLE001 - a brief read never blocks a bid
+            _LOGGER.warning("Brief read failed for target %s: %s", target_id, error)
+            return {}
+        return response.get("brief") or {}
+
+    def _block_refusal(
+        self, target_id: str, error: BookOfHousesApiError
+    ) -> dict[str, Any]:
+        """One correction, then the round is over.
+
+        REJ-33 and REJ-34 are format refusals the model can fix: the kind's
+        own sentence says what is wrong. It gets exactly one correction. The
+        second identical door closing is terminal for this round and logged,
+        because a harness that keeps re-filing spends the person's board and
+        teaches itself nothing.
+        """
+        count = self._block_refusals.get(target_id, 0) + 1
+        self._block_refusals[target_id] = count
+        terminal = count > 1
+        if terminal:
+            _LOGGER.warning(
+                "Block refusal %s on target %s for the %d time: terminal for this round",
+                error.rej,
+                target_id,
+                count,
+            )
+        payload: dict[str, Any] = {
+            "ok": False,
+            "error": "block_declaration_refused",
+            "rej": error.rej,
+            "detail": error.message,
+            "attempt": count,
+            "terminal": terminal,
+            "message": (
+                "The bench refused the declared block in the kind's own words. "
+                "Fix the fields it names and file once more."
+                if not terminal
+                else (
+                    "The bench refused the declared block again. This round is "
+                    "over for this want; do not file it a third time."
+                )
+            ),
+        }
+        if error.plan_template:
+            payload["plan_template"] = error.plan_template
+        return payload
+
+    def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
+        """What the platform is running on this step, or None.
+
+        RULE 229: a block is a step the platform writes, files, runs and
+        closes. When its act is standing or already executed, the harness has
+        no move on it: filing another act is a duplicate (409) and filing the
+        outcome takes words that are the platform's to write. The memo is fed
+        by current_step, the call the deal dispatch already makes.
+        """
+        entry = self._platform_blocks.get(str(step_id or ""))
+        return entry if entry and entry.get("kinds") else None
 
     def list_proposals(self) -> dict[str, Any]:
         return {"ok": True, "proposals": self.api.proposals()}
@@ -537,20 +666,60 @@ class BookOfHousesTollBenchProvider:
                     )
                     break
                 prev_val, prev_idx = v, i
+        # RULE 229 / REJ-33 (contract 2.44): a declared block's fields are the
+        # KIND'S, and the kind refuses them in its own sentence. The same
+        # limits are checked here -- the window grammar, the duration range,
+        # the invitee address, and a message carrying a date or a clock time --
+        # so a window typo never costs the one bid this target allows.
+        problems.extend(blocks.declaration_problems(steps))
         return {
             "ok": not problems,
             "problems": problems,
             "note": (
                 "Local validation uses the current production JSON schema plus required "
                 "pitch, goal, `finalist_questions` (block shape, the two-text cap, and the "
-                "choice-worded text box) and declared-odds-line checks. Production remains "
-                "authoritative at submit."
+                "choice-worded text box), declared-odds-line and declared-block field "
+                "checks. Production remains authoritative at submit."
             ),
         }
 
     def submit_proposal(
         self, target_id: str, proposal: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
+        # RULE 228 (contract 2.44). The brief NAMES the blocks this want cannot
+        # be delivered without, and publishes the step to file for each one. A
+        # plan missing one is REJ-32 -- and a refused filing on a one-bid-per
+        # -target board is the whole round. So the form is filled here, from
+        # the model's own plan, BEFORE the door sees it. What forced it: three
+        # agents bid a meeting want, none declared a meeting act, and none of
+        # them got a meeting booked.
+        try:
+            brief = self._brief_for(target_id)
+        except BookOfHousesApiError as error:
+            if error.status == 404:
+                return {
+                    "ok": False,
+                    "error": "target_not_open",
+                    "terminal": True,
+                    "message": (
+                        "Production reports this target is not open. "
+                        "No proposal was filed; do not retry it."
+                    ),
+                }
+            raise
+        proposal, inserted = blocks.merge_required_blocks(
+            proposal,
+            brief.get("required_blocks"),
+            brief.get("plan_template"),
+            want=brief.get("want"),
+        )
+        if inserted:
+            _LOGGER.warning(
+                "Plan for target %s declared no %s block; filled the brief's "
+                "template step and filed that",
+                target_id,
+                ", ".join(inserted),
+            )
         validation = self.validate_proposal(proposal)
         if not validation["ok"]:
             return {"ok": False, "error": "local_validation_failed", **validation}
@@ -571,23 +740,8 @@ class BookOfHousesTollBenchProvider:
         if fleet_engaged:
             # A repost reuses the target id and bumps the brief's `round`, so
             # the fleet ledger must be keyed by the CURRENT round or slots from
-            # a dead round block the repost forever. Read it from the live
-            # brief; the same read also catches a target that already closed.
-            try:
-                brief_response = self.api.target_brief(target_id)
-            except BookOfHousesApiError as error:
-                if error.status == 404:
-                    return {
-                        "ok": False,
-                        "error": "target_not_open",
-                        "terminal": True,
-                        "message": (
-                            "Production reports this target is not open. "
-                            "No proposal was filed; do not retry it."
-                        ),
-                    }
-                raise
-            brief = brief_response.get("brief") or {}
+            # a dead round block the repost forever. It comes off the same
+            # brief the required blocks came from, one read for both.
             target_round = str(brief.get("round") or 1)
             your_bid = brief.get("your_bid") or None
             if your_bid:
@@ -642,8 +796,54 @@ class BookOfHousesTollBenchProvider:
                 }
             idempotency_key = reservation.idempotency_key
         try:
-            result = self.api.submit_proposal(target_id, proposal, idempotency_key)
+            try:
+                result = self.api.submit_proposal(target_id, proposal, idempotency_key)
+            except BookOfHousesApiError as first:
+                # RULE 228: THE REFUSAL CARRIES THE FORM. A REJ-32 body holds
+                # the same plan_template the brief published, so the one move
+                # left is to fill it in and file once. Once: a second refusal
+                # is the round, not a retry loop.
+                if first.rej != REJ_REQUIRED_BLOCK or not first.plan_template:
+                    raise
+                proposal, repaired = blocks.merge_required_blocks(
+                    proposal,
+                    [
+                        str(act.get("kind"))
+                        for step in first.plan_template
+                        if isinstance(step, dict)
+                        for act in (step.get("acts") or [])
+                        if isinstance(act, dict) and act.get("kind")
+                    ],
+                    first.plan_template,
+                    want=brief.get("want"),
+                )
+                if not repaired:
+                    raise
+                _LOGGER.warning(
+                    "Target %s refused the bid REJ-32; filed the template step "
+                    "the refusal carried (%s) and re-filed once",
+                    target_id,
+                    ", ".join(repaired),
+                )
+                result = self.api.submit_proposal(
+                    target_id, proposal, f"{idempotency_key}-rej32"
+                )
         except BookOfHousesApiError as error:
+            if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
+                if fleet_engaged and reservation is not None:
+                    self.fleet.release_reservation(
+                        target_id=target_id,
+                        target_round=target_round,
+                        agent_id=self.fleet_agent_id,
+                    )
+                refusal = self._block_refusal(target_id, error)
+                if refusal["terminal"] and fleet_engaged:
+                    self.fleet.mark_target_reviewed(
+                        agent_id=self.fleet_agent_id,
+                        target_id=target_id,
+                        target_round=target_round,
+                    )
+                return refusal
             if fleet_engaged and reservation is not None and 400 <= error.status < 500:
                 self.fleet.release_reservation(
                     target_id=target_id,
@@ -773,6 +973,36 @@ class BookOfHousesTollBenchProvider:
                     merged_step["ask"] = original_step.get("ask")
                 merged_steps.append(merged_step)
             submitted_plan["steps"] = merged_steps
+        # RULE 228 at the SECOND door. The informed plan runs through the same
+        # validator as the bid, so a revision that drops the want's required
+        # block is REJ-32 here too -- and this is the filing the person is
+        # already waiting on. The brief carries the form; fill it and file it.
+        try:
+            brief = self._brief_for(target_id)
+        except BookOfHousesApiError as error:
+            # A want whose agent is already selected can stop answering the
+            # open-target brief. The plan the person is waiting on must still
+            # file: without the form here, the REJ-32 refusal still carries it.
+            _LOGGER.warning(
+                "Brief unavailable for target %s at plan time (%s); relying on "
+                "the refusal to carry the template",
+                target_id,
+                error.code,
+            )
+            brief = {}
+        submitted_plan, inserted = blocks.merge_required_blocks(
+            submitted_plan,
+            brief.get("required_blocks"),
+            brief.get("plan_template"),
+            want=brief.get("want"),
+        )
+        if inserted:
+            _LOGGER.warning(
+                "Informed plan for target %s declared no %s block; filed the "
+                "brief's template step",
+                target_id,
+                ", ".join(inserted),
+            )
         candidate = {
             key: original.get(key)
             for key in (
@@ -813,9 +1043,38 @@ class BookOfHousesTollBenchProvider:
                     "allocation": original.get("allocation"),
                 },
             }
-        return self.api.submit_informed_plan(
-            target_id, proposal_id, submitted_plan, idempotency_key
-        )
+        try:
+            return self.api.submit_informed_plan(
+                target_id, proposal_id, submitted_plan, idempotency_key
+            )
+        except BookOfHousesApiError as error:
+            if error.rej == REJ_REQUIRED_BLOCK and error.plan_template:
+                submitted_plan, repaired = blocks.merge_required_blocks(
+                    submitted_plan,
+                    [
+                        str(act.get("kind"))
+                        for step in error.plan_template
+                        if isinstance(step, dict)
+                        for act in (step.get("acts") or [])
+                        if isinstance(act, dict) and act.get("kind")
+                    ],
+                    error.plan_template,
+                    want=brief.get("want"),
+                )
+                if repaired:
+                    _LOGGER.warning(
+                        "Informed plan for target %s refused REJ-32; filed the "
+                        "template the refusal carried (%s) and re-filed once",
+                        target_id,
+                        ", ".join(repaired),
+                    )
+                    return self.api.submit_informed_plan(
+                        target_id, proposal_id, submitted_plan,
+                        f"{idempotency_key}-rej32",
+                    )
+            if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
+                return self._block_refusal(target_id, error)
+            raise
 
     def current_step(self, deal_id: str) -> dict[str, Any]:
         result = self.api.current_step(deal_id)
@@ -825,7 +1084,7 @@ class BookOfHousesTollBenchProvider:
         access = result.get("access") or {}
         material = access.get("material_change") or {}
         swap = access.get("equivalent_swap") or {}
-        return {
+        payload = {
             "ok": result.get("ok", True),
             "deal": {
                 key: deal.get(key)
@@ -905,9 +1164,58 @@ class BookOfHousesTollBenchProvider:
             # DEAD -- this whitelist is exactly why that reason never reached
             # a railed model and one idled for hours.
             "acts": result.get("acts") or [],
+            # The acts this step's PLAN declared, each with the door, an
+            # example body and the one move that is yours on it. A raw agent
+            # spent a whole run guessing REST shapes for a door that rode this
+            # payload; this whitelist dropped it until contract 2.44, which is
+            # the same bug in the other direction.
+            "declared_acts": result.get("declared_acts") or [],
             # contract 2.29: the same rows, email-only, in the older shape.
             "drafts_sent_back": result.get("drafts_sent_back") or [],
         }
+        self._remember_platform_blocks(step.get("id"), payload)
+        return payload
+
+    def _remember_platform_blocks(
+        self, step_id: Any, payload: dict[str, Any]
+    ) -> None:
+        """Record which declared blocks the platform is running on this step.
+
+        RULE 229: on a block step the platform files the act when the step
+        opens and files the outcome when the act executes. The harness has to
+        know that without asking, or it files a duplicate act (409) and an
+        outcome in words that are not its own. A declared kind is the
+        platform's while an act of that kind is standing or already executed;
+        a failed or denied one is the work coming back (rule 225) and the step
+        is the agent's again.
+        """
+        step_id = str(step_id or "")
+        if not step_id:
+            return
+        self._last_step_id = step_id
+        live: dict[str, str] = {}
+        for act in payload.get("acts") or []:
+            if not isinstance(act, dict):
+                continue
+            kind = str(act.get("kind") or "").strip().lower()
+            state = str(act.get("state") or "").strip().lower()
+            if kind and state in LIVE_ACT_STATES:
+                live[kind] = state
+        declared = {
+            str(entry.get("kind") or "").strip().lower()
+            for entry in payload.get("declared_acts") or []
+            if isinstance(entry, dict)
+        }
+        block_kinds = self._block_kinds()
+        owned = {
+            kind: state
+            for kind, state in live.items()
+            if kind in block_kinds and (not declared or kind in declared)
+        }
+        if owned:
+            self._platform_blocks[step_id] = {"kinds": owned}
+        else:
+            self._platform_blocks.pop(step_id, None)
 
     def reply_step_message(
         self,
@@ -1014,6 +1322,32 @@ class BookOfHousesTollBenchProvider:
                    # rule 223: the meeting kind's intent fields
                    "with", "with_name", "duration_min", "window", "title",
                    "offer_count", "message"}
+        # RULE 229: HANDS OFF A BLOCK THE PLATFORM IS RUNNING. It filed the
+        # act itself when the step opened; a second copy is a duplicate the
+        # bench refuses 409, and the person sees two Allow cards for one
+        # meeting. An ANSWER to an owed reply is never that (rule 220), so it
+        # goes through.
+        owned = self._platform_owned(step_id)
+        kind_asked = str(act.get("kind") or "email").strip().lower()
+        if (
+            owned
+            and kind_asked in owned["kinds"]
+            and not str(act.get("in_reply_to") or "").strip()
+        ):
+            return {
+                "ok": False,
+                "error": "platform_owned_block",
+                "kind": kind_asked,
+                "state": owned["kinds"][kind_asked],
+                "message": (
+                    f"This step's {kind_asked} block is the platform's to file "
+                    "and to close (rule 229): it filed the act when the step "
+                    "opened and it files the step's outcome when the act "
+                    "executes. File nothing here. Watch current_step, answer "
+                    "the person's messages, and file a changed act only after "
+                    "a deny or a failure."
+                ),
+            }
         unexpected = sorted(set(act) - allowed)
         if unexpected:
             return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
@@ -1133,6 +1467,25 @@ class BookOfHousesTollBenchProvider:
     def file_outcome(
         self, target_id: str, outcome: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
+        # RULE 229: the platform files a block step's outcome, from the
+        # receipt's own words, and that ledger row reads actor: platform. An
+        # agent-written outcome on the same step is a second telling of the
+        # platform's story, and the person approves whichever landed first.
+        step_ref = str(outcome.get("step_ref") or "").strip() or self._last_step_id
+        owned = self._platform_owned(step_ref) if step_ref else None
+        if owned:
+            return {
+                "ok": False,
+                "error": "platform_owned_block",
+                "kinds": sorted(owned["kinds"]),
+                "message": (
+                    f"The {', '.join(sorted(owned['kinds']))} block on this "
+                    "step files its own outcome when the act executes (rule "
+                    "229), and the person's APPROVE opens on the platform's "
+                    "receipt words. Do not file one. If the act failed or was "
+                    "denied, the step is yours again: file a changed act."
+                ),
+            }
         allowed = {"note", "text", "document", "step_ref"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
