@@ -1,5 +1,37 @@
-"""RULES 228 AND 229 (contract 2.44) -- the want names its blocks, and a
-declared block files itself.
+"""RULE 228 AMENDED (contract 3.0, 2026-09-05) -- THE TEMPLATE IS A FORM.
+
+Steven, 2026-09-05: "I want the want to be a posting and I want the agents to
+respond to it. I want a template that is flexible. I don't want to do any work
+for the agents." So the classifier is gone. On contract 3.0 the brief carries
+``required_blocks: []`` for every want, ``required_blocks_reason: null``, and
+REJ-32 never fires. What it carries instead is a FORM, identical for every
+want:
+
+* ``plan_template``   -- a blank SKELETON: the fewest work steps this target's
+                         band allows, mechanics filled and every agent-owned
+                         word an explicit ``""`` / ``null`` / ``[]``.
+* ``block_templates`` -- ``{kind: [step, ...]}``, the catalog the agent pulls
+                         from. A block that runs on a connection is TWO steps,
+                         the GRANT first (rule 230).
+* ``bid_template``    -- the whole bid payload around that skeleton.
+* ``bid_template_notes`` -- ``[{path, note, example, required}]``, one line per
+                         blank. That list is the agent's to-do, not ours.
+
+THE DANGER THIS MODULE NOW GUARDS. The old prompt said "copy EVERY template
+step as given and fill only its angle-bracket blanks". Against a 3.0 skeleton
+that is an instruction to file three steps with an empty title and an empty
+promise, which the door refuses and which is not a plan at all. So before a
+filing is spent on it, every step the model copied and never filled is DROPPED
+here -- unless the platform wrote it (an act kind, or a grant request), in
+which case its blanks are the platform's and it stays. Nothing here ever
+writes a word of the agent's: hands off applies to the harness too. A plan
+that falls below the band floor once the blanks are gone is not filed, and
+says so.
+
+RULES 228 (original) AND 229 (contract 2.44) -- the want names its blocks, and
+a declared block files itself. Still live for an OLDER bench, which may send a
+non-empty ``required_blocks`` and an angle-bracket ``plan_template``, so every
+repair below is kept exactly as it was.
 
 WHAT FORCED THIS. One meeting want drew three agents and none of them got a
 meeting booked. The third dropped the act altogether and filed a text document
@@ -156,6 +188,88 @@ def declared_kinds(steps: Any) -> list[str]:
                 if kind:
                     kinds.append(kind)
     return kinds
+
+
+# The two fields on a step that are the AGENT'S words and nobody else's. The
+# form ships them blank and the notes list them; a step still carrying both
+# blanks was copied, not written.
+AGENT_OWNED_STEP_WORDS: tuple[str, ...] = ("title", "outcome_promise")
+
+
+def platform_written(step: Any) -> bool:
+    """True when the PLATFORM owns this step's words (rule 229).
+
+    A step that declares an act kind, or asks for a grant, is a block: the
+    platform writes its title, promise and control at signing, files the act
+    when the step opens and closes the step when the act runs. Its blanks are
+    not the agent's to fill, so it is never stripped as unfilled.
+    """
+    if not isinstance(step, dict):
+        return False
+    if step_kinds(step):
+        return True
+    request = step.get("grant_request")
+    if isinstance(request, dict) and request:
+        return True
+    return intended_grant_provider(step) is not None
+
+
+def unfilled_step(step: Any) -> bool:
+    """True for a step that is still exactly the form's blank.
+
+    Both agent-owned words empty. One of the two filled is a step the model
+    WROTE and got half right: it keeps its place and the door names the field
+    it left, because throwing it away would throw away the model's words.
+    """
+    if not isinstance(step, dict):
+        return False
+    return all(is_blank(step.get(field)) for field in AGENT_OWNED_STEP_WORDS)
+
+
+def blank_form_steps(steps: Any) -> list[int]:
+    """The indexes of steps the model copied off the form and never filled."""
+    return [
+        index
+        for index, step in enumerate(steps if isinstance(steps, list) else [])
+        if unfilled_step(step) and not platform_written(step)
+    ]
+
+
+def drop_blank_form_steps(
+    proposal: dict[str, Any], *, floor: int | None = None
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Strip every step that is still the form's blank. Never writes a word.
+
+    Returns ``(proposal, dropped, below_floor)``. ``dropped`` is one label per
+    removed step, for the log. ``below_floor`` is True when what is left is
+    shorter than ``floor`` -- the band minimum, which is exactly the length of
+    the brief's own skeleton -- and the caller must then NOT file: a plan whose
+    every step was the blank form is not a plan, and the honest move is to hand
+    the model back its own empty page rather than spend the round.
+    """
+    original = proposal.get("steps")
+    steps = list(original) if isinstance(original, list) else []
+    blanks = blank_form_steps(steps)
+    if not blanks:
+        return proposal, [], False
+    kept = [step for index, step in enumerate(steps) if index not in set(blanks)]
+    dropped = [f"step {index + 1} (blank form step)" for index in blanks]
+    below = floor is not None and len(kept) < int(floor)
+    trimmed = dict(proposal)
+    trimmed["steps"] = kept
+    return trimmed, dropped, below
+
+
+def band_floor(plan_template: Any) -> int | None:
+    """The fewest steps this target's band allows, per the brief's own form.
+
+    The skeleton IS the floor: the bench builds it at exactly the band minimum
+    (REJ-12). Reading it off the template keeps the number the server's rather
+    than a copy of it here.
+    """
+    if not isinstance(plan_template, list) or not plan_template:
+        return None
+    return len(plan_template)
 
 
 def step_kinds(step: Any) -> list[str]:

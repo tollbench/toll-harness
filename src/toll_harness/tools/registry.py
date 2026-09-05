@@ -817,23 +817,27 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.read_brief",
             (
                 "Read the current full brief and this agent's bid state for one open "
-                "target. THE BRIEF NAMES THE BLOCKS (contract 2.46, rules 228, 229 and 230): "
-                "required_blocks is the act kinds this want cannot be delivered without, "
-                "required_blocks_reason says why in one sentence per kind, and "
-                "plan_template is one ready-to-file step per required block with "
-                "<angle bracket> blanks. All three are always present, and [] means the "
-                "want needs no block. When plan_template is not empty, COPY EVERY step "
-                "into the plan as given, IN THE TEMPLATE'S ORDER, and fill ONLY the "
-                "blanks -- the fields inside acts, declared_odds and "
-                "declared_odds_reason. The platform rewrites a block step's title, "
-                "promise and har_blocks at signing, so rewriting them here changes "
-                "nothing. For a meeting want the template is two steps (rule 230). Step 1 "
-                "connects the person's Google Calendar (a GRANT step). Step 2 is the meeting "
-                "block: Book of Houses reads the open times, shows the person the email and the "
-                "three times, and sends on their tap. Never plan a step where the person types "
-                "their own times, and never ask the person for their availability (REJ-28). "
-                "A plan missing a required block is refused REJ-32, and a meeting block "
-                "with no calendar GRANT step before it is refused REJ-35."
+                "target. THE BRIEF CARRIES A FORM, NOT A PLAN (contract 3.0, rule 228 "
+                "amended). plan_template is a blank SKELETON: the fewest steps this band "
+                "allows, mechanics filled, every agent-owned field an explicit \"\" or "
+                "null. block_templates is the catalog {kind: [steps]} to pull from when "
+                "the plan needs a block of that kind. bid_template is the whole bid "
+                "payload around that skeleton, and bid_template_notes names EVERY blank "
+                "with one line saying what belongs there -- that list is the to-do. "
+                "Start from the skeleton if it helps, but NEVER file it as handed over: "
+                "each blank kept must be filled in this agent's own words, and a step "
+                "still carrying an empty title or promise is not a plan. Nothing fills "
+                "them in for you. required_blocks is [] on this contract and [] means "
+                "YOU decide which blocks the want needs; an older bench may name a kind, "
+                "and then the plan must declare it or be refused REJ-32. Pull a block "
+                "from block_templates IN FULL and in its order: a block that runs on the "
+                "person's connection is TWO steps and the GRANT comes first (rule 230). "
+                "Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is "
+                "the meeting block: Book of Houses reads the open times, shows the person "
+                "the email and the three times, and sends on their tap. Never plan a step "
+                "where the person types their own times, and never ask the person for "
+                "their availability (REJ-28). A meeting block with no calendar GRANT step "
+                "before it is refused REJ-35."
             ),
             _object_schema({"target_id": {"type": "string"}}, ["target_id"]),
         ),
@@ -873,11 +877,27 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.validate_proposal",
-            "Validate a complete proposal against the current schema without filing it.",
-            _object_schema({"proposal": {"type": "object"}}, ["proposal"]),
+            (
+                "Check a complete proposal WITHOUT filing it. Pass target_id and this is "
+                "the bench's own door (contract 3.0): it runs the whole bid door and "
+                "returns EVERY problem at once as problems[{code, detail, step_index, "
+                "field, fix}], where fix is one sentence in plain words and step_index is "
+                "1-based. It writes no row, records no refusal and counts against no cap, "
+                "so call it as often as needed. corrected_plan is the same payload with "
+                "ONLY the mechanical fixes applied (a percentage divided to a fraction, a "
+                "missing default, arithmetic that did not add up) and corrected_ok true "
+                "means that plan passes the real door unchanged -- file it as it stands. "
+                "NO WORDS ARE EVER INVENTED: a blank title, promise, option or message "
+                "stays blank and comes back as its own problem. Without target_id, or "
+                "against an older bench, this is the offline mirror of the schema only."
+            ),
+            _object_schema(
+                {"proposal": {"type": "object"}, "target_id": {"type": "string"}},
+                ["proposal"],
+            ),
         ),
         lambda context, arguments: require_toll_bench(context).validate_proposal(
-            arguments["proposal"]
+            arguments["proposal"], arguments.get("target_id")
         ),
     )
     registry.register(
@@ -898,17 +918,24 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.submit_proposal",
             (
                 "File one final sealed proposal. Read the live protocol and brief, then "
-                "validate the exact proposal first. THE WANT NAMES ITS BLOCKS (contract "
-                "2.46, rules 228, 229 and 230): when the brief's plan_template is not "
-                "empty, EVERY template step must be in this plan, in the template's "
-                "order, copied as given with only its <angle bracket> blanks filled -- "
-                "a plan declaring no act of a required kind is refused REJ-32, a "
-                "meeting block with no calendar GRANT step before it is refused "
-                "REJ-35, and each refusal hands back the same template. Step 1 connects the "
-                "person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of "
-                "Houses reads the open times, shows the person the email and the three times, and"
-                " sends on their tap. Never plan a step where the person types their own times, "
-                "and never ask the person for their availability (REJ-28)."
+                "validate the exact proposal first with toll_bench.validate_proposal and "
+                "this target_id -- that door is free, files nothing and lists every "
+                "problem at once. THE BRIEF'S TEMPLATE IS A FORM (contract 3.0, rule 228 "
+                "amended): plan_template arrives blank, so a step filed with an empty "
+                "title or an empty outcome_promise is not a plan. Any step copied off the "
+                "form and left unfilled is DROPPED here before filing and nothing is "
+                "written in its place; if that leaves the plan below the band floor, "
+                "nothing is filed at all and you are asked to write the steps yourself. "
+                "Pull a block out of block_templates IN FULL when the plan needs one: a "
+                "block that runs on the person's connection is TWO steps and the GRANT "
+                "comes first (rule 230). Step 1 connects the person's Google Calendar (a "
+                "GRANT step). Step 2 is the meeting block: Book of Houses reads the open "
+                "times, shows the person the email and the three times, and sends on their "
+                "tap. Never plan a step where the person types their own times, and never "
+                "ask the person for their availability (REJ-28). A meeting block with no "
+                "calendar GRANT step before it is refused REJ-35, and an older bench may "
+                "still refuse a missing named block REJ-32; each refusal hands back the "
+                "same template."
                 "THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
                 "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent "
                 "will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the "

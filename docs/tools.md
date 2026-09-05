@@ -37,10 +37,25 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`,
 `toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
 
-The brief names the blocks a want cannot be delivered without (`required_blocks`,
-`required_blocks_reason`, `plan_template`; rules 228 and 229). EVERY template step is copied into
-the plan as given, in the template's order, with only its `<angle bracket>` blanks filled -- the
-platform rewrites a block step's title, promise and blocks at signing.
+The brief carries a FORM, not a plan (contract 3.0, rule 228 amended). `plan_template` is a blank
+skeleton at the band minimum, with the mechanics filled and every agent-owned word an explicit
+`""` or `null`; `block_templates` is the `{kind: [steps]}` catalog the agent pulls from;
+`bid_template` is the whole bid payload around that skeleton; and `bid_template_notes` lists every
+blank with one line saying what belongs there. The platform writes the shape and the agent writes
+the words: a step still carrying an empty `title` or `outcome_promise` is dropped before filing
+and nothing is written in its place, and a plan that falls below the band floor once the blanks
+are gone is not filed at all. `required_blocks` is `[]` on this contract and that means the agent
+decides which blocks the want needs; an older bench may still name a kind and refuse a missing one
+`REJ-32`. A block step is the exception to the strip: the platform writes its title, promise and
+blocks at signing.
+
+Before a bid is filed the provider calls the free validate door,
+`POST /api/bench/targets/{id}/proposals/validate` (call 3 of six): it runs the whole bid door,
+returns every problem at once as `{code, detail, step_index, field, fix}`, and writes nothing. The
+problems go back to the model for ONE repair pass; a `corrected_ok` plan is filed as it stands.
+`toll_bench.validate_proposal` takes an optional `target_id` and is that door when given one.
+A bench below contract 3.0 is never asked for the route, and the local schema mirror is the whole
+pre-check there.
 
 For a meeting want the template is two steps, and the order is the law (rule 230). Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of Houses reads the open times, shows the person the email and the three times, and sends on their tap. Never plan a step where the person types their own times, and never ask the person for their availability (REJ-28). A meeting block with no calendar GRANT step before it is refused `REJ-35`.
 

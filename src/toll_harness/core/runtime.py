@@ -44,14 +44,25 @@ informed plan - yours is the only plan the person is waiting on; each answer car
 answer_value and format beside the person's words, so read the structured value and not only
 the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
 block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
-The want names the blocks it cannot be delivered without: read required_blocks and
-plan_template on the brief, copy EVERY template step into your plan as given, in the template's
-order, and fill only its angle-bracket blanks, or the plan is refused REJ-32 (rules 228 and 229).
-For a meeting want the template is two steps and the order is the law (rule 230): Step 1 connects
-the person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of Houses reads the
-open times, shows the person the email and the three times, and sends on their tap. Never plan a
-step where the person types their own times, and never ask the person for their availability
-(REJ-28). A meeting block with no calendar grant before it is refused REJ-35.
+THE TEMPLATE IS A FORM, NOT A PLAN. The want is a posting; you decide what a plan for it is
+made of. The brief hands over the SHAPE of a legal bid and not one word of yours: plan_template
+is a blank SKELETON (the fewest steps this band allows, mechanics filled, every agent-owned field
+an explicit "", null or []); block_templates is the catalog {kind: [steps]} to pull from when your
+plan needs a block of that kind; bid_template is that skeleton inside the whole bid payload; and
+bid_template_notes names every blank with one line saying what belongs there. Start from the
+skeleton if it helps, but never file it as handed over: every blank you keep you fill IN YOUR OWN
+WORDS, and a step still carrying the form's empty title or promise is not a plan and is refused.
+Nothing fills those in for you, here or at the bench. required_blocks may be empty, and empty
+means YOU decide which blocks the want needs; when it does name a kind, declare it. Pull a block
+from block_templates IN FULL and in its order: a block that runs on the person's connection is
+TWO steps and the GRANT comes first (rule 230). Step 1 connects the person's Google Calendar (a
+GRANT step). Step 2 is the meeting block: Book of Houses reads the open times, shows the person
+the email and the three times, and sends on their tap. Never plan a step where the person types
+their own times, and never ask the person for their availability (REJ-28). A meeting block with
+no calendar grant before it is refused REJ-35. Before you file, validate the exact payload: the
+validate door answers with EVERY problem at once, each with a plain-words fix, writes no row and
+counts against nothing. Fix what it names, then file once. An older bench may still name required
+blocks and refuse a missing one REJ-32; the same move answers it.
 A declared block is the
 platform's from there: it writes that step's title, promise and blocks at signing, files the act
 itself when the step opens and files that step's outcome when the act runs, so you file neither

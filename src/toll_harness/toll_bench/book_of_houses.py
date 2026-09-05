@@ -19,6 +19,18 @@ REJ_HOLLOW_BLOCK = "REJ-34"
 REJ_BLOCK_GRANT = blocks.REJ_BLOCK_GRANT
 REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
 
+# CONTRACT 3.0 (2026-09-05): the free validate door, call 3 of six. It runs the
+# WHOLE bid door -- the shared validator plus the bid-only checks (REJ-14,
+# REJ-15, REJ-31) -- and answers with every problem at once, each carrying a
+# plain-words `fix`. It writes nothing: no row, no refusal, no idempotency key,
+# and open_bid_count does not move. A bench that reports a contract below this
+# has no such route and the local mirror is the whole pre-check there.
+VALIDATE_DOOR_MIN_CONTRACT_MAJOR = 3
+# One repair pass. The door is free, so the model gets its list of problems
+# back once and files on the next call; a harness that kept bouncing the same
+# plan would spend the run and teach itself nothing.
+MAX_DOOR_REPAIR_PASSES = 1
+
 
 def _retry_tag(rej: str | None) -> str:
     """The idempotency suffix for the one re-file a carried form earns."""
@@ -375,6 +387,10 @@ class BookOfHousesTollBenchProvider:
         self._platform_blocks: dict[str, dict[str, Any]] = {}
         self._last_step_id: str | None = None
         self._block_refusals: dict[str, int] = {}
+        # Contract 3.0: probed once per provider, then remembered. None means
+        # "not asked yet"; False means this bench publishes no validate door.
+        self._validate_door: bool | None = None
+        self._door_repairs: dict[str, int] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -498,6 +514,85 @@ class BookOfHousesTollBenchProvider:
             return {}
         return response.get("brief") or {}
 
+    def _door_is_published(self) -> bool:
+        """Whether this bench publishes the free validate door. Probed once.
+
+        The protocol call already rides every run and names the contract, so
+        the probe costs nothing extra and needs no guesswork: contract 3.0 is
+        where the door appears. A bench that answers 404 to the route anyway
+        (an odd deployment, a proxy) flips this to False on the first call and
+        the local mirror carries the rest of the run.
+        """
+        if self._validate_door is not None:
+            return self._validate_door
+        available = False
+        try:
+            version = str((self.protocol() or {}).get("contract_version") or "")
+            available = int(version.split(".")[0]) >= VALIDATE_DOOR_MIN_CONTRACT_MAJOR
+        except Exception:  # noqa: BLE001 - an unreadable protocol is "no door"
+            available = False
+        self._validate_door = available
+        return available
+
+    def validate_at_the_door(
+        self, target_id: str, proposal: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The bench's own answer on this plan, or None when there is no door.
+
+        Never raises for the absence of the route: a 404 whose body is not the
+        bench's own "target not found" envelope is a missing path, and an
+        older server simply has none. A 404 that IS the bench's envelope means
+        the target closed, and that belongs to the caller.
+        """
+        if not self._door_is_published():
+            return None
+        try:
+            return self.api.validate_proposal(target_id, proposal)
+        except BookOfHousesApiError as error:
+            if error.status in (404, 405) and error.code == "http_error":
+                _LOGGER.info(
+                    "This bench publishes no proposals/validate route; using "
+                    "the local mirror for the rest of this run"
+                )
+                self._validate_door = False
+                return None
+            if error.status in (401, 403):
+                # The token cannot open the door; the filing door may still
+                # take the bid, so this is a downgrade and not a refusal.
+                self._validate_door = False
+                return None
+            raise
+        except Exception as error:  # noqa: BLE001 - a free check never blocks a filing
+            _LOGGER.warning("Validate door call failed (%s); falling back", error)
+            return None
+
+    @staticmethod
+    def _door_problem_payload(
+        door: dict[str, Any], local: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """What the model reads back: every problem at once, with its fix."""
+        problems = [p for p in (door.get("problems") or []) if isinstance(p, dict)]
+        if local is not None and not local.get("ok"):
+            # The offline mirror sometimes knows one more thing (a schema the
+            # server has not published yet). It never blocks a filing, but a
+            # repair pass may as well carry it.
+            problems = problems + [
+                {
+                    "code": "LOCAL",
+                    "field": problem.get("path"),
+                    "detail": problem.get("message"),
+                    "fix": problem.get("message"),
+                    "step_index": None,
+                }
+                for problem in (local.get("problems") or [])
+                if isinstance(problem, dict)
+            ]
+        return {
+            "problems": problems,
+            "problem_count": len(problems),
+            "corrections": door.get("corrections") or [],
+        }
+
     def _block_refusal(
         self, target_id: str, error: BookOfHousesApiError
     ) -> dict[str, Any]:
@@ -581,7 +676,38 @@ class BookOfHousesTollBenchProvider:
     def list_proposals(self) -> dict[str, Any]:
         return {"ok": True, "proposals": self.api.proposals()}
 
-    def validate_proposal(self, proposal: dict[str, Any]) -> dict[str, Any]:
+    def validate_proposal(
+        self, proposal: dict[str, Any], target_id: str | None = None
+    ) -> dict[str, Any]:
+        """Check a plan before filing it.
+
+        With a `target_id` on a contract 3.0 bench this is the BENCH'S OWN
+        answer (call 3 of six): every problem at once, each with a plain-words
+        `fix`, plus `corrected_plan`/`corrected_ok` when the mechanics alone
+        could be fixed. It files nothing and counts against nothing. Without a
+        target_id, or against an older bench, it is the offline mirror below:
+        faster, always available, and never authoritative.
+        """
+        local = self._local_validation(proposal)
+        if not target_id:
+            return local
+        door = self.validate_at_the_door(target_id, proposal)
+        if door is None:
+            return {**local, "source": "local_mirror"}
+        payload = self._door_problem_payload(door, local)
+        return {
+            "ok": bool(door.get("ok")),
+            **payload,
+            "corrected_plan": door.get("corrected_plan"),
+            "corrected_ok": bool(door.get("corrected_ok")),
+            "source": "bench_validate_door",
+            "note": str(
+                door.get("note")
+                or "Nothing was filed. This call never writes a row."
+            ),
+        }
+
+    def _local_validation(self, proposal: dict[str, Any]) -> dict[str, Any]:
         schema = self.proposal_schema()
         try:
             from jsonschema import Draft202012Validator
@@ -761,11 +887,89 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(inserted),
             )
-        validation = self._grant_gap_never_blocks_the_filing(
+        # CONTRACT 3.0: THE TEMPLATE IS A FORM. `plan_template` is a blank
+        # skeleton -- the mechanics filled, every agent-owned word an explicit
+        # "" or null -- so a model that copies it files steps with no title
+        # and no promise. Those are dropped here, before the round is spent on
+        # them, and NOTHING is written in their place: the model's words or
+        # nothing (rule 228 amended, Steven 2026-09-05). A platform-written
+        # block step keeps its blanks, because they are the platform's.
+        proposal, dropped, below_floor = blocks.drop_blank_form_steps(
+            proposal, floor=blocks.band_floor(brief.get("plan_template"))
+        )
+        if dropped:
+            _LOGGER.warning(
+                "Plan for target %s copied the brief's form without filling it; "
+                "dropped %s",
+                target_id,
+                ", ".join(dropped),
+            )
+        if below_floor:
+            _LOGGER.warning(
+                "Plan for target %s was the blank form and nothing else; "
+                "nothing filed",
+                target_id,
+            )
+            return {
+                "ok": False,
+                "error": "plan_is_still_the_blank_form",
+                "dropped": dropped,
+                "terminal": False,
+                "message": (
+                    "Nothing was filed. The brief's plan_template is a blank FORM, "
+                    "not a plan: every step arrived with an empty `title` and an "
+                    "empty `outcome_promise` for you to write. Those steps were "
+                    "dropped and what is left is shorter than this band allows. "
+                    "Write each step in your own words -- the harness will not "
+                    "write them for you -- and submit again. bid_template_notes "
+                    "on the brief lists every blank."
+                ),
+            }
+        local = self._grant_gap_never_blocks_the_filing(
             self.validate_proposal(proposal), brief.get("plan_template")
         )
-        if not validation["ok"]:
-            return {"ok": False, "error": "local_validation_failed", **validation}
+        # THE BENCH IS AUTHORITATIVE, AND ITS ANSWER IS FREE (contract 3.0).
+        # The local mirror stays as the offline pre-check; when the bench
+        # publishes the validate door, the door decides, because a mirror that
+        # has drifted must never bury a plan the door would take.
+        door = self.validate_at_the_door(target_id, proposal)
+        if door is None:
+            if not local["ok"]:
+                return {"ok": False, "error": "local_validation_failed", **local}
+        elif not door.get("ok"):
+            corrected = door.get("corrected_plan")
+            if door.get("corrected_ok") and isinstance(corrected, dict):
+                # Mechanical fixes only -- the door invents no words -- and it
+                # has already run the whole bid door over the result.
+                _LOGGER.info(
+                    "Validate door corrected the mechanics of the plan for "
+                    "target %s (%s); filing the corrected plan",
+                    target_id,
+                    ", ".join(str(line) for line in (door.get("corrections") or [])),
+                )
+                proposal = corrected
+            else:
+                passes = self._door_repairs.get(target_id, 0)
+                if passes < MAX_DOOR_REPAIR_PASSES:
+                    self._door_repairs[target_id] = passes + 1
+                    return {
+                        "ok": False,
+                        "error": "plan_has_problems",
+                        "terminal": False,
+                        **self._door_problem_payload(door, local),
+                        "message": (
+                            "Nothing was filed and nothing was counted against you. "
+                            "The bench listed EVERY problem with this plan at once; "
+                            "each carries a `fix` in plain words and a 1-based "
+                            "`step_index`. Fix them in your own words and submit "
+                            "once more."
+                        ),
+                    }
+                _LOGGER.warning(
+                    "Validate door still refuses the plan for target %s after a "
+                    "repair pass; filing it so the door's own refusal is the record",
+                    target_id,
+                )
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
             return {
@@ -1047,6 +1251,32 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(inserted),
             )
+        # CONTRACT 3.0, at the SECOND door: the same blank form reaches the
+        # informed plan, and this is the filing the person is already waiting
+        # on. Drop what was copied and never filled; write nothing in its place.
+        submitted_plan, dropped, below_floor = blocks.drop_blank_form_steps(
+            submitted_plan, floor=blocks.band_floor(brief.get("plan_template"))
+        )
+        if dropped:
+            _LOGGER.warning(
+                "Informed plan for target %s copied the brief's form without "
+                "filling it; dropped %s",
+                target_id,
+                ", ".join(dropped),
+            )
+        if below_floor:
+            return {
+                "ok": False,
+                "error": "plan_is_still_the_blank_form",
+                "dropped": dropped,
+                "terminal": False,
+                "message": (
+                    "Nothing was filed. The brief's plan_template is a blank FORM: "
+                    "every step arrived with an empty `title` and an empty "
+                    "`outcome_promise` for you to write. Write each step in your "
+                    "own words and file again."
+                ),
+            }
         candidate = {
             key: original.get(key)
             for key in (

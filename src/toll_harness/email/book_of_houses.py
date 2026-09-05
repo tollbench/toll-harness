@@ -204,6 +204,23 @@ class BookOfHousesApiClient:
         target = urllib.parse.quote(target_id, safe="")
         return self._request("GET", f"/api/bench/targets/{target}/brief", authenticated=True)
 
+    def validate_proposal(self, target_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Call 3 of six (contract 3.0): every problem at once, files nothing.
+
+        Same bearer and same body as filing a bid. It answers 200 whatever the
+        plan says -- a plan with problems is a successful answer to this
+        question -- so only an unknown or closed target is a 404. It never
+        writes a row, never records a refusal and never counts against the bid
+        cap, which is why the harness may call it before every filing.
+        """
+        target = urllib.parse.quote(str(target_id), safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/targets/{target}/proposals/validate",
+            payload=payload,
+            authenticated=True,
+        )
+
     def submit_proposal(
         self, target_id: str, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:

@@ -657,17 +657,17 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "beside the person's words: the option id they tapped, true or false, a number, a "
     "field map, a date. answer_value is ALWAYS present and is null only for a text "
     "answer -- read it, not only the prose. unanswered_questions carries format too. "
-    "THE WANT NAMES ITS BLOCKS (rules 228, 229 and 230): read the brief "
-    "(toll_bench.read_brief). When its plan_template is not empty, every template step "
-    "must be in this plan, in the template's order, copied as given, with only its "
-    "<angle bracket> blanks filled "
-    "-- the fields inside acts, declared_odds and declared_odds_reason. The platform "
-    "writes a block step's title, promise and har_blocks at signing, files the act when "
-    "the step opens and files that step's outcome when it runs, so your hands on it are "
-    "its fields and its words. A meeting message carries no dates and no times, and "
-    "`with` is left out unless the invitee's address is known. A plan missing a required "
-    "block is refused REJ-32, and a meeting block with no calendar GRANT step before it "
-    "is refused REJ-35."
+    "THE TEMPLATE IS A FORM (contract 3.0, rule 228 amended): read the brief "
+    "(toll_bench.read_brief). plan_template is a BLANK skeleton and block_templates is "
+    "the catalog to pull from; every step you keep you write in your own words, and a "
+    "step filed with an empty title or promise is not a plan and is dropped. The "
+    "platform writes a BLOCK step's title, promise and har_blocks at signing, files the "
+    "act when the step opens and files that step's outcome when it runs, so your hands "
+    "on a block are its fields. A meeting message carries no dates and no times, and "
+    "`with` is left out unless the invitee's address is known. Pull a block in FULL: a "
+    "block that runs on the person's connection is TWO steps and the GRANT comes first, "
+    "and a meeting block with no calendar GRANT step before it is refused REJ-35. An "
+    "older bench may name required_blocks and refuse a missing one REJ-32."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
@@ -1456,7 +1456,16 @@ def _process_market_opportunities(
     resources: Any,
     reachability: dict[str, Any],
     previous_failure: dict[str, Any] | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
+    """One model-powered pass over the open board.
+
+    `dry_run` runs the whole planning cycle and stops at the door: the filing
+    call validates the exact payload the model built and returns the bench's
+    own answer instead of writing a bid. Nothing is filed, nothing is counted,
+    and the plan itself comes back on `dry_run_plans` so a release can be
+    checked against a live bench without spending an agent's one bid.
+    """
     target_count, candidates, review_targets = _market_scan_candidates(resources)
     if not candidates:
         return {
@@ -1506,18 +1515,23 @@ def _process_market_opportunities(
         "a yes/no is yes_no; several related facts are ONE structured_form with named "
         "fields; dates are date_time or schedule. Pre-fill the options from the brief. "
         "Approve, grant and payment formats are refused on a question. "
-        "THE WANT NAMES ITS BLOCKS (rules 228 and 229): the brief carries "
-        "required_blocks, required_blocks_reason and plan_template, always, and [] means "
-        "the want needs none. When plan_template is not empty, every template step must be "
-        "in the plan, COPIED AS GIVEN, with only its <angle bracket> blanks filled: the "
-        "fields inside acts, declared_odds and declared_odds_reason. Do not rewrite a block "
-        "step's title, outcome_promise or har_blocks -- the platform writes those at "
-        "signing, files the act itself when the step opens and files that step's outcome "
-        "when it runs. On a meeting act put the person's context in message, with no dates "
-        "and no times in it, and leave `with` out unless the invitee's address is actually "
-        "known. Your own work steps follow the template's steps. A plan missing a required "
-        "block is refused REJ-32, and a meeting block with no calendar GRANT step before it "
-        "is refused REJ-35; read the fields for a kind with toll_bench.list_act_kinds.\n\n"
+        "THE TEMPLATE IS A FORM, NOT A PLAN (contract 3.0, rule 228 amended). The brief "
+        "carries plan_template (a BLANK skeleton: mechanics filled, every agent-owned "
+        "word an empty string or null), block_templates ({kind: [steps]}, the catalog to "
+        "pull from), bid_template and bid_template_notes (one line per blank -- that is "
+        "your to-do list). Fill every blank you keep IN YOUR OWN WORDS; a step still "
+        "carrying an empty title or outcome_promise is dropped before filing and nothing "
+        "is written in its place. Never file the form as handed to you. required_blocks "
+        "is [] and that means YOU decide which blocks this want needs. When you need one, "
+        "pull it out of block_templates IN FULL and in its order -- a block that runs on "
+        "the person's connection is TWO steps, the GRANT first (REJ-35) -- and do not "
+        "rewrite a block step's title, outcome_promise or har_blocks, which the platform "
+        "writes at signing. On a meeting act put the person's context in message, with no "
+        "dates and no times in it, and leave `with` out unless the invitee's address is "
+        "actually known; read a kind's fields with toll_bench.list_act_kinds. Before you "
+        "file, call toll_bench.validate_proposal with this target_id: it is free, files "
+        "nothing and returns EVERY problem at once with a plain-words fix. Fix what it "
+        "names, then submit.\n\n"
         + json.dumps(
             {
                 "candidate_targets": candidates,
@@ -1544,8 +1558,28 @@ def _process_market_opportunities(
             proposal_filed = True
         return response
 
+    dry_run_plans: list[dict[str, Any]] = []
+
+    def validate_instead_of_filing(
+        target_id: str, proposal: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        answer = resources.toll_bench.validate_proposal(proposal, target_id)
+        dry_run_plans.append({"target_id": target_id, "proposal": proposal, "validation": answer})
+        return {
+            "ok": False,
+            "error": "dry_run",
+            "terminal": True,
+            "validation": answer,
+            "message": (
+                "DRY RUN: nothing was filed. The plan was validated and recorded. "
+                "Call result.complete now."
+            ),
+        }
+
     resources.runtime.enabled_tools = list(MARKET_SCAN_TOOLS)
-    resources.toll_bench.submit_proposal = submit_at_most_one
+    resources.toll_bench.submit_proposal = (
+        validate_instead_of_filing if dry_run else submit_at_most_one
+    )
     meter = _dispatch_meter("market_scan", goal, resources.runtime.enabled_tools)
     try:
         result = resources.runtime.start(goal, mode)
@@ -1569,6 +1603,8 @@ def _process_market_opportunities(
         "candidate_count": len(candidates),
         "proposal_filed": proposal_filed,
         "dispatch": meter,
+        "dry_run": bool(dry_run),
+        "dry_run_plans": dry_run_plans,
         "run": _result_payload(result),
     }
 
@@ -1695,6 +1731,7 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
     next_market_scan = 0.0
     scan_interval = max(float(getattr(arguments, "scan_interval", 300.0)), 0.0)
     bidding_enabled = not bool(getattr(arguments, "no_bid", False))
+    dry_run = bool(getattr(arguments, "dry_run", False))
     try:
         while True:
             woken: list[dict[str, Any]] = []
@@ -1724,6 +1761,7 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                         resources,
                         result.get("reachability") or {},
                         previous_failure=previous_scan_failure,
+                        dry_run=dry_run,
                     )
                     next_market_scan = time.monotonic() + scan_interval
                     previous_scan_failure = (
@@ -1982,6 +2020,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum seconds between model-powered open-want scans",
     )
     watch.add_argument("--no-bid", action="store_true", help="Service obligations without bidding")
+    watch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan and validate at the bench's door, but file nothing",
+    )
     watch.set_defaults(handler=command_market_watch)
 
     operator = subcommands.add_parser("operator", help="Use the operator channel")

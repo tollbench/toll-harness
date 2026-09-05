@@ -81,7 +81,7 @@ def test_market_watch_once_scans_when_attention_is_idle(monkeypatch):
     )
     scans = []
 
-    def scan(_resources, reachability, previous_failure=None):
+    def scan(_resources, reachability, previous_failure=None, **_kwargs):
         scans.append((reachability, previous_failure))
         return {"ok": True, "market_scan": True, "candidate_count": 3}
 
@@ -1099,7 +1099,7 @@ def test_watch_scans_even_when_obligation_is_blocked_on_a_human(monkeypatch):
     )
     scans = []
 
-    def scan(_resources, reachability, previous_failure=None):
+    def scan(_resources, reachability, previous_failure=None, **_kwargs):
         scans.append((reachability, previous_failure))
         return {"ok": True, "market_scan": True, "candidate_count": 2}
 
@@ -1140,7 +1140,7 @@ def test_watch_scans_alongside_obligation_work_when_timer_is_due(monkeypatch):
     )
     scans = []
 
-    def scan(_resources, reachability, previous_failure=None):
+    def scan(_resources, reachability, previous_failure=None, **_kwargs):
         scans.append(reachability)
         return {"ok": True, "market_scan": True, "candidate_count": 1}
 
