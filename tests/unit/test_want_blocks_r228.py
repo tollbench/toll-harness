@@ -11,6 +11,11 @@ These cover the four moves the harness owes the rule:
   2. a plan missing one is repaired from the brief before it is filed,
   3. a REJ-32 refusal carries the form and is filed ONCE, never in a loop,
   4. a block the platform is running takes no act and no outcome from us.
+
+RULE 230 (contract 2.46) added a fifth: the template is a GROUP, in order, and
+the GRANT step that connects the person's Google Calendar comes before the
+meeting block that reads it. Steven, 2026-09-05: "they are supposed to connect
+my calendar IN the plan." A block with no grant before it is refused REJ-35.
 """
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.toll_bench import blocks
@@ -57,6 +62,53 @@ MEETING_TEMPLATE = {
     "materials": [],
 }
 
+GRANT_TEMPLATE = {
+    "ask": "GRANT",
+    "actor": "agent",
+    "title": "Allow calendar access",
+    "outcome_promise": (
+        "Book of Houses can see when you are free and put this one meeting on "
+        "your calendar. Nothing else on it is read or changed."
+    ),
+    "grant_request": {
+        "kind": "oauth_connection",
+        "what": "Your Google Calendar",
+        "why": "So we can find open times and put the meeting on it",
+        "scope": "read events and add or change the one meeting",
+        "until": "target_end",
+        "exposure": "agent_acts_through_connection",
+        "connector": {
+            "provider": "google-calendar",
+            "actions": [
+                "calendar.events.read",
+                "calendar.events.create",
+                "calendar.events.update",
+                "calendar.events.delete",
+            ],
+            "resources": {"calendar_ids": ["primary"]},
+        },
+    },
+    "har_blocks": [
+        {
+            "id": "connect-calendar",
+            "ask": "grant",
+            "format": "connect_account",
+            "required": True,
+            "title": "Connect Google Calendar",
+        }
+    ],
+    "rounds": 1,
+    "declared_odds": "<fill 0.05..0.99>",
+    "declared_odds_reason": "<why that number>",
+    "person_minutes": 2,
+    "line_item_amount": 0,
+    "agent_court_estimate": 0,
+    "examples": [],
+    "materials": [],
+}
+
+TWO_STEP_TEMPLATE = [GRANT_TEMPLATE, MEETING_TEMPLATE]
+
 WORK_STEP = {
     "ask": "APPROVE",
     "actor": "agent",
@@ -75,8 +127,9 @@ def _plan(*steps):
 class _Api:
     """The bench, as far as these tests need it."""
 
-    def __init__(self, *, required=("meeting",), refuse=None):
+    def __init__(self, *, required=("meeting",), refuse=None, template=None):
         self.required = list(required)
+        self.template = TWO_STEP_TEMPLATE if template is None else list(template)
         self.refuse = refuse  # a BookOfHousesApiError to raise on the first file
         self.submissions = []
         self.acks = 0
@@ -90,7 +143,7 @@ class _Api:
                 "want": "I want to set up a call with Ruby to plan the launch",
                 "required_blocks": self.required,
                 "required_blocks_reason": {"meeting": "It only exists once two calendars agree."},
-                "plan_template": [MEETING_TEMPLATE] if self.required else [],
+                "plan_template": self.template if self.required else [],
                 "your_bid": None,
             },
         }
@@ -180,21 +233,109 @@ def test_the_filled_message_carries_no_when():
 # 2. The deterministic guard before filing
 # ---------------------------------------------------------------------------
 def test_a_plan_without_the_block_is_repaired_before_it_is_filed():
+    """RULE 230: the whole form goes in, in the template's order, in FRONT of
+    the model's own work. The calendar is connected before anything reads it."""
     api = _Api()
     out = _provider(api).submit_proposal("t-1", _plan(WORK_STEP), "k-1")
     assert out["ok"] is True
-    filed = api.submissions[0][1]
-    assert [a["kind"] for s in filed["steps"] for a in (s.get("acts") or [])] == ["meeting"]
-    assert filed["steps"][0] == WORK_STEP  # the model's own work step is untouched
+    filed = api.submissions[0][1]["steps"]
+    assert [step.get("ask") for step in filed] == ["GRANT", "APPROVE", "APPROVE"]
+    assert blocks.grant_provider(filed[0]) == "google-calendar"
+    assert [a["kind"] for s in filed for a in (s.get("acts") or [])] == ["meeting"]
+    assert filed[-1] == WORK_STEP  # the model's own work step is untouched
+    # Rule 121: an inserted step may not make the line fall.
+    assert [step["declared_odds"] for step in filed] == [0.6, 0.6, 0.6]
+    assert blocks.grant_problems(filed) == []
 
 
-def test_a_plan_that_already_declares_the_block_is_filed_as_written():
+def test_only_the_missing_grant_is_inserted_before_a_declared_block():
+    """The model wrote the meeting block itself and no grant. Only the GRANT
+    step goes in, immediately before the block that needs it (REJ-35)."""
     api = _Api()
     declared = {**MEETING_TEMPLATE, "acts": [{"kind": "meeting", "with_name": "Ruby"}]}
     plan = _plan(WORK_STEP, declared)
     out = _provider(api).submit_proposal("t-1", plan, "k-1")
     assert out["ok"] is True
+    filed = api.submissions[0][1]["steps"]
+    assert [step.get("ask") for step in filed] == ["APPROVE", "GRANT", "APPROVE"]
+    assert filed[0] == WORK_STEP
+    assert filed[2] == declared
+    assert blocks.grant_problems(filed) == []
+
+
+def test_the_grant_the_model_wrote_itself_is_never_doubled():
+    """A grant the model wrote its own way is REWRITTEN from the template, not
+    doubled: the door counts a grant that names the account but not
+    calendar.events.read as no grant at all, and the person does not need two
+    connect cards."""
+    api = _Api()
+    own_grant = {
+        "ask": "GRANT",
+        "actor": "agent",
+        "title": "Connect your calendar",
+        "grant_request": {"connector": {"provider": "google-calendar"}},
+        "declared_odds": 0.4,
+    }
+    out = _provider(api).submit_proposal("t-1", _plan(own_grant, WORK_STEP), "k-1")
+    assert out["ok"] is True
+    filed = api.submissions[0][1]["steps"]
+    grants = [step for step in filed if blocks.grant_provider(step)]
+    assert len(grants) == 1
+    assert grants[0]["grant_request"] == GRANT_TEMPLATE["grant_request"]
+    # The block still went in, and it went in after the grant.
+    assert [step.get("ask") for step in filed] == ["GRANT", "APPROVE", "APPROVE"]
+    assert [a["kind"] for s in filed for a in (s.get("acts") or [])] == ["meeting"]
+
+
+def test_a_grant_the_door_already_counts_is_left_alone():
+    api = _Api()
+    declared = {**MEETING_TEMPLATE, "acts": [{"kind": "meeting", "with_name": "Ruby"}]}
+    own_grant = {
+        "ask": "GRANT",
+        "actor": "agent",
+        "title": "My own words about connecting the calendar",
+        "grant_request": {
+            "connector": {
+                "provider": "google-calendar",
+                "actions": ["calendar.events.read", "calendar.events.create"],
+            }
+        },
+        "declared_odds": 0.4,
+    }
+    plan = _plan(own_grant, declared)
+    out = _provider(api).submit_proposal("t-1", plan, "k-1")
+    assert out["ok"] is True
     assert api.submissions[0][1]["steps"] == plan["steps"]
+
+
+def test_the_door_does_not_count_a_grant_without_the_access():
+    """_GRANT_MIN_ACTIONS, mirrored: read is the floor."""
+    named_only = {"ask": "GRANT", "grant_request": {"connector": {"provider": "google-calendar"}}}
+    assert blocks.grant_provider(named_only) is None
+    assert blocks.intended_grant_provider(named_only) == "google-calendar"
+    assert blocks.grant_problems([named_only, {"acts": [{"kind": "meeting"}]}])
+
+
+def test_a_plan_that_carries_the_grant_and_the_block_is_filed_as_written():
+    api = _Api()
+    declared = {**MEETING_TEMPLATE, "acts": [{"kind": "meeting", "with_name": "Ruby"}]}
+    plan = _plan(GRANT_TEMPLATE, WORK_STEP, declared)
+    out = _provider(api).submit_proposal("t-1", plan, "k-1")
+    assert out["ok"] is True
+    assert api.submissions[0][1]["steps"] == plan["steps"]
+
+
+def test_a_one_step_template_still_works():
+    """A 2.45 server whose plan_template is still one step: the harness may
+    not wait for the server to catch up before it can file."""
+    api = _Api(template=[MEETING_TEMPLATE])
+    out = _provider(api).submit_proposal("t-1", _plan(WORK_STEP), "k-1")
+    assert out["ok"] is True
+    filed = api.submissions[0][1]["steps"]
+    assert [a["kind"] for s in filed for a in (s.get("acts") or [])] == ["meeting"]
+    assert filed[-1] == WORK_STEP
+    # No grant to insert, so the plan files and the door speaks for itself.
+    assert [step for step in filed if blocks.grant_provider(step)] == []
 
 
 def test_a_want_that_needs_no_block_is_left_alone():
@@ -211,6 +352,29 @@ def test_a_bad_window_is_caught_at_home():
     assert blocks.meeting_problems({"kind": "meeting", "duration_min": 600})
     assert blocks.meeting_problems({"kind": "meeting", "message": "how about 3pm"})
     assert blocks.meeting_problems({"kind": "meeting", "with": "not-an-address"})
+
+
+def test_the_local_validator_reports_a_block_no_grant_opens():
+    """The REJ-35 mirror: a meeting block with no calendar grant before it."""
+    problems = blocks.grant_problems([{"acts": [{"kind": "meeting"}]}])
+    assert len(problems) == 1
+    assert problems[0]["rej"] == "REJ-35"
+    assert problems[0]["provider"] == "google-calendar"
+    assert "Google Calendar" in problems[0]["message"]
+    assert blocks.grant_problems([GRANT_TEMPLATE, {"acts": [{"kind": "meeting"}]}]) == []
+    # The grant has to come BEFORE the block, not after it.
+    assert blocks.grant_problems([{"acts": [{"kind": "meeting"}]}, GRANT_TEMPLATE])
+
+
+def test_a_grant_gap_never_buries_the_plan_the_person_waits_on():
+    """With no template to insert there is nothing to repair, so the filing
+    goes and the door refuses it in its own words."""
+    provider = _provider(_Api())
+    failed = {"ok": False, "problems": [{"rej": "REJ-35", "message": "no grant"}]}
+    assert provider._grant_gap_never_blocks_the_filing(failed, [])["ok"] is True
+    assert provider._grant_gap_never_blocks_the_filing(failed, [MEETING_TEMPLATE])["ok"] is True
+    held = provider._grant_gap_never_blocks_the_filing(failed, TWO_STEP_TEMPLATE)
+    assert held["ok"] is False
 
 
 def test_the_local_validator_reports_the_declared_block():
@@ -260,6 +424,25 @@ def test_rej_32_is_repaired_from_the_refusal_and_filed_once():
     second = api.submissions[1]
     assert second[2] == "k-1-rej32"
     assert [a["kind"] for s in second[1]["steps"] for a in (s.get("acts") or [])] == ["meeting"]
+
+
+def test_rej_35_is_repaired_from_the_refusal_and_filed_once():
+    """RULE 230: REJ-35 carries the form exactly as REJ-32 does. The plan
+    already declares the meeting; the grant that opens the calendar is what
+    goes in, and it goes in before the block."""
+    api = _Api(
+        required=(),
+        refuse=_refusal("REJ-35", "the meeting block needs a calendar grant", TWO_STEP_TEMPLATE),
+    )
+    declared = {**MEETING_TEMPLATE, "acts": [{"kind": "meeting", "with_name": "Ruby"}]}
+    out = _provider(api).submit_proposal("t-1", _plan(WORK_STEP, declared), "k-1")
+    assert out["ok"] is True
+    assert len(api.submissions) == 2
+    second = api.submissions[1]
+    assert second[2] == "k-1-rej35"
+    filed = second[1]["steps"]
+    assert [step.get("ask") for step in filed] == ["APPROVE", "GRANT", "APPROVE"]
+    assert [a["kind"] for s in filed for a in (s.get("acts") or [])] == ["meeting"]
 
 
 def test_rej_33_is_one_correction_then_the_round_is_over():

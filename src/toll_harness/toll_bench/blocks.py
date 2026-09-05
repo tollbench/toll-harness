@@ -19,6 +19,16 @@ refusal carries the same ``plan_template``. A declared block whose fields the
 kind refuses is REJ-33. A step describing an invitation, a booking or a publish
 while declaring no act at all is REJ-34.
 
+RULE 230 (contract 2.46) -- THE GRANT COMES FIRST. ``plan_template`` for a
+meeting want is TWO steps in order: a GRANT step that connects the person's
+Google Calendar, then the meeting block that uses it. A meeting block with no
+such GRANT step before it is refused REJ-35, and that refusal carries the same
+template. Steven, 2026-09-05: "I want the agent to start with connecting to my
+calendar, then looking for the times THEN coming back to me with the email and
+the times, then I approve and it goes out", and "they are supposed to connect
+my calendar IN the plan". So every step of the template is inserted, in the
+template's order, and the grant lands in front of the work.
+
 This module is the harness's deterministic half of that: it reads the blocks
 off the brief, fills the template's blanks from the model's own plan, and
 checks a declared meeting against the kind's published grammar BEFORE the
@@ -36,6 +46,44 @@ from typing import Any
 # else is left to the server's own sentence (REJ-33): a local check we cannot
 # keep in step with the kind would refuse a legal block.
 CHECKED_KINDS: frozenset[str] = frozenset({"meeting"})
+
+# The bench's refusal for a block whose account nothing in the plan opens.
+REJ_BLOCK_GRANT = "REJ-35"
+
+# The account a block needs open before it can run. A meeting block reads the
+# person's open times and writes the booking, so the plan connects their Google
+# Calendar in a GRANT step of its own BEFORE the block step (rule 230).
+BLOCK_GRANTS: dict[str, str] = {"meeting": "google-calendar"}
+
+# What the person reads, per provider key.
+PROVIDER_WORDS: dict[str, str] = {
+    "google-calendar": "Google Calendar",
+    "google-gmail": "Gmail",
+}
+
+GRANT_ASK = "GRANT"
+
+# The floor the bid door holds a GRANT to before it counts as the access a
+# block runs under (_GRANT_MIN_ACTIONS in the bench's bid validator). Read is
+# the floor: a meeting cannot find open times without calendar.events.read, so
+# a grant that names the account but not that action is no grant at all.
+GRANT_MIN_ACTIONS: dict[str, tuple[str, ...]] = {
+    "google-calendar": ("calendar.events.read",),
+}
+
+# The HAR formats that ARE the connection, for a grant step that names its
+# provider on the block rather than in grant_request.
+_CONNECT_FORMATS = frozenset({"connect_account", "grant_access"})
+
+# The one sentence every planning surface carries about a meeting want, kept
+# here so the prompt, the tool words and the refusal cannot drift apart.
+GRANT_FIRST_SENTENCE = (
+    "Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is "
+    "the meeting block: Book of Houses reads the open times, shows the person "
+    "the email and the three times, and sends on their tap. Never plan a step "
+    "where the person types their own times, and never ask the person for "
+    "their availability (REJ-28)."
+)
 
 # A template blank: the whole value is one <angle bracket> instruction.
 _PLACEHOLDER = re.compile(r"^\s*<[^<>]*>\s*$", re.DOTALL)
@@ -108,6 +156,135 @@ def declared_kinds(steps: Any) -> list[str]:
                 if kind:
                     kinds.append(kind)
     return kinds
+
+
+def step_kinds(step: Any) -> list[str]:
+    """The act kinds one step declares, lowercased, in order."""
+    kinds: list[str] = []
+    if not isinstance(step, dict):
+        return kinds
+    for act in step.get("acts") or []:
+        if isinstance(act, dict) and isinstance(act.get("kind"), str):
+            kind = act["kind"].strip().lower()
+            if kind:
+                kinds.append(kind)
+    return kinds
+
+
+def grant_provider(step: Any) -> str | None:
+    """The provider a GRANT step opens, EXACTLY as the bid door counts it.
+
+    Written against the door's own rule (REJ-35): the ask is GRANT, the
+    provider is on ``grant_request.connector``, and the connector carries the
+    actions the block cannot run without. A looser reading here would file a
+    plan the door refuses; a stricter one would insert a second connect card
+    the person does not need.
+    """
+    if not isinstance(step, dict) or step.get("ask") != GRANT_ASK:
+        return None
+    request = step.get("grant_request")
+    if not isinstance(request, dict):
+        return None
+    connector = request.get("connector")
+    if not isinstance(connector, dict):
+        return None
+    provider = str(connector.get("provider") or "").strip().lower()
+    if not provider:
+        return None
+    actions = {
+        str(action).strip()
+        for action in (connector.get("actions") or [])
+        if isinstance(action, str)
+    }
+    if not all(action in actions for action in GRANT_MIN_ACTIONS.get(provider, ())):
+        return None
+    return provider
+
+
+def intended_grant_provider(step: Any) -> str | None:
+    """The account a step was TRYING to connect, however it was written.
+
+    The door counts only a grant written its way. This reads the same step
+    generously, so a grant the model wrote with the provider but not the
+    actions is REPAIRED from the template rather than doubled by it.
+    """
+    if not isinstance(step, dict):
+        return None
+    ask = str(step.get("ask") or "").strip().upper()
+    if ask and ask != GRANT_ASK:
+        return None
+    request = step.get("grant_request")
+    if isinstance(request, dict):
+        connector = request.get("connector")
+        if isinstance(connector, dict):
+            provider = connector.get("provider")
+            if isinstance(provider, str) and provider.strip():
+                return provider.strip().lower()
+        provider = request.get("provider")
+        if isinstance(provider, str) and provider.strip():
+            return provider.strip().lower()
+    for block in step.get("har_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("format") or "").strip().lower() not in _CONNECT_FORMATS:
+            continue
+        config = block.get("config") if isinstance(block.get("config"), dict) else {}
+        provider = block.get("provider") or config.get("provider")
+        if isinstance(provider, str) and provider.strip():
+            return provider.strip().lower()
+    return None
+
+
+def provider_words(provider: str) -> str:
+    return PROVIDER_WORDS.get(provider, provider)
+
+
+def grant_problems(steps: Any) -> list[dict[str, str]]:
+    """Every declared block no earlier step opens the account for (REJ-35).
+
+    The bench refuses a meeting block that no GRANT step precedes. The same
+    check runs here so the plan is repaired before it is filed rather than
+    after the round is spent.
+    """
+    problems: list[dict[str, str]] = []
+    granted: set[str] = set()
+    flagged: set[str] = set()
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict):
+            continue
+        for kind in step_kinds(step):
+            provider = BLOCK_GRANTS.get(kind)
+            if provider is None or provider in granted or kind in flagged:
+                continue
+            flagged.add(kind)
+            problems.append(
+                {
+                    "path": f"steps.{index}",
+                    "rej": REJ_BLOCK_GRANT,
+                    "kind": kind,
+                    "provider": provider,
+                    "message": (
+                        f"step {index + 1} declares a {kind} block and nothing "
+                        f"before it connects the person's "
+                        f"{provider_words(provider)}. " + GRANT_FIRST_SENTENCE
+                        + " Copy the brief's plan_template steps in order; the "
+                        "bench refuses this as REJ-35."
+                    ),
+                }
+            )
+        provider = grant_provider(step)
+        if provider:
+            granted.add(provider)
+    return problems
+
+
+def first_step_needing(steps: Any, provider: str) -> int | None:
+    """The index of the first step whose block needs `provider` open."""
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        for kind in step_kinds(step):
+            if BLOCK_GRANTS.get(kind) == provider:
+                return index
+    return None
 
 
 def missing_blocks(steps: Any, required_blocks: Any) -> list[str]:
@@ -236,13 +413,23 @@ def invitee_from_plan(proposal: dict[str, Any]) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
-def _odds_for_inserted_step(proposal: dict[str, Any]) -> float:
-    """A declared_odds the plan's own line can carry.
+def _odds_for_inserted_step(
+    proposal: dict[str, Any], *, following: Any = None
+) -> float:
+    """A declared_odds an inserted step can carry without breaking the line.
 
-    Rule 121 / REJ-29: a filed plan's line may not fall, so an appended step
-    takes the highest number already on the plan. With nothing to read, 0.5:
-    an honest coin, not a boast.
+    Rule 121 / REJ-29: a filed plan's line may not fall. A step inserted in
+    FRONT of the work therefore takes the odds of the first step it will
+    precede (equal is allowed, falling is not); appended at the end it takes
+    the highest number already on the plan. With nothing to read, 0.5: an
+    honest coin, not a boast.
     """
+    for step in following or []:
+        if not isinstance(step, dict):
+            continue
+        value = step.get("declared_odds")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < 1:
+            return round(float(value), 4)
     values = []
     for step in proposal.get("steps") or []:
         if not isinstance(step, dict):
@@ -260,6 +447,7 @@ def fill_template_step(
     *,
     proposal: dict[str, Any] | None = None,
     want: str | None = None,
+    odds: float | None = None,
 ) -> dict[str, Any]:
     """One template step with its <angle bracket> blanks filled or dropped.
 
@@ -280,12 +468,14 @@ def fill_template_step(
             ]
             continue
         if key == "declared_odds" and is_blank(value):
-            filled[key] = _odds_for_inserted_step(proposal)
+            filled[key] = (
+                odds if odds is not None else _odds_for_inserted_step(proposal)
+            )
             continue
         if key == "declared_odds_reason" and is_blank(value):
             filled[key] = (
-                "Book of Houses runs the invitation and the booking on this "
-                "step, so the odds here are the plan's own line."
+                "Book of Houses runs this step, so the odds here are the "
+                "plan's own line."
             )
             continue
         if is_blank(value):
@@ -367,6 +557,106 @@ def _default_message(want: str | None) -> str:
     return message
 
 
+def _template_group(
+    templates: list[dict[str, Any]], steps: list[Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The template steps this plan does not already carry, in order."""
+    granted = {
+        provider for provider in (intended_grant_provider(s) for s in steps) if provider
+    }
+    declared = set(declared_kinds(steps))
+    group: list[dict[str, Any]] = []
+    labels: list[str] = []
+    for template_step in templates:
+        provider = grant_provider(template_step)
+        if provider is not None:
+            # Never a second door onto the same account: the model may have
+            # written the grant itself.
+            if provider in granted:
+                continue
+            granted.add(provider)
+            group.append(template_step)
+            labels.append(f"grant:{provider}")
+            continue
+        kinds = step_kinds(template_step)
+        if kinds and all(kind in declared for kind in kinds):
+            continue
+        declared.update(kinds)
+        group.append(template_step)
+        labels.append(", ".join(kinds) or "step")
+    return group, labels
+
+
+def _first_work_step(steps: list[Any]) -> int:
+    """Where the template group goes: in front of the first step that works.
+
+    A grant the model wrote itself keeps its place at the head of the plan;
+    everything else follows the form.
+    """
+    at = 0
+    for step in steps:
+        if intended_grant_provider(step) is None:
+            break
+        at += 1
+    return at
+
+
+def _insert_steps(
+    steps: list[Any],
+    at: int,
+    group: list[dict[str, Any]],
+    *,
+    proposal: dict[str, Any],
+    want: str | None,
+) -> list[Any]:
+    odds = _odds_for_inserted_step(proposal, following=steps[at:])
+    filled = [
+        fill_template_step(step, proposal=proposal, want=want, odds=odds)
+        for step in group
+    ]
+    merged = list(steps)
+    merged[at:at] = filled
+    return merged
+
+
+def _align_grant_steps(
+    steps: list[Any],
+    templates: list[dict[str, Any]],
+    *,
+    proposal: dict[str, Any],
+    want: str | None,
+) -> tuple[list[Any], list[str]]:
+    """Rewrite a grant the model wrote its own way from the template's.
+
+    A GRANT step that names Google Calendar but not calendar.events.read is
+    not the access the block runs under, and the door counts it as no grant at
+    all (REJ-35). The person does not need a second connect card, so the step
+    they already have is replaced by the form the platform published.
+    """
+    forms = {}
+    for template_step in templates:
+        provider = intended_grant_provider(template_step)
+        if provider is not None and provider not in forms:
+            forms[provider] = template_step
+    aligned = list(steps)
+    fixed: list[str] = []
+    for index, step in enumerate(aligned):
+        if grant_provider(step) is not None:
+            continue
+        provider = intended_grant_provider(step)
+        form = forms.get(provider) if provider else None
+        if form is None:
+            continue
+        aligned[index] = fill_template_step(
+            form,
+            proposal=proposal,
+            want=want,
+            odds=_odds_for_inserted_step(proposal, following=aligned[index:]),
+        )
+        fixed.append(f"grant:{provider} (rewritten from the template)")
+    return aligned, fixed
+
+
 def merge_required_blocks(
     proposal: dict[str, Any],
     required_blocks: Any,
@@ -374,36 +664,70 @@ def merge_required_blocks(
     *,
     want: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Insert the template step for every required block the plan is missing.
+    """Fill in the brief's form: every template step the plan is missing.
 
-    Returns the (possibly unchanged) proposal and the kinds inserted. Filing a
+    Returns the (possibly unchanged) proposal and the steps inserted. Filing a
     plan the door will refuse costs the agent its one bid on the want, so a
-    missing block is repaired here rather than discovered at the door. The
-    step goes at the END: the block is the delivery, and appending keeps the
-    declared-odds line from falling.
+    missing block, and a block whose account nothing opens, are both repaired
+    here rather than discovered at the door.
+
+    RULE 230. The template is a group, in the template's order: the GRANT step
+    that connects the person's Google Calendar and then the meeting block that
+    uses it. The group goes in FRONT of the model's own work, because the
+    calendar has to be connected before anything can read it, and because a
+    block with no grant before it is refused REJ-35. When the model wrote the
+    block itself but no grant, only the grant is inserted, immediately before
+    the step that needs it.
     """
-    missing = missing_blocks(proposal.get("steps"), required_blocks)
-    if not missing:
+    original = proposal.get("steps")
+    steps: list[Any] = list(original) if isinstance(original, list) else []
+    templates = [
+        step
+        for step in (plan_template if isinstance(plan_template, list) else [])
+        if isinstance(step, dict)
+    ]
+    if not missing_blocks(steps, required_blocks) and not grant_problems(steps):
         return proposal, []
-    templates: dict[str, dict[str, Any]] = {}
-    for step in plan_template if isinstance(plan_template, list) else []:
-        if not isinstance(step, dict):
+    if not templates:
+        # No form to fill: the door's refusal is then the honest answer, and
+        # it carries the template with it.
+        return proposal, []
+
+    steps, inserted = _align_grant_steps(
+        steps, templates, proposal=proposal, want=want
+    )
+    if missing_blocks(steps, required_blocks):
+        group, labels = _template_group(templates, steps)
+        if group:
+            steps = _insert_steps(
+                steps,
+                _first_work_step(steps),
+                group,
+                proposal=proposal,
+                want=want,
+            )
+            inserted.extend(labels)
+    # Whatever is still ungranted takes the grant alone, immediately before
+    # the step that needs it: the model wrote the block itself, or the
+    # template had no step for the kind that was missing.
+    opened: set[str] = set()
+    for gap in grant_problems(steps):
+        provider = gap["provider"]
+        if provider in opened:
             continue
-        for act in step.get("acts") or []:
-            if isinstance(act, dict) and isinstance(act.get("kind"), str):
-                templates.setdefault(act["kind"].strip().lower(), step)
-    merged = dict(proposal)
-    steps = list(merged.get("steps") or [])
-    inserted: list[str] = []
-    for kind in missing:
-        template_step = templates.get(kind)
+        template_step = next(
+            (step for step in templates if grant_provider(step) == provider), None
+        )
         if template_step is None:
-            # No form to fill: the door's refusal is then the honest answer,
-            # and it carries the template with it.
             continue
-        steps.append(fill_template_step(template_step, proposal=merged, want=want))
-        inserted.append(kind)
+        at = first_step_needing(steps, provider)
+        if at is None:
+            continue
+        steps = _insert_steps(steps, at, [template_step], proposal=proposal, want=want)
+        opened.add(provider)
+        inserted.append(f"grant:{provider}")
     if not inserted:
         return proposal, []
+    merged = dict(proposal)
     merged["steps"] = steps
     return merged, inserted

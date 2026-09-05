@@ -14,6 +14,16 @@ _LOGGER = logging.getLogger("toll_harness.toll_bench")
 REJ_REQUIRED_BLOCK = "REJ-32"
 REJ_BLOCK_DECLARATION = "REJ-33"
 REJ_HOLLOW_BLOCK = "REJ-34"
+# RULE 230 (contract 2.46): a block whose account no GRANT step in the plan
+# opens. Like REJ-32 it CARRIES THE FORM, so it is repaired and filed once.
+REJ_BLOCK_GRANT = blocks.REJ_BLOCK_GRANT
+REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
+
+
+def _retry_tag(rej: str | None) -> str:
+    """The idempotency suffix for the one re-file a carried form earns."""
+    return str(rej or "rej").replace("-", "").lower()
+
 
 # An act in one of these states is standing: it is the person's move or it has
 # already run. Filing another copy of the same kind is a duplicate.
@@ -530,6 +540,32 @@ class BookOfHousesTollBenchProvider:
             payload["plan_template"] = error.plan_template
         return payload
 
+    @staticmethod
+    def _grant_gap_never_blocks_the_filing(
+        validation: dict[str, Any], plan_template: Any
+    ) -> dict[str, Any]:
+        """A grant gap with no template to fix it is the door's to refuse.
+
+        The local mirror of REJ-35 exists so a round is never spent on a plan
+        the door will refuse. When there is no template to insert -- an older
+        server, or a brief that has closed behind a selection -- refusing at
+        home would only bury the plan the person is waiting on. File it, and
+        let the refusal carry the form.
+        """
+        if validation.get("ok"):
+            return validation
+        template = plan_template if isinstance(plan_template, list) else []
+        if any(isinstance(step, dict) and blocks.grant_provider(step) for step in template):
+            return validation
+        remaining = [
+            problem
+            for problem in validation.get("problems") or []
+            if problem.get("rej") != REJ_BLOCK_GRANT
+        ]
+        if remaining:
+            return {**validation, "problems": remaining}
+        return {**validation, "ok": True, "problems": []}
+
     def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
         """What the platform is running on this step, or None.
 
@@ -672,6 +708,11 @@ class BookOfHousesTollBenchProvider:
         # the invitee address, and a message carrying a date or a clock time --
         # so a window typo never costs the one bid this target allows.
         problems.extend(blocks.declaration_problems(steps))
+        # RULE 230 / REJ-35 (contract 2.46): a meeting block reads and writes
+        # the person's calendar, so a GRANT step connecting it comes FIRST.
+        # Steven, 2026-09-05: "they are supposed to connect my calendar IN the
+        # plan." The repair inserts it; this is the mirror that names it.
+        problems.extend(blocks.grant_problems(steps))
         return {
             "ok": not problems,
             "problems": problems,
@@ -715,12 +756,14 @@ class BookOfHousesTollBenchProvider:
         )
         if inserted:
             _LOGGER.warning(
-                "Plan for target %s declared no %s block; filled the brief's "
-                "template step and filed that",
+                "Plan for target %s did not carry the brief's form; filled it "
+                "in and filed that (%s)",
                 target_id,
                 ", ".join(inserted),
             )
-        validation = self.validate_proposal(proposal)
+        validation = self._grant_gap_never_blocks_the_filing(
+            self.validate_proposal(proposal), brief.get("plan_template")
+        )
         if not validation["ok"]:
             return {"ok": False, "error": "local_validation_failed", **validation}
         reachability = self.ensure_reachable()
@@ -803,7 +846,7 @@ class BookOfHousesTollBenchProvider:
                 # the same plan_template the brief published, so the one move
                 # left is to fill it in and file once. Once: a second refusal
                 # is the round, not a retry loop.
-                if first.rej != REJ_REQUIRED_BLOCK or not first.plan_template:
+                if first.rej not in REJ_CARRIES_THE_FORM or not first.plan_template:
                     raise
                 proposal, repaired = blocks.merge_required_blocks(
                     proposal,
@@ -820,13 +863,14 @@ class BookOfHousesTollBenchProvider:
                 if not repaired:
                     raise
                 _LOGGER.warning(
-                    "Target %s refused the bid REJ-32; filed the template step "
+                    "Target %s refused the bid %s; filed the template steps "
                     "the refusal carried (%s) and re-filed once",
                     target_id,
+                    first.rej,
                     ", ".join(repaired),
                 )
                 result = self.api.submit_proposal(
-                    target_id, proposal, f"{idempotency_key}-rej32"
+                    target_id, proposal, f"{idempotency_key}-{_retry_tag(first.rej)}"
                 )
         except BookOfHousesApiError as error:
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
@@ -998,8 +1042,8 @@ class BookOfHousesTollBenchProvider:
         )
         if inserted:
             _LOGGER.warning(
-                "Informed plan for target %s declared no %s block; filed the "
-                "brief's template step",
+                "Informed plan for target %s did not carry the brief's form; "
+                "filled it in and filed that (%s)",
                 target_id,
                 ", ".join(inserted),
             )
@@ -1031,7 +1075,9 @@ class BookOfHousesTollBenchProvider:
         candidate["finish_line_cents"] = submitted_plan.get(
             "finish_line_cents", original.get("finish_line_cents") or 0
         )
-        validation = self.validate_proposal(candidate)
+        validation = self._grant_gap_never_blocks_the_filing(
+            self.validate_proposal(candidate), brief.get("plan_template")
+        )
         if not validation["ok"]:
             return {
                 "ok": False,
@@ -1048,7 +1094,7 @@ class BookOfHousesTollBenchProvider:
                 target_id, proposal_id, submitted_plan, idempotency_key
             )
         except BookOfHousesApiError as error:
-            if error.rej == REJ_REQUIRED_BLOCK and error.plan_template:
+            if error.rej in REJ_CARRIES_THE_FORM and error.plan_template:
                 submitted_plan, repaired = blocks.merge_required_blocks(
                     submitted_plan,
                     [
@@ -1063,14 +1109,15 @@ class BookOfHousesTollBenchProvider:
                 )
                 if repaired:
                     _LOGGER.warning(
-                        "Informed plan for target %s refused REJ-32; filed the "
+                        "Informed plan for target %s refused %s; filed the "
                         "template the refusal carried (%s) and re-filed once",
                         target_id,
+                        error.rej,
                         ", ".join(repaired),
                     )
                     return self.api.submit_informed_plan(
                         target_id, proposal_id, submitted_plan,
-                        f"{idempotency_key}-rej32",
+                        f"{idempotency_key}-{_retry_tag(error.rej)}",
                     )
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
                 return self._block_refusal(target_id, error)

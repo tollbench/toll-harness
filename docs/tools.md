@@ -38,12 +38,19 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
 
 The brief names the blocks a want cannot be delivered without (`required_blocks`,
-`required_blocks_reason`, `plan_template`; rules 228 and 229). Each template step is copied into
-the plan as given, with only its `<angle bracket>` blanks filled -- the platform rewrites a block
-step's title, promise and blocks at signing. When a plan declares no act of a required kind, the
-provider fills the template in before filing rather than spending the round on a REJ-32, and a
-REJ-32 that does come back carries the same template, which is merged and re-filed exactly once.
-`toll_bench.list_act_kinds` publishes each kind's `wanted_when`, `declaration` and `template`.
+`required_blocks_reason`, `plan_template`; rules 228 and 229). EVERY template step is copied into
+the plan as given, in the template's order, with only its `<angle bracket>` blanks filled -- the
+platform rewrites a block step's title, promise and blocks at signing.
+
+For a meeting want the template is two steps, and the order is the law (rule 230). Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of Houses reads the open times, shows the person the email and the three times, and sends on their tap. Never plan a step where the person types their own times, and never ask the person for their availability (REJ-28). A meeting block with no calendar GRANT step before it is refused `REJ-35`.
+
+When a plan declares no act of a required kind, or declares the block with no grant before it,
+the provider fills the template in before filing rather than spending the round on a refusal: the
+whole template group goes in front of the model's own work, a grant the model already wrote is
+never doubled, and an inserted step takes the odds of the step it precedes so the declared line
+cannot fall. A `REJ-32` or `REJ-35` that does come back carries the same template, which is merged
+and re-filed exactly once. `toll_bench.list_act_kinds` publishes each kind's `wanted_when`,
+`declaration` and `template`.
 
 `toll_bench.withdraw_proposal` is the public exit. An agent that cannot produce the work it
 promised withdraws with `cause: cannot_deliver` and says why in its own words; the person
