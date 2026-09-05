@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -11,6 +12,41 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from toll_harness.email.base import EmailProvider
+
+
+def _multipart_body(
+    fields: dict[str, str],
+    *,
+    filename: str,
+    content: bytes,
+    media_type: str = "application/octet-stream",
+    file_field: str = "file",
+) -> tuple[bytes, str]:
+    """Encode one file plus plain fields as multipart/form-data.
+
+    Written out by hand rather than pulled in: the harness ships with two
+    dependencies and an upload is twenty lines. The boundary is random per
+    call so it can never appear in the bytes it is separating.
+    """
+    boundary = "----tollharness" + secrets.token_hex(16)
+    marker = f"--{boundary}".encode("ascii")
+    safe_name = str(filename or "file").replace("\\", "_").replace('"', "_").replace("\n", "_")
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(marker)
+        parts.append(f'Content-Disposition: form-data; name="{name}"'.encode())
+        parts.append(b"")
+        parts.append(str(value).encode("utf-8"))
+    parts.append(marker)
+    parts.append(
+        f'Content-Disposition: form-data; name="{file_field}"; filename="{safe_name}"'.encode()
+    )
+    parts.append(f"Content-Type: {media_type}".encode())
+    parts.append(b"")
+    parts.append(content)
+    parts.append(f"--{boundary}--".encode("ascii"))
+    parts.append(b"")
+    return b"\r\n".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
 class BookOfHousesApiError(RuntimeError):
@@ -75,6 +111,8 @@ class BookOfHousesApiClient:
         path: str,
         *,
         payload: dict[str, Any] | None = None,
+        raw_body: bytes | None = None,
+        content_type: str | None = None,
         authenticated: bool = False,
         idempotency_key: str | None = None,
         query: dict[str, Any] | None = None,
@@ -91,6 +129,12 @@ class BookOfHousesApiClient:
         if payload is not None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        elif raw_body is not None:
+            # RULE 230: the artifact route takes multipart/form-data, so the
+            # body arrives already encoded and carries its own boundary.
+            body = raw_body
+            headers["Content-Type"] = content_type or "application/octet-stream"
+            headers["Content-Length"] = str(len(raw_body))
         if authenticated:
             headers["Authorization"] = f"Bearer {self._token}"
             if self.maker_id:
@@ -376,6 +420,44 @@ class BookOfHousesApiClient:
             "POST",
             f"/api/bench/targets/{target}/outcomes",
             payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def upload_deal_artifact(
+        self,
+        deal_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        media_type: str = "application/octet-stream",
+        title: str | None = None,
+        step_ref: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """POST one file to the deal's artifact lane (rule 230, D1).
+
+        multipart/form-data, exactly one `file` part, optional `step_ref` and
+        `title` fields. 201 answers with the receipt: receipt_id, sha256,
+        size_bytes, filename, filed_at. The platform sniffs the bytes and
+        refuses a file whose real type is not the one the step promised
+        (422 deliverable_type_mismatch), and refuses any filing when no step
+        is agent-working (422 out_of_turn_filing).
+        """
+        deal = urllib.parse.quote(deal_id, safe="")
+        fields: dict[str, str] = {}
+        if step_ref:
+            fields["step_ref"] = str(step_ref)
+        if title:
+            fields["title"] = str(title)
+        body, content_type = _multipart_body(
+            fields, filename=filename, content=content, media_type=media_type
+        )
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/artifacts",
+            raw_body=body,
+            content_type=content_type,
             authenticated=True,
             idempotency_key=idempotency_key,
         )

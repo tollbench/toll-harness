@@ -78,7 +78,9 @@ class ArtifactStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def read(self, run_id: str, path: str) -> bytes:
+    def read(self, run_id: str, path: str, limit: int | None = None) -> bytes:
+        """The file's bytes. `limit` reads only the first N -- enough to
+        sniff a 50 MB video's type without loading it (rule 230)."""
         raise NotImplementedError
 
     @abstractmethod

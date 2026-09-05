@@ -703,6 +703,10 @@ def test_current_step_compacts_live_payload_without_dropping_action_fields():
         "declared_odds_drift": None,
         "har_blocks": None,
         "har_responses": None,
+        # RULE 230: what this step promised to hand back, and the files
+        # already on it. Always present, including zero.
+        "deliverable": None,
+        "file_receipts": [],
     }
     assert result["step_thread"]["messages"] == []
     assert result["access"]["grants"] == []

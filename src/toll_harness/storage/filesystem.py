@@ -31,8 +31,12 @@ class FilesystemArtifactStore(ArtifactStore):
             {"path": str(path.relative_to(run_root)), "size": path.stat().st_size} for path in paths
         ]
 
-    def read(self, run_id: str, path: str) -> bytes:
-        return self._path(run_id, path).read_bytes()
+    def read(self, run_id: str, path: str, limit: int | None = None) -> bytes:
+        target = self._path(run_id, path)
+        if limit is None:
+            return target.read_bytes()
+        with target.open("rb") as handle:
+            return handle.read(int(limit))
 
     def write(self, run_id: str, path: str, content: bytes) -> dict[str, Any]:
         target = self._path(run_id, path)

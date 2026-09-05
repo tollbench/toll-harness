@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import secrets
@@ -17,6 +19,7 @@ from toll_harness.core.types import JsonObject, RunStatus, ToolDefinition, ToolR
 from toll_harness.email.base import EmailProvider
 from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
 from toll_harness.toll_bench.base import TollBenchProvider
+from toll_harness.tools import sniff as sniffer
 from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
 
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject]
@@ -31,6 +34,35 @@ SECRET_PLACEHOLDER = re.compile(r"\{\{secret:([A-Za-z][A-Za-z0-9_.-]{0,127})\}\}
 
 _HTTP_REQUEST_MAX_BYTES = 1_000_000
 _HTTP_REQUEST_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
+
+# RULE 230 (Steven, 2026-09-05). WHAT FORCED IT: the harness could not hand
+# back a file at all -- `files.write` wrote UTF-8 text into the run folder and
+# nothing in the runtime ever called the artifact route -- so an agent that
+# promised an MP4 could only file a paragraph saying it had made one, which is
+# exactly what happened on production. `files.write` now takes base64, and
+# `deliver_file` carries the bytes to the platform. 50 MB per file is the
+# platform's cap, checked before the wire so an oversized render is refused in
+# a sentence the model can act on.
+_ARTIFACT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _sniff_artifact(context: ToolContext, path: str) -> dict[str, Any]:
+    """The content type of a run-folder file, read from its own first bytes.
+
+    Only the head is read, so listing a folder of 50 MB videos costs a page
+    each. A store that cannot be read comes back with a null type rather than
+    failing the listing: `files.list` must never break on one odd file.
+    """
+    if not path:
+        return {"type": None, "family": None, "media_type": sniffer.UNKNOWN_MEDIA_TYPE}
+    try:
+        try:
+            head = context.artifact_store.read(context.run_id, path, sniffer.SNIFF_BYTES)
+        except TypeError:
+            head = context.artifact_store.read(context.run_id, path)[: sniffer.SNIFF_BYTES]
+    except Exception:  # noqa: BLE001 - a listing must never break on one file
+        return {"type": None, "family": None, "media_type": sniffer.UNKNOWN_MEDIA_TYPE}
+    return sniffer.sniff(head, filename=path)
 
 
 @dataclass
@@ -405,15 +437,28 @@ def build_standard_registry() -> ToolRegistry:
         human_request,
     )
 
+    def files_list(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        listed = context.artifact_store.list(context.run_id, arguments.get("prefix", ""))
+        files = []
+        for entry in listed:
+            row = dict(entry)
+            row.update(_sniff_artifact(context, str(entry.get("path") or "")))
+            files.append(row)
+        return {"files": files}
+
     registry.register(
         ToolDefinition(
             "files.list",
-            "List files in this run's isolated artifact directory.",
+            (
+                "List files in this run's isolated artifact directory. Each "
+                "entry carries its size and the content type SNIFFED FROM ITS "
+                "OWN BYTES (type, family, media_type) -- the name is a claim, "
+                "the bytes are the file. A null type means these bytes match "
+                "nothing this harness recognises."
+            ),
             _object_schema({"prefix": {"type": "string"}}),
         ),
-        lambda context, arguments: {
-            "files": context.artifact_store.list(context.run_id, arguments.get("prefix", ""))
-        },
+        files_list,
     )
     registry.register(
         ToolDefinition(
@@ -428,18 +473,62 @@ def build_standard_registry() -> ToolRegistry:
             ),
         },
     )
+
+    def files_write(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        encoding = str(arguments.get("encoding") or "utf-8").strip().lower()
+        content = arguments["content"]
+        if encoding in ("utf-8", "utf8"):
+            payload = content.encode("utf-8")
+        elif encoding == "base64":
+            try:
+                payload = base64.b64decode(content, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise ValueError(
+                    "content is not valid base64: " + str(error)
+                ) from None
+        else:
+            raise ValueError("encoding must be utf-8 or base64")
+        if len(payload) > _ARTIFACT_MAX_BYTES:
+            raise ValueError(
+                f"{arguments['path']} would be "
+                f"{len(payload) / (1024 * 1024):.1f} MB and the platform "
+                "delivery lane takes 50 MB per file"
+            )
+        written = context.artifact_store.write(context.run_id, arguments["path"], payload)
+        result = dict(written)
+        result["encoding"] = "base64" if encoding == "base64" else "utf-8"
+        result.update(sniffer.sniff(payload[: sniffer.SNIFF_BYTES], filename=arguments["path"]))
+        return result
+
     registry.register(
         ToolDefinition(
             "files.write",
-            "Write a UTF-8 text file within this run's isolated artifact directory.",
+            (
+                "Write a file within this run's isolated artifact directory. "
+                "encoding utf-8 (the default) writes the text as given; "
+                "encoding base64 decodes `content` first and writes the RAW "
+                "BYTES, which is how a video, an image, a PDF or any other "
+                "binary reaches the run folder. The result reports the size, "
+                "the sha256 and the type sniffed back out of the bytes. Hand "
+                "the file to the person with toll_bench.deliver_file."
+            ),
             _object_schema(
-                {"path": {"type": "string"}, "content": {"type": "string"}},
+                {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "encoding": {
+                        "type": "string",
+                        "enum": ["utf-8", "base64"],
+                        "default": "utf-8",
+                        "description": (
+                            "utf-8 writes text; base64 decodes content into raw bytes."
+                        ),
+                    },
+                },
                 ["path", "content"],
             ),
         ),
-        lambda context, arguments: context.artifact_store.write(
-            context.run_id, arguments["path"], arguments["content"].encode("utf-8")
-        ),
+        files_write,
     )
 
     def web_fetch(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -1435,6 +1524,25 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 ["blocks"],
             ),
             "step_ref": {"type": "string"},
+            "file_url": {
+                "type": "string",
+                "description": (
+                    "RULE 230: a file you host, handed back through the platform's "
+                    "scanner. The platform fetches it once, sniffs the type from the "
+                    "bytes, fingerprints it and drops the bytes."
+                ),
+            },
+            "claim_url": {
+                "type": "string",
+                "description": (
+                    "For a here.now page: the person's link to KEEP the file within "
+                    "24 hours. Only rides a file_url delivery."
+                ),
+            },
+            "filename": {
+                "type": "string",
+                "description": "The name a file_url delivery wears on the person's card.",
+            },
         },
         ["note"],
     )
@@ -1443,7 +1551,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.file_outcome",
             (
                 "File the current step's final handover after a 100% pulse. Send exactly one of "
-                "text or document; APPROVE review steps require a sectioned document. NOT ON A "
+                "text, document or file_url; APPROVE review steps require a sectioned document. "
+                "RULE 230: if this step's signed plan promised a FILE, it does not close on "
+                "words -- deliver the bytes first with toll_bench.deliver_file, or file the "
+                "outcome with file_url through toll_bench.deliver_hosted_file. A text section "
+                "listing a filename closes nothing. NOT ON A "
                 "BLOCK STEP (rule 229): where your plan declared a registry block, the platform "
                 "files the outcome itself from the receipt words when the act executes, and that "
                 "row reads actor: platform. File nothing there."
@@ -1459,6 +1571,168 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ),
         lambda context, arguments: require_toll_bench(context).file_outcome(
             arguments["target_id"], arguments["outcome"], arguments["idempotency_key"]
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # RULE 230 (Steven, 2026-09-05) -- HANDING BACK A FILE.
+    # A document step's signed plan names what it hands back. When the
+    # channel is `file`, the step cannot close until bytes of the promised
+    # type reach the platform. Two doors, one receipt shape: the platform
+    # lane (bytes, under 50 MB) and your own hosting (a link the platform
+    # fetches once, sniffs, fingerprints and drops).
+    # ------------------------------------------------------------------
+
+    def deliver_file(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        provider = require_toll_bench(context)
+        path = str(arguments["path"])
+        try:
+            content = context.artifact_store.read(context.run_id, path)
+        except FileNotFoundError:
+            return {
+                "ok": False,
+                "error": "file_not_found",
+                "message": (
+                    f"{path} is not in this run's folder. Write it first with "
+                    "files.write (encoding base64 for binary), then deliver it. "
+                    "files.list shows what is there."
+                ),
+            }
+        if len(content) > _ARTIFACT_MAX_BYTES:
+            return {
+                "ok": False,
+                "error": "file_too_large",
+                "size_bytes": len(content),
+                "limit_bytes": _ARTIFACT_MAX_BYTES,
+                "message": (
+                    f"{path} is {len(content) / (1024 * 1024):.1f} MB and the "
+                    "platform lane takes 50 MB per file (100 MB per want, "
+                    "shared with what the person uploaded). Host it yourself "
+                    "and hand back the link with toll_bench.deliver_hosted_file."
+                ),
+            }
+        return provider.deliver_file(
+            arguments["deal_id"],
+            filename=path.rsplit("/", 1)[-1],
+            content=content,
+            title=arguments["title"],
+            step_ref=arguments.get("step_ref"),
+        )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.deliver_file",
+            (
+                "Hand a file from this run's folder to the person (rule 230). "
+                "Reads `path` out of the run's isolated artifact directory and "
+                "uploads the BYTES to the deal, where the platform sniffs the "
+                "type from the bytes themselves, fingerprints them and attaches "
+                "a file receipt to the step you are working. 50 MB per file, "
+                "100 MB per want. A step whose signed plan promised a file does "
+                "NOT close until a receipt of the promised type is attached: "
+                "words listing a filename close nothing. This does not hand the "
+                "ball over -- deliver the file, then file the step's outcome. "
+                "If the bytes are not the promised type the platform answers "
+                "422 deliverable_type_mismatch, and if no step of yours is "
+                "working it answers 422 out_of_turn_filing; both come back as a "
+                "plain result you can act on. For a file over 50 MB, or one "
+                "already on your own hosting, use "
+                "toll_bench.deliver_hosted_file instead."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "The file in this run's artifact directory, as "
+                            "files.list prints it."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "The item's real name as the person's card wears "
+                            "it, for example 'Stan animation'. 80 characters "
+                            "at most."
+                        ),
+                    },
+                    "step_ref": {
+                        "type": "string",
+                        "description": (
+                            "The step this file satisfies. Defaults to the step "
+                            "your last current_step call reported."
+                        ),
+                    },
+                },
+                ["deal_id", "path", "title"],
+            ),
+        ),
+        deliver_file,
+    )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.deliver_hosted_file",
+            (
+                "Hand back a file you host yourself, through the platform's "
+                "scanner (rule 230). Files the step's outcome carrying "
+                "`file_url`: the platform fetches that address ONCE, sniffs the "
+                "type from the bytes, records the size and fingerprint and "
+                "drops the bytes. The person's download then streams from your "
+                "address through the platform, re-checking the fingerprint, so "
+                "a swapped or deleted file fails honestly instead of serving "
+                "junk. Use it for a file over the 50 MB platform lane, for one "
+                "already on your infrastructure, or for a here.now page (free, "
+                "anonymous, live 24 hours): hand back the live URL as file_url "
+                "AND the full claim URL as claim_url, which is the person's job "
+                "to use within the day. This IS the step's outcome -- do not "
+                "file a second one after it. A dead link after close is an "
+                "honest state the person sees and a ping to you to re-host; no "
+                "money moves either way."
+            ),
+            _object_schema(
+                {
+                    "target_id": {"type": "string"},
+                    "file_url": {
+                        "type": "string",
+                        "description": (
+                            "The live address the platform fetches the file "
+                            "from, once. Passes the Link Gate."
+                        ),
+                    },
+                    "claim_url": {
+                        "type": "string",
+                        "description": (
+                            "For a here.now page: the full claim link the "
+                            "person uses to keep the file within 24 hours."
+                        ),
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "The name the file wears on the person's card.",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": (
+                            "Required, max 280 chars: what this is and exactly "
+                            "what the person does next, in plain words."
+                        ),
+                    },
+                    "step_ref": {"type": "string"},
+                    "idempotency_key": {"type": "string"},
+                },
+                ["target_id", "file_url", "note", "idempotency_key"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).deliver_hosted_file(
+            arguments["target_id"],
+            {
+                key: arguments[key]
+                for key in ("note", "file_url", "claim_url", "filename", "step_ref")
+                if arguments.get(key)
+            },
+            arguments["idempotency_key"],
         ),
     )
     return registry

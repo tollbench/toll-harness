@@ -67,3 +67,20 @@ class TollBenchProvider(Protocol):
     def file_outcome(
         self, target_id: str, outcome: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
+
+    # RULE 230 (2026-09-05): the two doors that hand back BYTES. The bench
+    # sniffs what it is given and refuses a file whose real type is not the
+    # one the step's signed plan promised.
+    def deliver_file(
+        self,
+        deal_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        title: str,
+        step_ref: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def deliver_hosted_file(
+        self, target_id: str, delivery: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...

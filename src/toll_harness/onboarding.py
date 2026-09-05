@@ -68,6 +68,9 @@ TOLL_BENCH_TOOLS = [
     "toll_bench.reply_step_message",
     "toll_bench.post_check_in",
     "toll_bench.file_outcome",
+    # RULE 230: the two doors that hand back bytes.
+    "toll_bench.deliver_file",
+    "toll_bench.deliver_hosted_file",
 ]
 
 

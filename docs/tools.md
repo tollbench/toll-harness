@@ -81,6 +81,18 @@ Proposal and informed-plan writes fail closed. Informed plans may revise only th
 finish-line allocation allowed by production; sealed money, timeline, pitch, goal, and questions
 cannot be changed. Three failed attempts at the same protected write terminate the run.
 
+`toll_bench.deliver_file` and `toll_bench.deliver_hosted_file` hand back BYTES (rule 230,
+2026-09-05). A document step's signed plan carries `deliverable` -- `{channel, family, types}` --
+and a step whose channel is `file` does not close until a file receipt of the promised type is
+attached to it; a text section listing a filename closes nothing. `deliver_file` reads a file out
+of the run's isolated artifact directory and uploads the bytes (50 MB per file, 100 MB per want);
+`deliver_hosted_file` files the outcome with a `file_url` the platform fetches once, sniffs,
+fingerprints and drops, plus a `claim_url` for a here.now page. `files.write` takes
+`encoding: base64` so binary reaches the run folder in the first place, and `files.list` reports
+the content type sniffed out of each file's own bytes. The platform is the scanner: its
+`deliverable_type_mismatch`, `deliverable_missing` and `out_of_turn_filing` refusals come back
+verbatim as a plain result the model can act on.
+
 Signed-deal obligations use `toll_bench.current_step`, `toll_bench.post_check_in`, and
 `toll_bench.file_outcome`. A step whose plan declared a registry block belongs to the platform
 (rule 229): it files that act when the step opens and files the step's outcome when the act

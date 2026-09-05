@@ -618,6 +618,16 @@ _DEAL_STEP_INSTRUCTION = (
     "failure the step is yours again with the person's words in acts[].note "
     "and the move in acts[].next, no review round spent: file ONE changed act "
     "that answers them, or say on the thread why there is nothing to change. "
+    "A PROMISED FILE IS DELIVERED IN BYTES, NOT IN WORDS (rule 230). Read "
+    "current_step.deliverable: when its channel is `file` this step does not "
+    "close until a file of the promised type is attached to it, and a text "
+    "section listing a filename closes nothing. Make the file, write it into "
+    "the run folder with files.write (encoding base64 for binary), then call "
+    "toll_bench.deliver_file with the path and a real title -- or, for "
+    "something over 50 MB or already on your own hosting, "
+    "toll_bench.deliver_hosted_file with the live URL (and the claim URL for a "
+    "here.now page). Only then file the outcome. If you cannot make that kind "
+    "of file, say so on the step thread instead of filing words in its place. "
     "A CALENDAR EVENT IS AN ACT TOO (rule 219): on a step whose deal holds a "
     "calendar grant, call toll_bench.propose_act with kind calendar_event and "
     "the exact summary, start and end -- never ask the person to put it on "
@@ -667,7 +677,14 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "`with` is left out unless the invitee's address is known. Pull a block in FULL: a "
     "block that runs on the person's connection is TWO steps and the GRANT comes first, "
     "and a meeting block with no calendar GRANT step before it is refused REJ-35. An "
-    "older bench may name required_blocks and refuse a missing one REJ-32."
+    "older bench may name required_blocks and refuse a missing one REJ-32. "
+    "NAME WHAT YOU HAND BACK (rule 230): a step that hands back a thing carries "
+    "`deliverable` -- {\"channel\": \"file\", \"family\": \"video\", \"types\": [\"mp4\"]}. "
+    "Channel is text, file or link; a file names its family and its exact types, and "
+    "the step will not close until bytes of that type reach the platform. If you "
+    "cannot make that kind of file, do not promise it. The brief's "
+    "`person_already_connected` says in one line what the person has connected "
+    "already (rule 231); plan around it."
 )
 _UNANSWERED_MESSAGE_INSTRUCTION = (
     "Answer the single unanswered step message below and nothing else. The "
@@ -742,6 +759,9 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.propose_act",
                 "toll_bench.dismiss_reply",
                 "toll_bench.file_outcome",
+                # RULE 230: the two doors that hand back BYTES.
+                "toll_bench.deliver_file",
+                "toll_bench.deliver_hosted_file",
                 "toll_bench.post_check_in",
                 "toll_bench.reply_step_message",
                 "toll_bench.read_finalist_answers",
@@ -1446,6 +1466,11 @@ def _market_scan_candidates(
             # model knows before it fetches anything that this one needs a
             # meeting act and not an email.
             "required_blocks": target.get("required_blocks"),
+            # RULE 231 (2026-09-05): the provider keys this person has already
+            # connected on earlier wants. It lives on the brief; when the open
+            # listing carries it too, the model knows before it fetches
+            # anything whether an access step is one tap or a setup.
+            "person_connected": target.get("person_connected"),
         }
         for target in selected
     ]
@@ -1526,7 +1551,19 @@ def _process_market_opportunities(
         "pull it out of block_templates IN FULL and in its order -- a block that runs on "
         "the person's connection is TWO steps, the GRANT first (REJ-35) -- and do not "
         "rewrite a block step's title, outcome_promise or har_blocks, which the platform "
-        "writes at signing. On a meeting act put the person's context in message, with no "
+        "writes at signing. NAME WHAT YOU HAND BACK (rule 230): a step that hands back "
+        "a thing carries `deliverable` -- {\"channel\": \"file\", \"family\": \"video\", "
+        "\"types\": [\"mp4\"]} -- channel is text, file or link, and a file names "
+        "its "
+        "family (video, image, audio, document, code) and its exact types. Write it in "
+        "your own words; never file the blank you were handed, and if you cannot make "
+        "that kind of file, do not promise it: a file step will not close until bytes of "
+        "that type reach the platform. THE PERSON'S CONNECTIONS (rule 231): the brief "
+        "carries `person_connected` and a plain sentence in `person_already_connected`. "
+        "Plan around it -- storage connected, plan a hand-back into it; nothing "
+        "connected, plan the download path -- and remember an access step the person has "
+        "already connected is one tap. On a meeting act put the person's context in "
+        "message, with no "
         "dates and no times in it, and leave `with` out unless the invitee's address is "
         "actually known; read a kind's fields with toll_bench.list_act_kinds. Before you "
         "file, call toll_bench.validate_proposal with this target_id: it is free, files "

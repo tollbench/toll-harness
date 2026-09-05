@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks
+from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
 
@@ -46,6 +48,38 @@ LIVE_ACT_STATES: frozenset[str] = frozenset(
 # Kinds the platform files and closes on a block step when the catalog cannot
 # be read. Today the registry publishes a `declaration` for exactly one.
 BLOCK_KINDS_FALLBACK: frozenset[str] = frozenset({"meeting"})
+
+# RULE 230 (Steven, 2026-09-05) -- DELIVERING A FILE.
+# 50 MB per file, 100 MB per want, both the platform's numbers. The per-file
+# cap is checked here as well so a 300 MB render is refused in one sentence
+# the model can act on instead of being pushed up the wire and refused there.
+ARTIFACT_MAX_BYTES = 50 * 1024 * 1024
+
+# The refusals the file doors speak. Surfaced to the model VERBATIM: the
+# platform is the scanner, and its sentence is the one that tells the model
+# what to do next.
+FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
+    {
+        "deliverable_missing",
+        "deliverable_type_mismatch",
+        "deliverable_unfetchable",
+        "deliverable_too_large",
+        "claim_url_rejected",
+        "out_of_turn_filing",
+        "title_too_long",
+        "artifact_budget_exceeded",
+    }
+)
+
+# THE MIRROR WARNS ONCE, THEN THE DOOR DECIDES. `current-step` publishes the
+# step's `deliverable` but NOT its file receipts, so a harness restarted
+# between the delivery and the outcome cannot see a file that is genuinely on
+# the step. Refusing that filing forever would be the validate-door mistake in
+# a new place: a mirror must never bury a filing production would take. So the
+# local check speaks once per step -- which is what the model needs, because
+# the usual case is that it never delivered anything -- and any second attempt
+# goes to the bench, whose `deliverable_missing` is the authoritative refusal.
+MAX_DELIVERABLE_WARNINGS = 1
 
 # RULES 168 AND 170, APPLIED TO THE FOUR QUESTIONS (contract 2.37, 2026-09-04).
 # The finalist questions were the last person-facing ask outside HAR: four plain
@@ -391,6 +425,14 @@ class BookOfHousesTollBenchProvider:
         # "not asked yet"; False means this bench publishes no validate door.
         self._validate_door: bool | None = None
         self._door_repairs: dict[str, int] = {}
+        # RULE 230. What each step's SIGNED plan promised to hand back, and
+        # every file receipt known to be attached to it -- the server's, plus
+        # anything this process filed through deliver_file. A step whose
+        # channel is `file` cannot close on words alone, and finding that out
+        # at the door costs the person a round.
+        self._step_deliverables: dict[str, dict[str, Any]] = {}
+        self._step_receipts: dict[str, list[dict[str, Any]]] = {}
+        self._deliverable_warnings: dict[str, int] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -467,7 +509,22 @@ class BookOfHousesTollBenchProvider:
         return self.api.open_targets()
 
     def read_brief(self, target_id: str) -> dict[str, Any]:
-        return self.api.target_brief(target_id)
+        """The want, and the whole legal FORM to bid with.
+
+        RULE 231 (2026-09-05): the brief carries `person_connected`, the
+        provider keys the person has already connected on earlier wants,
+        ALWAYS PRESENT and empty for nearly everyone. It is a fact the plan is
+        built on -- Drive connected, plan a Drive hand-back; nothing
+        connected, plan the download path -- so it is also handed over as one
+        plain sentence the model cannot skim past.
+        """
+        response = self.api.target_brief(target_id)
+        brief = response.get("brief")
+        if isinstance(brief, dict):
+            brief["person_already_connected"] = blocks.connected_sentence(
+                brief.get("person_connected")
+            )
+        return response
 
     def list_act_kinds(self) -> dict[str, Any]:
         """The act registry (contract 2.44). Each kind publishes `wanted_when`
@@ -839,6 +896,11 @@ class BookOfHousesTollBenchProvider:
         # Steven, 2026-09-05: "they are supposed to connect my calendar IN the
         # plan." The repair inserts it; this is the mirror that names it.
         problems.extend(blocks.grant_problems(steps))
+        # RULE 230 (2026-09-05): the typed deliverable. Only a step that
+        # CARRIES one is checked, so research, choice, handover and access
+        # steps draw no new refusal. A blank left empty is named in the
+        # validate door's own plain words.
+        problems.extend(blocks.deliverable_problems(steps))
         return {
             "ok": not problems,
             "problems": problems,
@@ -970,6 +1032,23 @@ class BookOfHousesTollBenchProvider:
                     "repair pass; filing it so the door's own refusal is the record",
                     target_id,
                 )
+        # RULE 230, LAST. A `deliverable` still carrying the form's
+        # "<angle bracket>" is REJ-36 at the door and would print on the
+        # person's card as though it were a promise. Both the local mirror and
+        # the free validate door have already named it by here, and the model
+        # has spent its repair pass, so the placeholder comes out rather than
+        # costing the round. The harness writes nothing in its place: an
+        # absent deliverable reads as channel "text", which is what a step
+        # that never said otherwise always meant.
+        proposal, cleared = blocks.clear_blank_deliverables(proposal)
+        if cleared:
+            _LOGGER.warning(
+                "Plan for target %s still carried the deliverable blank on "
+                "step(s) %s after the door; removed the placeholder rather "
+                "than filing it as a promise",
+                target_id,
+                ", ".join(str(index + 1) for index in cleared),
+            )
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
             return {
@@ -1319,6 +1398,17 @@ class BookOfHousesTollBenchProvider:
                     "allocation": original.get("allocation"),
                 },
             }
+        # RULE 230: the placeholder never reaches the person's card, and it
+        # comes out only here -- the validator has already had its say, so the
+        # model was told before the harness decided anything.
+        submitted_plan, cleared = blocks.clear_blank_deliverables(submitted_plan)
+        if cleared:
+            _LOGGER.warning(
+                "Informed plan for target %s still carried the deliverable "
+                "blank on step(s) %s; removed the placeholder",
+                target_id,
+                ", ".join(str(index + 1) for index in cleared),
+            )
         try:
             return self.api.submit_informed_plan(
                 target_id, proposal_id, submitted_plan, idempotency_key
@@ -1389,6 +1479,16 @@ class BookOfHousesTollBenchProvider:
                     "declared_odds_drift",
                     "har_blocks",
                     "har_responses",
+                    # RULE 230: what this step's SIGNED plan promised to hand
+                    # back ({channel, family, types}), null when it promised
+                    # nothing. A key the server adds and this whitelist drops
+                    # does not exist -- that is exactly how person_sees_control
+                    # went missing for weeks.
+                    "deliverable",
+                    # The file receipts already attached to this step. ALWAYS
+                    # PRESENT, including the empty list: nothing delivered and
+                    # no visibility must be tellable apart.
+                    "file_receipts",
                 )
             },
             # Open-ask visibility (server contract 2026-08-28): False while a
@@ -1450,8 +1550,52 @@ class BookOfHousesTollBenchProvider:
             # contract 2.29: the same rows, email-only, in the older shape.
             "drafts_sent_back": result.get("drafts_sent_back") or [],
         }
+        # RULE 230, always present including zero. The file receipts ride the
+        # step where the server puts them; read both places rather than making
+        # the model poll a route for the one payload it must act on.
+        receipts = payload["current_step"].get("file_receipts")
+        if not isinstance(receipts, list):
+            receipts = result.get("file_receipts")
+        payload["current_step"]["file_receipts"] = receipts if isinstance(receipts, list) else []
+        known = self._step_receipts.get(str(step.get("id") or ""), [])
+        if known and not payload["current_step"]["file_receipts"]:
+            payload["current_step"]["file_receipts"] = list(known)
+        if payload["current_step"].get("deliverable") is None:
+            payload["current_step"]["deliverable"] = result.get("deliverable")
         self._remember_platform_blocks(step.get("id"), payload)
+        self._remember_deliverable(step.get("id"), payload)
         return payload
+
+    def _remember_deliverable(self, step_id: Any, payload: dict[str, Any]) -> None:
+        """Record this step's signed promise and the files already on it.
+
+        RULE 230: a step whose signed `deliverable.channel` is `file` cannot
+        close until a receipt of the promised type is attached. Remembering it
+        here is what lets `file_outcome` say so BEFORE the filing is spent --
+        the server's `deliverable_missing` costs the person a round.
+        """
+        step_id = str(step_id or "")
+        if not step_id:
+            return
+        step = payload.get("current_step") or {}
+        deliverable = step.get("deliverable")
+        if isinstance(deliverable, dict) and deliverable:
+            self._step_deliverables[step_id] = deliverable
+        server_receipts = [
+            item for item in (step.get("file_receipts") or []) if isinstance(item, dict)
+        ]
+        if server_receipts:
+            known = {
+                str(item.get("receipt_id") or "")
+                for item in self._step_receipts.get(step_id, [])
+            }
+            merged = list(self._step_receipts.get(step_id, []))
+            merged.extend(
+                item
+                for item in server_receipts
+                if str(item.get("receipt_id") or "") not in known
+            )
+            self._step_receipts[step_id] = merged
 
     def _remember_platform_blocks(
         self, step_id: Any, payload: dict[str, Any]
@@ -1763,7 +1907,11 @@ class BookOfHousesTollBenchProvider:
                     "denied, the step is yours again: file a changed act."
                 ),
             }
-        allowed = {"note", "text", "document", "step_ref"}
+        # RULE 230 (2026-09-05): `file_url` is the agent-hosted lane. The
+        # platform fetches the link ONCE, sniffs the bytes, hashes them and
+        # drops them; `claim_url` rides along for a here.now page the person
+        # keeps within the day. `filename` names the file on the card.
+        allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
             return {
@@ -1774,11 +1922,229 @@ class BookOfHousesTollBenchProvider:
         note = str(outcome.get("note") or "").strip()
         if not note or len(note) > 280:
             return {"ok": False, "error": "invalid_delivery_note"}
-        content_fields = [name for name in ("text", "document") if outcome.get(name)]
+        content_fields = [
+            name for name in ("text", "document", "file_url") if outcome.get(name)
+        ]
         if len(content_fields) != 1:
             return {
                 "ok": False,
                 "error": "exactly_one_outcome_content_required",
-                "allowed": ["text", "document"],
+                "allowed": ["text", "document", "file_url"],
             }
-        return self.api.file_outcome(target_id, outcome, idempotency_key)
+        if outcome.get("claim_url") and not outcome.get("file_url"):
+            return {
+                "ok": False,
+                "error": "claim_url_without_file_url",
+                "message": (
+                    "claim_url is the person's link to KEEP a hosted file, so it "
+                    "only rides a file_url delivery."
+                ),
+            }
+        # RULE 230: A STEP THAT PROMISED A FILE DOES NOT CLOSE ON WORDS. What
+        # forced it: three `document` outcomes on production listed
+        # "stan_animation.mp4" in their text sections and no file was ever
+        # uploaded. Said here, before the filing is spent, because the
+        # server's `deliverable_missing` costs the person a review round.
+        blocked = self._file_step_owes_a_file(step_ref, outcome)
+        if blocked:
+            return blocked
+        try:
+            return self.api.file_outcome(target_id, outcome, idempotency_key)
+        except BookOfHousesApiError as error:
+            if error.code not in FILE_DOOR_REFUSALS:
+                raise
+            # VERBATIM. The platform is the scanner; its sentence is the one
+            # that tells the model what to do next.
+            return {
+                "ok": False,
+                "error": error.code,
+                "status": error.status,
+                "message": error.message,
+                "detail": error.body,
+                "terminal": False,
+            }
+
+    def _file_step_owes_a_file(
+        self, step_ref: str | None, outcome: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The local half of rule 230: a promised file, and nothing attached.
+
+        Only fires when the step's SIGNED deliverable says `channel: file` and
+        this filing carries no `file_url` and no receipt is known on the step.
+        A step whose promise we never read is left to the door: a mirror must
+        never bury a delivery the platform would take.
+        """
+        if outcome.get("file_url"):
+            return None
+        step_id = str(step_ref or "").strip()
+        if not step_id:
+            return None
+        deliverable = self._step_deliverables.get(step_id)
+        if not blocks.promised_file_types(deliverable) and not (
+            isinstance(deliverable, dict)
+            and str(deliverable.get("channel") or "").strip().lower() == "file"
+        ):
+            return None
+        if self._step_receipts.get(step_id):
+            return None
+        warnings = self._deliverable_warnings.get(step_id, 0)
+        if warnings >= MAX_DELIVERABLE_WARNINGS:
+            return None
+        self._deliverable_warnings[step_id] = warnings + 1
+        promised = blocks.promise_words(deliverable)
+        return {
+            "ok": False,
+            "error": "deliverable_missing",
+            "deliverable": deliverable,
+            "terminal": False,
+            "message": (
+                f"This step promised {promised}; nothing attached. A text "
+                "section that lists a filename closes nothing. Deliver the "
+                "bytes first -- toll_bench.deliver_file for a file in this "
+                "run's folder, or toll_bench.deliver_hosted_file for a link "
+                "the platform fetches once -- then file this outcome. If you "
+                "cannot make that kind of file, say so on the step thread "
+                "rather than filing words in its place."
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # RULE 230, THE TWO DELIVERY DOORS.
+    # ------------------------------------------------------------------
+
+    def deliver_file(
+        self,
+        deal_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        title: str,
+        step_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Hand a file from this run's folder to the platform (the D1 lane).
+
+        The bytes go up as multipart to the deal's artifact route. The
+        platform sniffs them, hashes them and attaches a file receipt to the
+        step that is agent-working. It does NOT hand the ball over: only the
+        filed OUTCOME does that (one-ball law).
+        """
+        name = str(filename or "").strip() or "delivery"
+        title_words = str(title or "").strip()
+        if not title_words:
+            return {
+                "ok": False,
+                "error": "missing_title",
+                "message": (
+                    "title is the item's real name as the person's card wears "
+                    "it, for example 'Stan animation'. 80 characters at most."
+                ),
+            }
+        if len(title_words) > 80:
+            return {
+                "ok": False,
+                "error": "title_too_long",
+                "message": "title is at most 80 characters as the card wears it.",
+            }
+        if not content:
+            return {
+                "ok": False,
+                "error": "empty_file",
+                "message": f"{name} is empty. There is nothing to deliver.",
+            }
+        if len(content) > ARTIFACT_MAX_BYTES:
+            megabytes = len(content) / (1024 * 1024)
+            return {
+                "ok": False,
+                "error": "file_too_large",
+                "size_bytes": len(content),
+                "limit_bytes": ARTIFACT_MAX_BYTES,
+                "message": (
+                    f"{name} is {megabytes:.1f} MB and the platform lane takes "
+                    "50 MB per file (100 MB per want, shared with what the "
+                    "person uploaded). Host it yourself and hand back the link "
+                    "with toll_bench.deliver_hosted_file, which the platform "
+                    "fetches once and checks the same way."
+                ),
+            }
+        found = sniffer.sniff(content[: sniffer.SNIFF_BYTES], filename=name)
+        step_id = str(step_ref or "").strip() or self._last_step_id or ""
+        digest = hashlib.sha256(content).hexdigest()
+        idempotency_key = f"artifact-{step_id or 'step'}-{digest[:32]}"
+        try:
+            response = self.api.upload_deal_artifact(
+                deal_id,
+                filename=name,
+                content=content,
+                media_type=str(found.get("media_type") or sniffer.UNKNOWN_MEDIA_TYPE),
+                title=title_words,
+                step_ref=step_id or None,
+                idempotency_key=idempotency_key,
+            )
+        except BookOfHousesApiError as error:
+            if error.code not in FILE_DOOR_REFUSALS:
+                raise
+            return {
+                "ok": False,
+                "error": error.code,
+                "status": error.status,
+                "message": error.message,
+                "detail": error.body,
+                "terminal": False,
+                "sniffed": found,
+            }
+        receipt = {
+            "receipt_id": response.get("receipt_id"),
+            "sha256": response.get("sha256") or digest,
+            "size_bytes": response.get("size_bytes", len(content)),
+            "filename": response.get("filename") or name,
+            "filed_at": response.get("filed_at"),
+            # The platform's own reading of the bytes, beside the harness's.
+            "sniffed_type": response.get("sniffed_type"),
+            "family": response.get("family"),
+        }
+        if step_id:
+            self._step_receipts.setdefault(step_id, []).append(receipt)
+        return {
+            "ok": True,
+            **receipt,
+            "sniffed": found,
+            "step_ref": step_id or None,
+            "message": (
+                "The file is on the person's card for this step. It does not "
+                "hand the ball over: file this step's outcome when the work is "
+                "done."
+            ),
+        }
+
+    def deliver_hosted_file(
+        self, target_id: str, delivery: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Hand back a file you host yourself, through the platform's scanner.
+
+        The platform fetches `file_url` once, sniffs the bytes against what
+        the step promised, records size and fingerprint, and drops the bytes.
+        The person's download streams from your address through the platform,
+        re-checking the fingerprint on the way, so a swapped or deleted file
+        fails with an honest message instead of serving junk. `claim_url` is
+        the here.now keep-it link, which is the person's job within the day.
+        """
+        allowed = {"note", "file_url", "claim_url", "filename", "step_ref"}
+        unexpected = sorted(set(delivery) - allowed)
+        if unexpected:
+            return {
+                "ok": False,
+                "error": "invalid_outcome_fields",
+                "unexpected_fields": unexpected,
+                "allowed_fields": sorted(allowed),
+            }
+        if not str(delivery.get("file_url") or "").strip():
+            return {
+                "ok": False,
+                "error": "missing_file_url",
+                "message": (
+                    "file_url is the live address the platform fetches the "
+                    "file from, once."
+                ),
+            }
+        outcome = {key: value for key, value in delivery.items() if value}
+        return self.file_outcome(target_id, outcome, idempotency_key)

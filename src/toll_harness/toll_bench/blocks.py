@@ -845,3 +845,298 @@ def merge_required_blocks(
     merged = dict(proposal)
     merged["steps"] = steps
     return merged, inserted
+
+
+# --------------------------------------------------------------------------
+# RULE 230 (Steven, 2026-09-05) -- THE TYPED DELIVERABLE.
+#
+# A document block's signed plan names WHAT IT HANDS BACK, and it is frozen at
+# signing: `deliverable` = {channel: text|file|link, family: video|image|audio|
+# document|code, types: ["mp4"]}. A step whose channel is `file` cannot close
+# until a file receipt of the promised type is attached to it.
+#
+# WHAT FORCED IT: agent Greg filed three `document` outcomes on production
+# naming "stan_animation.mp4" in their text sections. No file was ever
+# uploaded, and nothing could refuse a paragraph, because the plan never
+# promised a thing. Research, choice, handover and access steps carry nothing
+# new -- this adds no refusal to any step that never hands back a file.
+# --------------------------------------------------------------------------
+
+DELIVERABLE_CHANNELS: tuple[str, ...] = ("text", "file", "link")
+DELIVERABLE_FAMILIES: tuple[str, ...] = ("video", "image", "audio", "document", "code")
+
+# THE TYPES THE PLATFORM CAN CHECK, family by family, copied from the published
+# appendix (agent-skill-appendix.md, rule 230). A type outside this table
+# cannot be promised: a promise nothing can check can never be kept, and
+# freezing one would mean refusing the delivery forever. The bid door refuses
+# a promise outside it as REJ-36, which on a one-bid-per-want board is the
+# whole round, so the same table is checked here before the filing.
+DELIVERABLE_TYPES: dict[str, tuple[str, ...]] = {
+    "video": ("mp4", "mov", "webm", "mkv", "avi", "mpg"),
+    "image": ("png", "jpg", "gif", "webp", "bmp", "tiff", "svg"),
+    "audio": ("mp3", "wav", "m4a", "ogg", "flac"),
+    "document": (
+        "pdf", "docx", "xlsx", "pptx", "rtf", "txt", "md", "csv", "html", "zip",
+    ),
+    "code": ("json", "py", "js", "ts", "sh", "yaml", "xml"),
+}
+
+# Nothing in the bytes separates markdown from a plain note from a python
+# file, so a promise of any of these is kept by any other. `html`, `svg` and
+# `json` are positively detected and never satisfy a plain-text promise.
+PLAIN_TEXT_TYPES: frozenset[str] = frozenset(
+    {"txt", "md", "csv", "py", "js", "ts", "sh", "yaml", "rtf", "xml"}
+)
+
+
+def family_of_type(name: Any) -> str | None:
+    """Which family this type belongs to, or None when it cannot be checked."""
+    key = str(name or "").strip().lower().lstrip(".")
+    for family, types in DELIVERABLE_TYPES.items():
+        if key in types:
+            return family
+    return None
+
+# The validate door's own plain words for the empty blank. Kept here so the
+# prompt, the mirror and the refusal cannot drift apart.
+DELIVERABLE_BLANK_WORDS = (
+    "Say what you hand back on this step, for example an MP4. "
+    'deliverable = {"channel": "file", "family": "video", "types": ["mp4"]} -- '
+    "channel is text, file or link; a file names its family and its exact "
+    "types. If you cannot make that kind of file, do not promise it."
+)
+
+
+def deliverable_of(step: Any) -> Any:
+    """The step's `deliverable` value, however it was written, or None."""
+    if not isinstance(step, dict):
+        return None
+    return step.get("deliverable")
+
+
+def deliverable_is_blank(value: Any) -> bool:
+    """True when the deliverable is still the form's blank and not a promise.
+
+    An empty string, a bare <angle bracket> instruction, an empty dict, a dict
+    whose channel is itself a blank: all of them are the blank, copied.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return is_blank(value)
+    if isinstance(value, dict):
+        if not value:
+            return True
+        return is_blank(value.get("channel"))
+    return False
+
+
+def clear_blank_deliverables(proposal: dict[str, Any]) -> tuple[dict[str, Any], list[int]]:
+    """Drop a `deliverable` that is still the form's blank. Writes no words.
+
+    A literal "<name what you hand back>" filed as the promise would print on
+    the person's card as though it were one. The harness never invents the
+    promise (hands off, Steven 2026-09-05); it removes the copied blank so the
+    door refuses an EMPTY blank in plain words instead of accepting a
+    placeholder as a deliverable.
+    """
+    steps = proposal.get("steps")
+    if not isinstance(steps, list):
+        return proposal, []
+    cleared: list[int] = []
+    rebuilt: list[Any] = []
+    for index, step in enumerate(steps):
+        if isinstance(step, dict) and "deliverable" in step and deliverable_is_blank(
+            step.get("deliverable")
+        ):
+            copy = dict(step)
+            copy.pop("deliverable", None)
+            rebuilt.append(copy)
+            cleared.append(index)
+        else:
+            rebuilt.append(step)
+    if not cleared:
+        return proposal, []
+    trimmed = dict(proposal)
+    trimmed["steps"] = rebuilt
+    return trimmed, cleared
+
+
+def deliverable_problems(steps: Any) -> list[dict[str, str]]:
+    """The local mirror of the validate door's rule-230 checks.
+
+    Only a step that CARRIES a deliverable is checked, plus the blank one it
+    copied. A step that hands back nothing declares nothing and is untouched.
+    """
+    problems: list[dict[str, str]] = []
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict) or "deliverable" not in step:
+            continue
+        value = step.get("deliverable")
+        path = f"steps.{index}.deliverable"
+        if deliverable_is_blank(value):
+            problems.append({"path": path, "message": DELIVERABLE_BLANK_WORDS})
+            continue
+        if not isinstance(value, dict):
+            problems.append(
+                {
+                    "path": path,
+                    "message": (
+                        "deliverable is an object, not a sentence. "
+                        + DELIVERABLE_BLANK_WORDS
+                    ),
+                }
+            )
+            continue
+        channel = str(value.get("channel") or "").strip().lower()
+        if channel not in DELIVERABLE_CHANNELS:
+            problems.append(
+                {
+                    "path": f"{path}.channel",
+                    "message": (
+                        "channel must be text, file or link. "
+                        + DELIVERABLE_BLANK_WORDS
+                    ),
+                }
+            )
+            continue
+        if channel != "file":
+            continue
+        family = str(value.get("family") or "").strip().lower()
+        if family not in DELIVERABLE_FAMILIES:
+            problems.append(
+                {
+                    "path": f"{path}.family",
+                    "message": (
+                        "a file deliverable names its family: "
+                        + ", ".join(DELIVERABLE_FAMILIES)
+                        + ". The family is what the person's card says you will hand back."
+                    ),
+                }
+            )
+        types = value.get("types")
+        named = [
+            str(item).strip().lower().lstrip(".")
+            for item in (types if isinstance(types, list) else [])
+            if str(item).strip() and not is_blank(str(item))
+        ]
+        if not named:
+            problems.append(
+                {
+                    "path": f"{path}.types",
+                    "message": (
+                        'a file deliverable names its exact types, for example ["mp4"]. '
+                        "The family drives the person's card; the type is what the "
+                        "platform sniffs the bytes against when you deliver. If you "
+                        "cannot make that kind of file, do not promise it."
+                    ),
+                }
+            )
+            continue
+        # A type nothing can check can never be kept, and a family that does
+        # not match its own types is a promise the card would print wrong.
+        # Both are REJ-36 at the bid door.
+        uncheckable = [item for item in named if family_of_type(item) is None]
+        if uncheckable:
+            problems.append(
+                {
+                    "path": f"{path}.types",
+                    "message": (
+                        "the platform cannot check "
+                        + ", ".join(sorted(uncheckable))
+                        + ", so it cannot be promised (REJ-36). The types it can "
+                        "check are: "
+                        + "; ".join(
+                            f"{family} -- {', '.join(items)}"
+                            for family, items in DELIVERABLE_TYPES.items()
+                        )
+                        + "."
+                    ),
+                }
+            )
+            continue
+        if family in DELIVERABLE_FAMILIES:
+            wrong = [item for item in named if family_of_type(item) != family]
+            if wrong:
+                problems.append(
+                    {
+                        "path": f"{path}.family",
+                        "message": (
+                            f"family {family} does not carry "
+                            + ", ".join(sorted(wrong))
+                            + " (REJ-36). "
+                            + family
+                            + " is: "
+                            + ", ".join(DELIVERABLE_TYPES[family])
+                            + "."
+                        ),
+                    }
+                )
+    return problems
+
+
+def promised_file_types(deliverable: Any) -> list[str]:
+    """The exact types a `file` deliverable promised. Empty for anything else."""
+    if not isinstance(deliverable, dict):
+        return []
+    if str(deliverable.get("channel") or "").strip().lower() != "file":
+        return []
+    types = deliverable.get("types")
+    return [
+        str(item).strip().lower().lstrip(".")
+        for item in (types if isinstance(types, list) else [])
+        if str(item).strip()
+    ]
+
+
+def promise_words(deliverable: Any) -> str:
+    """"an MP4" / "a video file" -- how the refusal names what was promised."""
+    types = promised_file_types(deliverable)
+    if types:
+        spelled = ", ".join(item.upper() for item in types)
+        article = "an" if spelled[:1] in "AEIOUFHLMNRSX" else "a"
+        return f"{article} {spelled}"
+    family = str((deliverable or {}).get("family") or "").strip().lower()
+    if family:
+        return f"a {family} file"
+    return "a file"
+
+
+# The provider keys the brief publishes, in the words a person would use.
+# Anything not listed prints its own key with the dashes taken out, so a
+# connector added on the platform reads sensibly here the day it ships.
+CONNECTOR_WORDS: dict[str, str] = {
+    "google-calendar": "Calendar",
+    "google-gmail": "Gmail",
+    "gmail": "Gmail",
+    "google-drive": "Google Drive",
+    "dropbox": "Dropbox",
+}
+
+
+def connector_words(provider: Any) -> str:
+    key = str(provider or "").strip().lower()
+    if not key:
+        return ""
+    if key in CONNECTOR_WORDS:
+        return CONNECTOR_WORDS[key]
+    return key.replace("google-", "").replace("-", " ").replace("_", " ").title()
+
+
+def connected_sentence(person_connected: Any) -> str:
+    """RULE 231: one line telling the agent what the person already has.
+
+    ALWAYS PRESENT, including zero -- an empty list and a brief that never
+    carried the field must be tellable apart from "Calendar, Gmail", and
+    "nothing yet" is a fact the plan is built on: nothing connected means plan
+    the download path, Drive connected means plan a Drive hand-back.
+    """
+    names = [
+        connector_words(item)
+        for item in (person_connected if isinstance(person_connected, list) else [])
+        if str(item or "").strip()
+    ]
+    names = [name for name in names if name]
+    if not names:
+        return "The person has connected nothing yet."
+    return "The person already connected: " + ", ".join(names) + "."

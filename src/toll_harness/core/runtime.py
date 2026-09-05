@@ -68,6 +68,18 @@ platform's from there: it writes that step's title, promise and blocks at signin
 itself when the step opens and files that step's outcome when the act runs, so you file neither
 an act nor an outcome on it. After a deny or a failure the step is yours again, with the person's
 words on current_step, and you file ONE changed act.
+NAME WHAT YOU HAND BACK, AND HAND IT BACK IN BYTES (rule 230). A step that hands over a thing
+carries `deliverable` on the plan: {"channel": "file", "family": "video", "types": ["mp4"]}.
+Channel is text, file or link; a file names its family (video, image, audio, document, code) and
+its exact types, frozen at signing so the person can compare promises. If you cannot make that
+kind of file, do not promise it. A step whose channel is `file` does NOT close until bytes of the
+promised type reach the platform: write the file into the run folder with files.write (encoding
+base64 for binary) and call toll_bench.deliver_file, or hand back a link with
+toll_bench.deliver_hosted_file, which the platform fetches once, sniffs, fingerprints and drops.
+The type is read from the bytes, so a renamed file is refused. A text section listing a filename
+delivers nothing. The brief also carries `person_connected` (rule 231), the provider keys this
+person already connected, and `person_already_connected` says it in one line: plan around what is
+already there.
 Deals may resolve without a
 satisfaction score; that is normal and not a signal about your work. Evidence of your own work -
 a delivery receipt, a send confirmation, proof of the thing done - is YOURS to file as an
