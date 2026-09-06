@@ -8,11 +8,10 @@ again. The bench grew the blank and three refusals; the harness never filled the
 blank, so every railed agent kept promising prose.
 """
 
+from tests.unit.test_deliver_file_r230 import _StepApi
 from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
-
-from tests.unit.test_deliver_file_r230 import _StepApi
 
 SHAPE = {"channel": "text", "fields": ["address", "hours"], "min_count": 2}
 
@@ -34,7 +33,8 @@ def _outcome(document):
 
 
 def test_a_text_step_that_names_nothing_is_prose_and_draws_nothing():
-    assert blocks.deliverable_problems([{"title": "Findings", "deliverable": {"channel": "text"}}]) == []
+    prose = [{"title": "Findings", "deliverable": {"channel": "text"}}]
+    assert blocks.deliverable_problems(prose) == []
     assert blocks.signed_fields({"channel": "text"}) == []
     assert blocks.signed_min_count({"channel": "text"}) == 1
 
@@ -65,7 +65,8 @@ def test_the_mirror_names_a_bad_field_in_the_doors_words():
     assert "is an address, not a field name" in problems[0]["message"]
 
     problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "fields": [f"f{i}" for i in range(13)]}}]
+        [{"title": "Stops",
+          "deliverable": {"channel": "text", "fields": [f"f{i}" for i in range(13)]}}]
     )
     assert "at most 12 names; you named 13" in problems[0]["message"]
 
@@ -78,12 +79,14 @@ def test_min_count_rides_with_fields_and_stays_a_whole_number():
     assert "rides with deliverable.fields" in problems[0]["message"]
 
     problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "fields": ["address"], "min_count": 0}}]
+        [{"title": "Stops",
+          "deliverable": {"channel": "text", "fields": ["address"], "min_count": 0}}]
     )
     assert "from 1 to 200" in problems[0]["message"]
 
     problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "fields": ["address"], "min_count": "two"}}]
+        [{"title": "Stops",
+          "deliverable": {"channel": "text", "fields": ["address"], "min_count": "two"}}]
     )
     assert '"two" is not one' in problems[0]["message"]
 
@@ -109,7 +112,8 @@ def test_a_copied_field_blank_is_named_and_then_stripped_not_filed():
 
 
 def test_a_file_step_carries_no_shape():
-    assert blocks.signed_fields({"channel": "file", "family": "video", "types": ["mp4"], "fields": ["x"]}) == []
+    promise = {"channel": "file", "family": "video", "types": ["mp4"], "fields": ["x"]}
+    assert blocks.signed_fields(promise) == []
 
 
 # --------------------------------------------------------------------------
@@ -128,7 +132,8 @@ def test_headings_with_nothing_under_them_hand_back_nothing():
     refusal = blocks.cards_shortfall(SHAPE, _outcome(document))
     assert refusal["error"] == "deliverable_fields_missing"
     assert refusal["message"] == (
-        "This step promised 2 or more cards with address and hours; the document has no cards block."
+        "This step promised 2 or more cards with address and hours; "
+        "the document has no cards block."
     )
     assert refusal["how"]["document"]["blocks"][0]["type"] == "cards"
     assert refusal["how"]["document"]["blocks"][0]["items"] == [
@@ -138,14 +143,19 @@ def test_headings_with_nothing_under_them_hand_back_nothing():
 
 
 def test_an_empty_box_is_refused_by_card_and_field():
-    refusal = blocks.cards_shortfall(SHAPE, _outcome(_document(CARD_1, {"address": "40 Elm Ave", "hours": " "})))
+    half = {"address": "40 Elm Ave", "hours": " "}
+    refusal = blocks.cards_shortfall(SHAPE, _outcome(_document(CARD_1, half)))
     assert refusal["error"] == "deliverable_fields_blank"
-    assert refusal["message"] == "Card 2 leaves hours empty. Every card has to fill address and hours."
+    assert refusal["message"] == (
+        "Card 2 leaves hours empty. Every card has to fill address and hours."
+    )
     assert refusal["blank"] == {"card": 2, "fields": ["hours"]}
     assert refusal["certain"] is True
 
     refusal = blocks.cards_shortfall(SHAPE, _outcome(_document({"note": "a heading only"})))
-    assert refusal["message"] == "Card 1 leaves address and hours empty. Every card has to fill address and hours."
+    assert refusal["message"] == (
+        "Card 1 leaves address and hours empty. Every card has to fill address and hours."
+    )
 
 
 def test_too_few_filled_cards_is_named_with_the_count():
@@ -168,12 +178,14 @@ def test_enough_filled_cards_pass_and_the_card_number_runs_across_blocks():
 
 
 def test_a_text_outcome_on_a_shaped_step_has_no_cards():
-    refusal = blocks.cards_shortfall(SHAPE, {"note": "Done.", "text": "Address: 12 Main St. Hours: 9-5."})
+    prose = {"note": "Done.", "text": "Address: 12 Main St. Hours: 9-5."}
+    refusal = blocks.cards_shortfall(SHAPE, prose)
     assert refusal["error"] == "deliverable_fields_missing"
 
 
 def test_a_step_with_no_shape_counts_nothing():
-    assert blocks.cards_shortfall({"channel": "text"}, _outcome({"blocks": [{"type": "heading", "text": "x"}]})) is None
+    headings = _outcome({"blocks": [{"type": "heading", "text": "x"}]})
+    assert blocks.cards_shortfall({"channel": "text"}, headings) is None
     assert blocks.cards_shortfall(None, _outcome(_document())) is None
 
 
@@ -275,7 +287,8 @@ def test_the_cards_block_and_the_rule_are_described_where_a_model_reads_them():
 
     assert "deliverable.fields" in tool.description
     assert "deliverable_fields_blank" in tool.description
-    block = tool.input_schema["properties"]["outcome"]["properties"]["document"]["properties"]["blocks"]["items"]
+    outcome = tool.input_schema["properties"]["outcome"]
+    block = outcome["properties"]["document"]["properties"]["blocks"]["items"]
     assert "cards" in block["properties"]["type"]["description"]
     assert {"type": "object", "additionalProperties": {"type": "string"}} in (
         block["properties"]["items"]["items"]["anyOf"]

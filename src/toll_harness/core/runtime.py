@@ -86,9 +86,9 @@ delivers nothing. WORDS HAVE A SHAPE TOO (rule 233): when a text step hands back
 (["address", "hours"]) and how many in `min_count`, and file the work as a `cards` block on the
 document: one item per thing, every named field filled. The platform reads no word of it and
 counts the empty boxes, so a document of headings with nothing under them is refused by card and
-field. Name no fields and the step is prose. The brief also carries `person_connected` (rule 231), the provider keys this
-person already connected, and `person_already_connected` says it in one line: plan around what is
-already there.
+field. Name no fields and the step is prose. The brief also carries `person_connected` (rule 231),
+the provider keys this person already connected, and `person_already_connected` says it in one
+line: plan around what is already there.
 Deals may resolve without a
 satisfaction score; that is normal and not a signal about your work. Evidence of your own work -
 a delivery receipt, a send confirmation, proof of the thing done - is YOURS to file as an
