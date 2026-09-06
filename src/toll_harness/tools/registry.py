@@ -1495,10 +1495,28 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         {
             "type": {
                 "type": "string",
-                "description": "One of heading, paragraph, or bullets.",
+                "description": (
+                    "One of heading, paragraph, bullets, or cards. RULE 233: a "
+                    "cards block is how a step that named deliverable.fields "
+                    "hands its work back -- items is a list of objects, one per "
+                    "thing, keyed by the field names, every value filled."
+                ),
             },
+            "title": {"type": "string"},
             "text": {"type": "string"},
-            "items": {"type": "array", "items": {"type": "string"}},
+            "items": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "object", "additionalProperties": {"type": "string"}},
+                    ]
+                },
+                "description": (
+                    "bullets: strings. cards: objects keyed by the promised field "
+                    'names, e.g. {"address": "12 Main St", "hours": "9-5"}.'
+                ),
+            },
         },
         ["type"],
     )
@@ -1555,7 +1573,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "RULE 230: if this step's signed plan promised a FILE, it does not close on "
                 "words -- deliver the bytes first with toll_bench.deliver_file, or file the "
                 "outcome with file_url through toll_bench.deliver_hosted_file. A text section "
-                "listing a filename closes nothing. NOT ON A "
+                "listing a filename closes nothing. RULE 233: if the signed plan named "
+                "deliverable.fields, the document must carry a cards block -- one item per "
+                "thing, every named field filled, at least min_count of them -- or it is "
+                "refused (deliverable_fields_missing, deliverable_fields_blank, "
+                "deliverable_count_short); the platform reads no word of it and counts "
+                "empty boxes, so a heading with nothing under it hands back nothing. NOT ON A "
                 "BLOCK STEP (rule 229): where your plan declared a registry block, the platform "
                 "files the outcome itself from the receipt words when the act executes, and that "
                 "row reads actor: platform. File nothing there."
@@ -1733,6 +1756,85 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 if arguments.get(key)
             },
             arguments["idempotency_key"],
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # THE OUTSIDE ACT (Steven, 2026-09-05) -- ONE DOOR FOR WORK THE PLATFORM
+    # HAS NO HANDS FOR. Declared at bid time, allowed by the person, done by
+    # the agent, closed by this filing.
+    # ------------------------------------------------------------------
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.file_evidence",
+            (
+                "File the evidence for an OUTSIDE act -- the block for work "
+                "the platform has no hands for, which you declared at bid "
+                "time and do yourself, in your own name, with your own tools: "
+                "a phone call, a purchase, a visit, a form on somebody else's "
+                "site. Use it only on a step whose block is `outside`, only "
+                "after the person has tapped Allow (the act reads state "
+                "`approved` in `acts` on toll_bench.current_step), and only "
+                "after you have actually done the thing. Say in `summary`, in "
+                "plain words the person reads, who you dealt with, what "
+                "happened and how it ended; add up to five links they can "
+                "open and up to five receipt_ids of files you already "
+                "delivered on this deal with toll_bench.deliver_file. Filing "
+                "it closes the step: the platform writes the outcome itself "
+                "(rule 229) and asks the witness you named one tap whether it "
+                "happened, so do NOT call toll_bench.file_outcome on that "
+                "step. Refusals come back as a plain result: "
+                "`no_outside_act` means this step declared no outside block "
+                "or none is open; `not_allowed_yet` means the person has not "
+                "tapped Allow yet, so wait and poll current_step; "
+                "`already_done` means this act is filed; `invalid_evidence` "
+                "names the field to fix."
+            ),
+            _object_schema(
+                {
+                    "deal_id": {"type": "string"},
+                    "step_id": {
+                        "type": "string",
+                        "description": "The step carrying the approved outside act.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": (
+                            "What you did, in your own plain words, 10 to "
+                            "2000 characters. The person reads this and "
+                            "nothing else."
+                        ),
+                    },
+                    "links": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {"type": "string"},
+                        "description": (
+                            "Up to 5 full http(s) addresses the person can "
+                            "open: a receipt, a confirmation, a recording."
+                        ),
+                    },
+                    "receipt_ids": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {"type": "string"},
+                        "description": (
+                            "Up to 5 `receipt_id` values that "
+                            "toll_bench.deliver_file already answered with on "
+                            "this deal."
+                        ),
+                    },
+                },
+                ["deal_id", "step_id", "summary"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).file_evidence(
+            arguments["deal_id"],
+            arguments["step_id"],
+            summary=arguments["summary"],
+            links=arguments.get("links"),
+            receipt_ids=arguments.get("receipt_ids"),
         ),
     )
     return registry

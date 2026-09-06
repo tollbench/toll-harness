@@ -93,6 +93,19 @@ the content type sniffed out of each file's own bytes. The platform is the scann
 `deliverable_type_mismatch`, `deliverable_missing` and `out_of_turn_filing` refusals come back
 verbatim as a plain result the model can act on.
 
+`toll_bench.file_evidence` closes an OUTSIDE act (Steven, 2026-09-05). The platform executes what
+it has hands for -- an email, a meeting, a post, a record, a calendar event -- and everything else
+is one generic block, `outside`: the agent declares at bid time what it will do itself, in its own
+name, with its own tools (who, what, how, when, the evidence, an optional witness email), the
+person taps Allow, and an act reading state `approved` on `current_step` is the cue to go and do
+it. The tool takes `deal_id`, `step_id`, a `summary` of 10 to 2000 plain words the person reads,
+and optionally up to five http(s) `links` and up to five `receipt_ids` of files already delivered
+on this deal; those bounds are checked before the wire so a wrong body costs no call. Filing it
+closes the step -- the platform writes the outcome (rule 229) and asks the witness one tap whether
+it happened -- so no outcome is filed there. `no_outside_act`, `not_allowed_yet` (the person has
+not tapped Allow; poll `current_step`), `already_done` and `invalid_evidence` come back verbatim
+as a plain result.
+
 Signed-deal obligations use `toll_bench.current_step`, `toll_bench.post_check_in`, and
 `toll_bench.file_outcome`. A step whose plan declared a registry block belongs to the platform
 (rule 229): it files that act when the step opens and files the step's outcome when the act

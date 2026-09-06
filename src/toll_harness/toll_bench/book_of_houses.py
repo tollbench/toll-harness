@@ -49,6 +49,26 @@ LIVE_ACT_STATES: frozenset[str] = frozenset(
 # be read. Today the registry publishes a `declaration` for exactly one.
 BLOCK_KINDS_FALLBACK: frozenset[str] = frozenset({"meeting"})
 
+# THE OUTSIDE ACT (Steven, 2026-09-05) -- WHAT THE PLATFORM HAS NO HANDS FOR.
+# The bounds of the evidence door, checked here so a refusal the harness can
+# see costs no call. The summary is the whole receipt the person reads.
+EVIDENCE_SUMMARY_MIN = 10
+EVIDENCE_SUMMARY_MAX = 2000
+EVIDENCE_MAX_LINKS = 5
+EVIDENCE_MAX_RECEIPTS = 5
+
+# The refusals the evidence door speaks. Surfaced to the model VERBATIM: the
+# door knows whether the person has tapped Allow, and its sentence is the one
+# that says what to do next.
+EVIDENCE_DOOR_REFUSALS: frozenset[str] = frozenset(
+    {
+        "no_outside_act",
+        "not_allowed_yet",
+        "already_done",
+        "invalid_evidence",
+    }
+)
+
 # RULE 230 (Steven, 2026-09-05) -- DELIVERING A FILE.
 # 50 MB per file, 100 MB per want, both the platform's numbers. The per-file
 # cap is checked here as well so a 300 MB render is refused in one sentence
@@ -68,6 +88,9 @@ FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
         "out_of_turn_filing",
         "title_too_long",
         "artifact_budget_exceeded",
+        # RULE 233 (2026-09-05): the shape door. The bench counts the empty
+        # boxes on the cards and its sentence names the card and the field.
+        *blocks.SHAPE_DOOR_REFUSALS,
     }
 )
 
@@ -433,6 +456,10 @@ class BookOfHousesTollBenchProvider:
         self._step_deliverables: dict[str, dict[str, Any]] = {}
         self._step_receipts: dict[str, list[dict[str, Any]]] = {}
         self._deliverable_warnings: dict[str, int] = {}
+        # RULE 233. The shape mirror warns once per step on a MISSING or SHORT
+        # set of cards (an earlier receipt on the step may already carry
+        # them), and every time on a blank box in the document in hand.
+        self._shape_warnings: dict[str, int] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -1948,6 +1975,12 @@ class BookOfHousesTollBenchProvider:
         blocked = self._file_step_owes_a_file(step_ref, outcome)
         if blocked:
             return blocked
+        # RULE 233: A STEP THAT PROMISED CARDS DOES NOT CLOSE ON HEADINGS.
+        # What forced it: a document whose blocks were four field names as
+        # headings with nothing under them, filed twice on production.
+        blocked = self._text_step_owes_cards(step_ref, outcome)
+        if blocked:
+            return blocked
         try:
             return self.api.file_outcome(target_id, outcome, idempotency_key)
         except BookOfHousesApiError as error:
@@ -2007,6 +2040,44 @@ class BookOfHousesTollBenchProvider:
                 "rather than filing words in its place."
             ),
         }
+
+    def _text_step_owes_cards(
+        self, step_ref: str | None, outcome: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The local half of rule 233: a promised shape, and the boxes empty.
+
+        Only fires when the step's SIGNED deliverable is `text` and names
+        `fields`. A blank box on a card in THIS document is refused every
+        time -- the bench refuses it by name whatever else is on the step. A
+        document with no cards, or too few, is named ONCE per step and then
+        left to the door: an earlier receipt on the same step may already
+        carry the cards, `current-step` does not publish receipts, and a
+        mirror must never bury a filing the platform would take.
+        """
+        step_id = str(step_ref or "").strip()
+        if not step_id:
+            return None
+        deliverable = self._step_deliverables.get(step_id)
+        shortfall = blocks.cards_shortfall(deliverable, outcome)
+        if shortfall is None:
+            return None
+        if not shortfall.get("certain"):
+            warnings = self._shape_warnings.get(step_id, 0)
+            if warnings >= MAX_DELIVERABLE_WARNINGS:
+                return None
+            self._shape_warnings[step_id] = warnings + 1
+        result = {key: value for key, value in shortfall.items() if key != "certain"}
+        result["message"] = (
+            result["message"]
+            + " A heading with nothing under it hands back nothing: the "
+            "platform reads no word of the work, it counts empty boxes. "
+            "File the outcome again with a cards block, one item per thing "
+            "and every named field filled (the exact shape is in how). If "
+            "you cannot fill them, say so on the step thread rather than "
+            "filing a shell."
+        )
+        result.update({"ok": False, "deliverable": deliverable, "terminal": False})
+        return result
 
     # ------------------------------------------------------------------
     # RULE 230, THE TWO DELIVERY DOORS.
@@ -2148,3 +2219,121 @@ class BookOfHousesTollBenchProvider:
             }
         outcome = {key: value for key, value in delivery.items() if value}
         return self.file_outcome(target_id, outcome, idempotency_key)
+
+    # ------------------------------------------------------------------
+    # THE OUTSIDE ACT (Steven, 2026-09-05) -- THE EVIDENCE DOOR.
+    # The platform executes what it has hands for: an email, a meeting, a
+    # post, a record, a calendar event. Everything else -- a phone call, a
+    # purchase, a visit, a form on somebody else's site -- is ONE generic
+    # block. The agent declares at bid time what it will do itself, in its own
+    # name, with its own tools; the person taps Allow; the agent goes and does
+    # it; then it files the evidence here, and the platform closes the step
+    # (rule 229) and asks the witness the declaration named. One door, one
+    # filing, no outcome of the agent's own.
+    # ------------------------------------------------------------------
+
+    def file_evidence(
+        self,
+        deal_id: str,
+        step_id: str,
+        *,
+        summary: str,
+        links: list[str] | None = None,
+        receipt_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """File what you actually did on an approved `outside` act.
+
+        Checked here before a call is spent on it: the summary the person
+        reads, at most five http(s) links, at most five ids of file receipts
+        already delivered on this deal. Everything else is the door's to say
+        -- whether this step declared an outside block, whether the person has
+        tapped Allow, whether it is already done -- and its sentence comes
+        back verbatim.
+        """
+        words = str(summary or "").strip()
+        if len(words) < EVIDENCE_SUMMARY_MIN or len(words) > EVIDENCE_SUMMARY_MAX:
+            return {
+                "ok": False,
+                "error": "invalid_evidence",
+                "field": "summary",
+                "message": (
+                    "summary is what you did, in your own plain words, "
+                    f"{EVIDENCE_SUMMARY_MIN} to {EVIDENCE_SUMMARY_MAX} "
+                    "characters: who you dealt with, what happened, and how "
+                    "it ended. The person reads this and nothing else."
+                ),
+            }
+        given_links = list(links or [])
+        if len(given_links) > EVIDENCE_MAX_LINKS:
+            return {
+                "ok": False,
+                "error": "invalid_evidence",
+                "field": "links",
+                "message": (
+                    f"{len(given_links)} links; at most "
+                    f"{EVIDENCE_MAX_LINKS} ride the evidence. Keep the ones "
+                    "that show the thing happened."
+                ),
+            }
+        checked_links: list[str] = []
+        for item in given_links:
+            address = str(item or "").strip()
+            if not address.lower().startswith(("http://", "https://")):
+                return {
+                    "ok": False,
+                    "error": "invalid_evidence",
+                    "field": "links",
+                    "message": (
+                        f"{address or 'an empty link'} is not a web address. "
+                        "Every link is a full http:// or https:// URL the "
+                        "person can open."
+                    ),
+                }
+            checked_links.append(address)
+        given_receipts = list(receipt_ids or [])
+        if len(given_receipts) > EVIDENCE_MAX_RECEIPTS:
+            return {
+                "ok": False,
+                "error": "invalid_evidence",
+                "field": "receipt_ids",
+                "message": (
+                    f"{len(given_receipts)} receipt ids; at most "
+                    f"{EVIDENCE_MAX_RECEIPTS} ride the evidence."
+                ),
+            }
+        checked_receipts: list[str] = []
+        for item in given_receipts:
+            receipt = str(item or "").strip()
+            if not receipt:
+                return {
+                    "ok": False,
+                    "error": "invalid_evidence",
+                    "field": "receipt_ids",
+                    "message": (
+                        "A receipt id is the `receipt_id` a "
+                        "toll_bench.deliver_file on this deal answered with. "
+                        "An empty one names nothing."
+                    ),
+                }
+            checked_receipts.append(receipt)
+        payload: dict[str, Any] = {"summary": words}
+        if checked_links:
+            payload["links"] = checked_links
+        if checked_receipts:
+            payload["receipt_ids"] = checked_receipts
+        step = str(step_id or "").strip()
+        digest = hashlib.sha256(words.encode("utf-8")).hexdigest()[:32]
+        idempotency_key = f"evidence-{step or 'step'}-{digest}"
+        try:
+            return self.api.file_evidence(deal_id, step, payload, idempotency_key)
+        except BookOfHousesApiError as error:
+            if error.code not in EVIDENCE_DOOR_REFUSALS:
+                raise
+            return {
+                "ok": False,
+                "error": error.code,
+                "status": error.status,
+                "message": error.message,
+                "detail": error.body,
+                "terminal": False,
+            }

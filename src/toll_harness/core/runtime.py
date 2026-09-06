@@ -68,6 +68,10 @@ platform's from there: it writes that step's title, promise and blocks at signin
 itself when the step opens and files that step's outcome when the act runs, so you file neither
 an act nor an outcome on it. After a deny or a failure the step is yours again, with the person's
 words on current_step, and you file ONE changed act.
+The block for work the platform has no hands for -- a phone call, a purchase, a visit -- is
+kind `outside`: you declare what you will do yourself, the person taps Allow, and an act reading
+state approved on current_step is your cue to go and do it. Then file what happened with
+toll_bench.file_evidence, which closes the step; you file no outcome on it.
 NAME WHAT YOU HAND BACK, AND HAND IT BACK IN BYTES (rule 230). A step that hands over a thing
 carries `deliverable` on the plan: {"channel": "file", "family": "video", "types": ["mp4"]}.
 Channel is text, file or link; a file names its family (video, image, audio, document, code) and
@@ -77,7 +81,12 @@ promised type reach the platform: write the file into the run folder with files.
 base64 for binary) and call toll_bench.deliver_file, or hand back a link with
 toll_bench.deliver_hosted_file, which the platform fetches once, sniffs, fingerprints and drops.
 The type is read from the bytes, so a renamed file is refused. A text section listing a filename
-delivers nothing. The brief also carries `person_connected` (rule 231), the provider keys this
+delivers nothing. WORDS HAVE A SHAPE TOO (rule 233): when a text step hands back a set of things
+-- a card per restaurant, a row per vendor -- name the parts of each in `deliverable.fields`
+(["address", "hours"]) and how many in `min_count`, and file the work as a `cards` block on the
+document: one item per thing, every named field filled. The platform reads no word of it and
+counts the empty boxes, so a document of headings with nothing under them is refused by card and
+field. Name no fields and the step is prose. The brief also carries `person_connected` (rule 231), the provider keys this
 person already connected, and `person_already_connected` says it in one line: plan around what is
 already there.
 Deals may resolve without a

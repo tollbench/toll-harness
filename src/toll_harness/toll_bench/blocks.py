@@ -953,6 +953,14 @@ def clear_blank_deliverables(proposal: dict[str, Any]) -> tuple[dict[str, Any], 
             copy.pop("deliverable", None)
             rebuilt.append(copy)
             cleared.append(index)
+        elif isinstance(step, dict) and "deliverable" in step and (
+            clear_blank_fields(step.get("deliverable")) is not step.get("deliverable")
+        ):
+            # RULE 233: the same law for a field name still reading "<field>".
+            copy = dict(step)
+            copy["deliverable"] = clear_blank_fields(step.get("deliverable"))
+            rebuilt.append(copy)
+            cleared.append(index)
         else:
             rebuilt.append(step)
     if not cleared:
@@ -1000,6 +1008,9 @@ def deliverable_problems(steps: Any) -> list[dict[str, str]]:
                 }
             )
             continue
+        if channel == "text":
+            # RULE 233: the shape of a text hand-back, only when it names one.
+            problems.extend(shape_problems(path, value))
         if channel != "file":
             continue
         family = str(value.get("family") or "").strip().lower()
@@ -1100,6 +1111,374 @@ def promise_words(deliverable: Any) -> str:
     if family:
         return f"a {family} file"
     return "a file"
+
+
+# --------------------------------------------------------------------------
+# RULE 233 (Steven, 2026-09-05) -- WHAT YOU HAND BACK IN WORDS HAS A SHAPE TOO.
+#
+# A `text` deliverable may name the parts of each item it hands back
+# (`fields`, one to twelve short names) and how many (`min_count`, 1 to 200,
+# default 1). The work then arrives as a `cards` block on the document -- one
+# item per thing, every named field filled -- and the door counts the EMPTY
+# BOXES. The platform reads no word of the work. A step that names no fields
+# is prose, exactly as before, and so is every step signed before the rule.
+#
+# WHAT FORCED IT: production deal 91221abe, 2026-09-05. Step 3 promised a stop
+# card for each approved restaurant with address, hours, suggested order and
+# one dish, and the agent filed a document whose blocks were those four words
+# as headings with nothing under them. Rule 230 passed it because channel
+# text had no check past non-empty; the person sent it back; the same shell
+# came again. The bench grew the blank and the three refusals the same night,
+# and the harness did not know the blank existed, so every railed agent kept
+# promising prose. This section is the harness catching up.
+# --------------------------------------------------------------------------
+
+FIELDS_MAX = 12
+FIELD_NAME_MAX = 40
+MIN_COUNT_MAX = 200
+_FIELD_URLISH = re.compile(r"(://|\bhttps?:|^www\.)", re.IGNORECASE)
+
+# The bench's own words for the shape blank, kept beside the file blank so the
+# prompt, the mirror and the refusal cannot drift apart.
+FIELDS_BLANK_WORDS = (
+    "For text you may also name the parts of each item you hand back in "
+    'deliverable.fields, for example ["address", "hours"], with min_count for '
+    "how many. Name them and the work must arrive as a cards block on the "
+    "document, one item per thing, every named field filled; name nothing and "
+    "the step is prose."
+)
+
+# The refusals the shape door speaks (rule 233). Surfaced VERBATIM like the
+# file door's: the bench counts the boxes, and its sentence names the card.
+SHAPE_DOOR_REFUSALS: tuple[str, ...] = (
+    "deliverable_fields_missing",
+    "deliverable_fields_blank",
+    "deliverable_count_short",
+)
+
+
+def clean_field(value: Any) -> str | None:
+    """One field name the way the bench reads it: trimmed, collapsed, lowercased."""
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split()).strip().lower() or None
+
+
+def spoken_fields(fields: Any) -> str:
+    """"address, hours and dish" -- the person's list, as the refusal says it."""
+    names = [item for item in (fields or []) if item]
+    if not names:
+        return "the named parts"
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _fields_note(path: str) -> str:
+    return (
+        f"{path} names the parts of each item you hand back, for example "
+        '["address", "hours"]'
+    )
+
+
+def normalize_fields(raw: Any) -> tuple[list[str], str | None]:
+    """(fields, problem sentence): the bench's `_normalize_fields`, mirrored.
+
+    Absent or empty is legal and means prose. An empty slot in the list is
+    nothing, not a lie, and is skipped; a slot that is not a name is named.
+    """
+    if raw is None:
+        return [], None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return [], _fields_note("deliverable.fields") + "; it has to be a list of short names."
+    fields: list[str] = []
+    for entry in raw:
+        name = clean_field(entry)
+        if not name:
+            if entry is None or (isinstance(entry, str) and not entry.strip()):
+                continue
+            return fields, (
+                _fields_note("deliverable.fields")
+                + f'; "{str(entry)[:60]}" is not a field name.'
+            )
+        if len(name) > FIELD_NAME_MAX:
+            return fields, (
+                _fields_note("deliverable.fields")
+                + f'; "{name[:60]}" is {len(name)} characters and a field name '
+                f"has to be {FIELD_NAME_MAX} or fewer."
+            )
+        if _FIELD_URLISH.search(name):
+            return fields, (
+                _fields_note("deliverable.fields")
+                + f'; "{name[:60]}" is an address, not a field name.'
+            )
+        if name in fields:
+            return fields, (
+                f'deliverable.fields names "{name}" twice. Each part is named once.'
+            )
+        fields.append(name)
+    if len(fields) > FIELDS_MAX:
+        return fields[:FIELDS_MAX], (
+            f"deliverable.fields takes at most {FIELDS_MAX} names; you named "
+            f"{len(fields)}."
+        )
+    return fields, None
+
+
+def normalize_min_count(raw: Any) -> tuple[int, str | None]:
+    """(min_count, problem sentence). Default 1: one filled item at least."""
+    if raw is None or raw == "":
+        return 1, None
+    if isinstance(raw, bool):
+        return 1, (
+            "deliverable.min_count is how many of these you hand back, a whole "
+            f"number from 1 to {MIN_COUNT_MAX}."
+        )
+    try:
+        count = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 1, (
+            "deliverable.min_count is how many of these you hand back, a whole "
+            f'number from 1 to {MIN_COUNT_MAX}; "{str(raw)[:40]}" is not one.'
+        )
+    if count < 1 or count > MIN_COUNT_MAX:
+        return (1 if count < 1 else MIN_COUNT_MAX), (
+            f"deliverable.min_count is {count}; it has to be a whole number "
+            f"from 1 to {MIN_COUNT_MAX}."
+        )
+    return count, None
+
+
+def shape_problems(path: str, value: dict[str, Any]) -> list[dict[str, str]]:
+    """The rule-233 half of the validate mirror, for a `text` deliverable.
+
+    Only a deliverable that CARRIES `fields` or `min_count` is checked; a
+    text step that names nothing is prose and draws nothing new. A blank
+    copied off the form (`["<field>"]`) is named in the door's words rather
+    than filed as a promise.
+    """
+    problems: list[dict[str, str]] = []
+    if "fields" not in value and "min_count" not in value:
+        return problems
+    raw_fields = value.get("fields")
+    copied = [
+        item
+        for item in (raw_fields if isinstance(raw_fields, list) else [])
+        if isinstance(item, str) and item.strip() and is_blank(item)
+    ]
+    if copied:
+        problems.append(
+            {
+                "path": f"{path}.fields",
+                "message": (
+                    f'"{copied[0].strip()}" is the form\'s blank, not a field '
+                    "name. " + FIELDS_BLANK_WORDS
+                ),
+            }
+        )
+        return problems
+    fields, error = normalize_fields(raw_fields)
+    if error:
+        problems.append({"path": f"{path}.fields", "message": error})
+        return problems
+    if "min_count" in value and value.get("min_count") not in (None, ""):
+        if not fields:
+            problems.append(
+                {
+                    "path": f"{path}.min_count",
+                    "message": (
+                        "min_count says how many CARDS you hand back, so it "
+                        "rides with deliverable.fields. " + FIELDS_BLANK_WORDS
+                    ),
+                }
+            )
+            return problems
+        _count, error = normalize_min_count(value.get("min_count"))
+        if error:
+            problems.append({"path": f"{path}.min_count", "message": error})
+    return problems
+
+
+def clear_blank_fields(deliverable: Any) -> Any:
+    """Drop field names that are still the form's `<blank>`. Writes no words.
+
+    The same move as `clear_blank_deliverables`: a literal "<field>" filed as
+    a promise would print on the person's card as "Delivers: cards with
+    <field>". When nothing real is left the shape goes with it, and the step
+    is prose -- the harness never invents a field name.
+    """
+    if not isinstance(deliverable, dict) or "fields" not in deliverable:
+        return deliverable
+    raw = deliverable.get("fields")
+    if not isinstance(raw, list):
+        return deliverable
+    kept = [
+        item
+        for item in raw
+        if not (item is None or (isinstance(item, str) and is_blank(item)))
+    ]
+    if len(kept) == len(raw):
+        return deliverable
+    copy = dict(deliverable)
+    if kept:
+        copy["fields"] = kept
+    else:
+        copy.pop("fields", None)
+        copy.pop("min_count", None)
+    return copy
+
+
+def signed_fields(deliverable: Any) -> list[str]:
+    """The field names this step promised, or []. Only a `text` channel has any."""
+    if not isinstance(deliverable, dict):
+        return []
+    if str(deliverable.get("channel") or "").strip().lower() != "text":
+        return []
+    fields, error = normalize_fields(deliverable.get("fields"))
+    if error:
+        return []
+    return fields
+
+
+def signed_min_count(deliverable: Any) -> int:
+    """How many filled cards this step promised. 1 when it named a shape."""
+    if not signed_fields(deliverable):
+        return 1
+    count, _error = normalize_min_count(
+        deliverable.get("min_count") if isinstance(deliverable, dict) else None
+    )
+    return max(1, count)
+
+
+def shape_words(deliverable: Any) -> str:
+    """"at least 2 cards with address and hours" -- the promise, spoken."""
+    fields = signed_fields(deliverable)
+    if not fields:
+        return "words"
+    count = signed_min_count(deliverable)
+    return f"at least {count} cards with {spoken_fields(fields)}"
+
+
+def cards_items(document: Any) -> list[tuple[int, dict[str, Any]]]:
+    """[(card number, item)] across every cards block, numbered from 1 over
+    the WHOLE document -- the way the person reads it and the refusal names it."""
+    if isinstance(document, dict):
+        raw_blocks = document.get("blocks")
+    else:
+        raw_blocks = document
+    out: list[tuple[int, dict[str, Any]]] = []
+    number = 0
+    for block in raw_blocks if isinstance(raw_blocks, list) else []:
+        if not isinstance(block, dict) or block.get("type") != "cards":
+            continue
+        for item in block.get("items") or []:
+            number += 1
+            if isinstance(item, dict):
+                out.append((number, item))
+    return out
+
+
+def card_value(item: Any, field: str) -> str:
+    """The value on this card for that field, matched the way the bench matches."""
+    if not isinstance(item, dict):
+        return ""
+    for key, value in item.items():
+        if isinstance(key, str) and clean_field(key) == field:
+            return str(value or "").strip()
+    return ""
+
+
+def cards_example(fields: list[str]) -> dict[str, Any]:
+    """The exact document to send next, in the bench's own `how` shape."""
+    names = list(fields) or ["<field>"]
+    return {
+        "document": {
+            "title": "<what the person calls this>",
+            "blocks": [
+                {
+                    "type": "cards",
+                    "items": [{name: f"<the {name}>" for name in names}],
+                }
+            ],
+        },
+        "never": (
+            "A heading with nothing under it hands back nothing. The platform "
+            "reads no word of the work; it counts empty boxes."
+        ),
+    }
+
+
+def cards_shortfall(deliverable: Any, outcome: dict[str, Any]) -> dict[str, Any] | None:
+    """The rule-233 door, run over the outcome in hand. None when it passes.
+
+    Returns {error, message, fix, how, certain}. `certain` is True when the
+    bench would refuse this filing whatever else is on the step (a blank box
+    on a card in THIS document is refused by name regardless of other
+    receipts); False when an earlier receipt on the same step could already
+    carry the cards, so the door and not the mirror has the last word.
+    """
+    fields = signed_fields(deliverable)
+    if not fields:
+        return None
+    min_count = signed_min_count(deliverable)
+    promised = {"fields": list(fields), "min_count": min_count}
+    document = outcome.get("document") if isinstance(outcome, dict) else None
+    items = cards_items(document) if isinstance(document, dict) else []
+    if not items:
+        return {
+            "error": "deliverable_fields_missing",
+            "message": (
+                f"This step promised {min_count} or more cards with "
+                f"{spoken_fields(fields)}; the document has no cards block."
+            ),
+            "promised": promised,
+            "fix": (
+                "Put a cards block in the document: one item per thing you "
+                "hand back, every named field filled."
+            ),
+            "how": cards_example(fields),
+            "certain": False,
+        }
+    filled = 0
+    for number, item in items:
+        empty = [name for name in fields if not card_value(item, name)]
+        if empty:
+            left = f"{empty[0]} empty" if len(empty) == 1 else f"{spoken_fields(empty)} empty"
+            return {
+                "error": "deliverable_fields_blank",
+                "message": (
+                    f"Card {number} leaves {left}. Every card has to fill "
+                    f"{spoken_fields(fields)}."
+                ),
+                "promised": promised,
+                "blank": {"card": number, "fields": empty},
+                "fix": (
+                    "Fill every named field on every card, or drop the card "
+                    "you cannot fill."
+                ),
+                "how": cards_example(fields),
+                "certain": True,
+            }
+        filled += 1
+    if filled < min_count:
+        return {
+            "error": "deliverable_count_short",
+            "message": (
+                f"This step promised at least {min_count} cards; the document "
+                f"has {filled}."
+            ),
+            "promised": promised,
+            "found": filled,
+            "fix": (
+                "Hand back at least the number of cards this step promised, "
+                "every named field filled."
+            ),
+            "how": cards_example(fields),
+            "certain": False,
+        }
+    return None
 
 
 # The provider keys the brief publishes, in the words a person would use.

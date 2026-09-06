@@ -84,3 +84,18 @@ class TollBenchProvider(Protocol):
     def deliver_hosted_file(
         self, target_id: str, delivery: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
+
+    # THE OUTSIDE ACT (Steven, 2026-09-05): the one block for work the
+    # platform has no hands for. The agent declares it at bid time, the person
+    # taps Allow, the agent goes and does it in its own name with its own
+    # tools, and files the evidence here. The platform closes the step
+    # (rule 229) and asks the witness, if the declaration named one.
+    def file_evidence(
+        self,
+        deal_id: str,
+        step_id: str,
+        *,
+        summary: str,
+        links: list[str] | None = None,
+        receipt_ids: list[str] | None = None,
+    ) -> dict[str, Any]: ...

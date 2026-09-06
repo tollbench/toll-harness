@@ -628,6 +628,14 @@ _DEAL_STEP_INSTRUCTION = (
     "toll_bench.deliver_hosted_file with the live URL (and the claim URL for a "
     "here.now page). Only then file the outcome. If you cannot make that kind "
     "of file, say so on the step thread instead of filing words in its place. "
+    "AN OUTSIDE ACT IS YOURS TO GO AND DO. When an act of kind `outside` on "
+    "current_step reads state approved, the person has tapped Allow and that is "
+    "your cue: do the thing you declared -- yourself, in your own name, with your "
+    "own tools -- then call toll_bench.file_evidence with the deal, the step and a "
+    "plain summary of what happened (links and delivered receipt_ids if you have "
+    "them). That filing closes the step: the platform writes the outcome and asks "
+    "the witness you named, so do NOT call toll_bench.file_outcome on it. While the "
+    "act is still pending or held the person has not allowed it yet: wait. "
     "A CALENDAR EVENT IS AN ACT TOO (rule 219): on a step whose deal holds a "
     "calendar grant, call toll_bench.propose_act with kind calendar_event and "
     "the exact summary, start and end -- never ask the person to put it on "
@@ -682,7 +690,11 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "`deliverable` -- {\"channel\": \"file\", \"family\": \"video\", \"types\": [\"mp4\"]}. "
     "Channel is text, file or link; a file names its family and its exact types, and "
     "the step will not close until bytes of that type reach the platform. If you "
-    "cannot make that kind of file, do not promise it. The brief's "
+    "cannot make that kind of file, do not promise it. WORDS HAVE A SHAPE TOO (rule "
+    "233): a text step that hands back a set of things names the parts of each in "
+    "`fields` ([\"address\", \"hours\"]) and how many in `min_count`; the work then "
+    "goes back as a cards block, every named field filled, and empty boxes are "
+    "refused by card and field. The brief's "
     "`person_already_connected` says in one line what the person has connected "
     "already (rule 231); plan around it."
 )
@@ -762,6 +774,8 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 # RULE 230: the two doors that hand back BYTES.
                 "toll_bench.deliver_file",
                 "toll_bench.deliver_hosted_file",
+                # THE OUTSIDE ACT: the one door that closes an outside block.
+                "toll_bench.file_evidence",
                 "toll_bench.post_check_in",
                 "toll_bench.reply_step_message",
                 "toll_bench.read_finalist_answers",
@@ -1528,6 +1542,11 @@ def _process_market_opportunities(
         "invitee, a "
         "duration, a window and a message you "
         "write to open the invite. Never email someone to ask their times. "
+        "For work the platform has no hands for -- a phone call, a purchase, a "
+        "visit, a form on somebody else's site -- the block is kind `outside`: "
+        "declare in it what you will do yourself, who it is with, how, when and "
+        "what evidence you will file, and a witness email if there is one. Never "
+        "say a want cannot be done because the platform cannot do it for you. "
         "The person never sends anything: a step that asks "
         "them to Send, or a plan where "
         "every step is the person's and you do nothing yourself, is refused (REJ-26). Say in the "
@@ -1558,7 +1577,11 @@ def _process_market_opportunities(
         "family (video, image, audio, document, code) and its exact types. Write it in "
         "your own words; never file the blank you were handed, and if you cannot make "
         "that kind of file, do not promise it: a file step will not close until bytes of "
-        "that type reach the platform. THE PERSON'S CONNECTIONS (rule 231): the brief "
+        "that type reach the platform. WORDS HAVE A SHAPE TOO (rule 233): when a text "
+        "step hands back a set of things, name the parts of each in `fields` "
+        "([\"address\", \"hours\"]) and how many in `min_count`; the work goes back as "
+        "a cards block with every named field filled, and a heading with nothing under "
+        "it is refused. THE PERSON'S CONNECTIONS (rule 231): the brief "
         "carries `person_connected` and a plain sentence in `person_already_connected`. "
         "Plan around it -- storage connected, plan a hand-back into it; nothing "
         "connected, plan the download path -- and remember an access step the person has "

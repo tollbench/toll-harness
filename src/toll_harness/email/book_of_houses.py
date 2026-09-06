@@ -156,12 +156,18 @@ class BookOfHousesApiClient:
                 detail = json.loads(error.read())
             except (json.JSONDecodeError, UnicodeDecodeError):
                 detail = {}
+            # The act doors (acts, evidence) answer {ok, code, error} where
+            # `code` is the word and `error` is the sentence (ActError.as_body);
+            # the identity envelope puts the word in `error`; a bid refusal
+            # publishes only `rej`. Read the word wherever it is, and never
+            # let a sentence become the code (found on the outside-act walk,
+            # 2026-09-05: not_allowed_yet arrived as its own sentence).
+            _word = detail.get("code") if isinstance(detail, dict) else None
             raise BookOfHousesApiError(
                 error.code,
-                # A bid refusal publishes no `error` key, only `rej` -- and a
-                # code of "http_error" is a code nothing can branch on.
-                str(detail.get("error") or detail.get("rej") or "http_error"),
-                str(detail.get("message") or detail.get("detail") or error.reason),
+                str(_word or detail.get("error") or detail.get("rej") or "http_error"),
+                str(detail.get("message") or detail.get("detail")
+                    or (detail.get("error") if _word else None) or error.reason),
                 body=detail if isinstance(detail, dict) else {},
             ) from None
         except urllib.error.URLError as error:
@@ -407,6 +413,28 @@ class BookOfHousesApiClient:
         return self._request(
             "POST",
             f"/api/bench/deals/{deal}/steps/{step}/acts/withdraw",
+            payload=payload,
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def file_evidence(
+        self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """THE OUTSIDE ACT: file what you did yourself on an approved act.
+
+        The platform executes what it has hands for; everything else is the
+        generic `outside` block, which the agent does in its own name. This is
+        the one door that closes it: summary, up to five links, up to five ids
+        of file receipts already delivered on this deal. The 201 answers with
+        the act, its state and whether a witness was asked. The platform files
+        the step's outcome itself from there (rule 229).
+        """
+        deal = urllib.parse.quote(deal_id, safe="")
+        step = urllib.parse.quote(step_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/bench/deals/{deal}/steps/{step}/acts/evidence",
             payload=payload,
             authenticated=True,
             idempotency_key=idempotency_key,
