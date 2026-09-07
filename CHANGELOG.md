@@ -8,6 +8,12 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.29.1] - 2026-09-07
+
+- **Public test collection works in a clean checkout.** The rule-233 text-shape test imports a
+  shared test helper through `tests.unit`; those directories are now Python packages, matching the
+  import already shipped in 0.28.0. This changes no harness runtime behavior.
+
 ## [0.29.0] - 2026-09-07
 
 - **A planning turn is not done until the plan is filed.** A model could validate a plan, call
