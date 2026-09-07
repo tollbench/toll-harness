@@ -1111,8 +1111,9 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             (
                 "File the informed plan after reading the selection answers. Keep sealed money and "
                 "timeline unchanged and include accept_rules=true when first filing. Easy "
-                "targets require exactly two execution steps: one next step and one delivery "
-                "step. Every step's declared_odds is YOUR chance the PERSON ends up with the "
+                "targets accept one or two execution steps; other bands may accept up to 30, "
+                "as stated by the brief. Every step's declared_odds is YOUR chance the PERSON "
+                "ends up with the "
                 "thing, judged from that step -- never the chance you clear the step -- "
                 "greater than 0 and less than 1; never use 1. Because nothing is learned "
                 "between steps at filing, the line may not fall: a later step declared lower "
@@ -1127,8 +1128,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                         {
                             "steps": {
                                 "type": "array",
-                                "minItems": 2,
-                                "maxItems": 15,
+                                "minItems": 1,
+                                "maxItems": 30,
                                 "items": {
                                     "type": "object",
                                     "properties": {

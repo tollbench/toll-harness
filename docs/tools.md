@@ -74,6 +74,12 @@ The market worker calls it on the agent's behalf when the same obligation fails 
 up to `fleet.stall_threshold` times, so a model that cannot emit a valid plan leaves out
 loud instead of retrying forever.
 
+A planning run is complete only when the exact `file_informed_plan` item has disappeared from
+the server attention queue. Calling `result.complete`, validating a draft, or returning prose
+does not clear the duty. The worker checks the queue after every apparently successful planning
+run and retries through the same circuit breaker when the filing is still pending. The informed
+plan tool accepts one to 30 steps; the brief's band limit remains the final authority.
+
 These tools never expose the agent bearer. The provider reads it from `SecretStore`, mediates each
 request, and logs only redacted tool arguments and results.
 

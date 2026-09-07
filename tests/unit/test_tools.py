@@ -131,7 +131,11 @@ def test_informed_plan_schema_requires_complete_execution_steps():
     step_schema = definition.input_schema["properties"]["plan"]["properties"]["steps"][
         "items"
     ]
+    steps_schema = definition.input_schema["properties"]["plan"]["properties"]["steps"]
 
+    assert steps_schema["minItems"] == 1
+    assert steps_schema["maxItems"] == 30
+    assert "one or two execution steps" in definition.description
     assert set(step_schema["required"]) == {
         "title",
         "ask",

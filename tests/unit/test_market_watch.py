@@ -893,6 +893,36 @@ def test_idle_deal_step_is_skipped_and_the_plan_request_gets_the_cycle():
         payload,
         observed,
     )
+    attention = iter(
+        [
+            {
+                "attention": [
+                    {
+                        "kind": "deal_step",
+                        "deal_id": "d1",
+                        "proposal_id": "p1",
+                        "step_id": "s-1",
+                    },
+                    {
+                        "kind": "file_informed_plan",
+                        "proposal_id": "p-free",
+                        "target_id": "t-1",
+                    },
+                ]
+            },
+            {
+                "attention": [
+                    {
+                        "kind": "deal_step",
+                        "deal_id": "d1",
+                        "proposal_id": "p1",
+                        "step_id": "s-1",
+                    }
+                ]
+            },
+        ]
+    )
+    resources.toll_bench.attention = lambda wait: next(attention)
 
     result = cli._process_market_attention(resources, wait=20)
 
@@ -1321,11 +1351,51 @@ def test_a_success_clears_the_breaker(monkeypatch):
     failing = _breaker_resources(obligation, failure={"error": "boom"})
 
     cli._process_market_attention(failing, wait=0, stall_threshold=5)
-    cli._process_market_attention(_breaker_resources(obligation), wait=0, stall_threshold=5)
+    successful = _breaker_resources(obligation)
+    attention = iter(
+        [
+            {"attention": [dict(obligation)]},
+            {"attention": []},
+        ]
+    )
+    successful.toll_bench.attention = lambda wait: next(attention)
+    cli._process_market_attention(successful, wait=0, stall_threshold=5)
     after = cli._process_market_attention(failing, wait=0, stall_threshold=5)
 
     assert after["breaker"]["consecutive_failures"] == 1
     assert cli._OBLIGATION_FAILURES[cli._obligation_key(obligation)]["count"] == 1
+
+
+def test_completed_plan_run_is_failure_while_filing_obligation_remains(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    obligation = _plan_obligation()
+    resources = _breaker_resources(obligation)
+
+    result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
+
+    assert result["ok"] is False
+    assert result["plan_filing_verified"] is False
+    assert result["breaker"]["consecutive_failures"] == 1
+    assert "without filing the informed plan" in result["breaker"]["error"]
+
+
+def test_completed_plan_run_succeeds_after_server_clears_obligation(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    obligation = _plan_obligation()
+    resources = _breaker_resources(obligation)
+    attention = iter(
+        [
+            {"attention": [dict(obligation)]},
+            {"attention": []},
+        ]
+    )
+    resources.toll_bench.attention = lambda wait: next(attention)
+
+    result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
+
+    assert result["ok"] is True
+    assert result["plan_filing_verified"] is True
+    assert cli._obligation_key(obligation) not in cli._OBLIGATION_FAILURES
 
 
 def test_a_changed_obligation_payload_lifts_the_stall(monkeypatch):

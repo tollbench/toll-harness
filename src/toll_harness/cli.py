@@ -1035,6 +1035,33 @@ def _breaker_reset(obligation: dict[str, Any]) -> None:
     _OBLIGATION_FAILURES.pop(_obligation_key(obligation), None)
 
 
+def _plan_obligation_cleared(resources: Any, obligation: dict[str, Any]) -> tuple[bool, str | None]:
+    """Verify that a completed planning run actually discharged its server duty.
+
+    A model can call ``result.complete`` after reading or validating a plan but
+    before it calls ``submit_informed_plan``.  Run status alone therefore is
+    not proof that the selected person's plan arrived.  The attention queue is
+    the authoritative postcondition: the exact obligation must be gone before
+    this worker resets its breaker and moves on.
+    """
+    try:
+        attention = resources.toll_bench.attention(wait=0)
+    except Exception as error:  # noqa: BLE001 - verification failure is retryable
+        return False, f"could not verify informed-plan filing: {error}"
+    key = _obligation_key(obligation)
+    still_pending = any(
+        item.get("kind") != "reachability_ping" and _obligation_key(item) == key
+        for item in attention.get("attention") or []
+    )
+    if still_pending:
+        return (
+            False,
+            "run completed without filing the informed plan; "
+            "the file_informed_plan obligation is still pending",
+        )
+    return True, None
+
+
 def _withdraw_unproducible_plan(
     resources: Any, obligation: dict[str, Any], attempts: int, error: str
 ) -> dict[str, Any]:
@@ -1398,11 +1425,19 @@ def _process_market_attention(
     }
     if _stalled:
         payload["stalled_obligations"] = _stalled
+    postcondition_error = None
+    if ok and kind == "file_informed_plan":
+        ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
+        payload["ok"] = ok
+        payload["plan_filing_verified"] = ok
     if ok:
         _breaker_reset(obligation)
         return payload
     breaker = _breaker_record_failure(
-        resources, obligation, _failure_signature(result.result), threshold=threshold
+        resources,
+        obligation,
+        postcondition_error or _failure_signature(result.result),
+        threshold=threshold,
     )
     payload["breaker"] = breaker
     payload["retry_after_seconds"] = breaker["retry_after_seconds"]

@@ -8,6 +8,19 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.29.0] - 2026-09-07
+
+- **A planning turn is not done until the plan is filed.** A model could validate a plan, call
+  `result.complete`, and leave the exact `file_informed_plan` obligation on the server. The fleet
+  then treated that turn as successful and moved to another agent while the selected person saw
+  “No plan yet.” The worker now checks the authoritative attention queue after every apparently
+  successful planning run. If the same obligation remains, it records a retryable failure through
+  the existing circuit breaker instead of resetting it or reporting success.
+
+- **The informed-plan tool matches the current plan-size contract.** Its local schema now accepts
+  one to 30 steps, and its description says Easy plans accept one or two. Version 0.28.0 still
+  advertised exactly two and rejected anything above 15 before the current server could judge it.
+
 ## [0.28.0] - 2026-09-06
 
 - **What you hand back in words has a shape too (rule 233).** **What forced it:** production deal 91221abe, 2026-09-05. Step 3 promised a stop card for each approved restaurant with address, hours, suggested order and one dish, and the agent filed a `document` whose blocks were those four words as headings with nothing under them. Rule 230 passed it because channel `text` had no check past non-empty; the person sent it back; the same shell came again. The bench grew the blank and its three refusals that night, and the harness did not know the blank existed, so every railed agent kept promising prose. A `text` deliverable may now name the parts of each item it hands back -- `deliverable.fields`, one to twelve short names -- and how many, `min_count` (1 to 200, default 1). The work then arrives as a **`cards` block** on the document (`{"type": "cards", "items": [{"address": "...", "hours": "..."}, ...]}`), one item per thing, every named field filled. The platform reads no word of the work; it counts empty boxes. A step that names no fields is prose, exactly as before, and so is every step signed before the rule.
