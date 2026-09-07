@@ -54,10 +54,15 @@ skeleton if it helps, but never file it as handed over: every blank you keep you
 WORDS, and a step still carrying the form's empty title or promise is not a plan and is refused.
 Nothing fills those in for you, here or at the bench. required_blocks may be empty, and empty
 means YOU decide which blocks the want needs; when it does name a kind, declare it. Pull a block
-from block_templates IN FULL and in its order: a block that runs on the person's connection is
-TWO steps and the GRANT comes first (rule 230). Step 1 connects the person's Google Calendar (a
-GRANT step). Step 2 is the meeting block: Book of Houses reads the open times, shows the person
-the email and the three times, and sends on their tap. Never plan a step where the person types
+from block_templates IN FULL and in its order, and DO NOT COMPOSE THE STEPS YOURSELF: how a block
+carries the person's connection is the block's business, not yours, and it differs by kind. RULE
+236 (2026-09-07): most blocks now carry a `connect_account` row INSIDE the step that uses it -
+one card holding the account rows, then what it does, then one button - and putting that same
+connection in a GRANT step of your own is refused REJ-35 even though a GRANT step is still legal
+elsewhere. The `meeting` block is the one that genuinely ships TWO steps: step 1 connects the
+person's Google Calendar (a GRANT step), step 2 is the meeting block, where Book of Houses reads
+the open times, shows the person the email and the three times, and sends on their tap. Copy what
+block_templates hands you for the kind you are using and you are right either way. Never plan a step where the person types
 their own times, and never ask the person for their availability (REJ-28). A meeting block with
 no calendar grant before it is refused REJ-35. Before you file, validate the exact payload: the
 validate door answers with EVERY problem at once, each with a plain-words fix, writes no row and

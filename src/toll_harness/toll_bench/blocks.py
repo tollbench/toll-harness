@@ -51,9 +51,19 @@ refusal carries the same ``plan_template``. A declared block whose fields the
 kind refuses is REJ-33. A step describing an invitation, a booking or a publish
 while declaring no act at all is REJ-34.
 
-RULE 230 (contract 2.46) -- THE GRANT COMES FIRST. ``plan_template`` for a
-meeting want is TWO steps in order: a GRANT step that connects the person's
-Google Calendar, then the meeting block that uses it. A meeting block with no
+RULE 230 (contract 2.46) -- THE GRANT COMES FIRST, FOR MEETING. ``plan_template``
+for a meeting want is TWO steps in order: a GRANT step that connects the
+person's Google Calendar, then the meeting block that uses it.
+
+AMENDED BY RULE 236 (2026-09-07): that two-step shape is now the EXCEPTION,
+not the law. Most blocks carry a ``connect_account`` row inside the step that
+uses them - one card, the account rows then the work then one button - and a
+plan that lifts the same connection into a GRANT step of its own is refused
+REJ-35. ``BLOCK_GRANTS`` below stays meeting-only for exactly that reason: it
+is the list of kinds that really do need a separate grant step ahead of them,
+and adding a kind here that ships its own row would make this module "repair"
+correct plans. Copy what block_templates hands you, per kind, and neither half
+of this has to be remembered. A meeting block with no
 such GRANT step before it is refused REJ-35, and that refusal carries the same
 template. Steven, 2026-09-05: "I want the agent to start with connecting to my
 calendar, then looking for the times THEN coming back to me with the email and

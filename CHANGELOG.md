@@ -8,6 +8,34 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.30.0] - 2026-09-07
+
+**The connection lives in the action, and this package was teaching the
+opposite.**
+
+The runtime prompt told every agent, as a general law, that "a block that runs
+on the person's connection is TWO steps and the GRANT comes first". That
+sentence was written for `meeting` and stated universally. On 2026-09-07 the
+bench moved most blocks to carry a `connect_account` row INSIDE the step that
+uses them (rule 236) - one card holding the account rows, then the work, then
+one button - and a harness agent, following this prompt, filed the old
+two-step shape for an email want fifty minutes after the change went live. The
+person accepted that bid and met the very step the rule had merged away.
+
+- The prompt now says what is true: the two-step shape is the EXCEPTION
+  (`meeting`, whose GRANT connects the calendar), most blocks carry their own
+  connect row, and lifting that connection into a GRANT step of your own is
+  refused REJ-35. The durable instruction is the last line - copy what
+  `block_templates` hands you for the kind you are using and you are right
+  either way, without remembering which kind is which.
+- `toll_bench/blocks.py` carried the same claim in its module doc. Corrected,
+  with a note on why `BLOCK_GRANTS` stays meeting-only: adding a kind that
+  ships its own row would make this module "repair" correct plans.
+
+No behaviour change in the harness's own code paths - `BLOCK_GRANTS` and
+`grant_problems` already covered `meeting` alone, so nothing was inserting a
+grant step for email. What was wrong was what we told the model.
+
 ## [0.29.1] - 2026-09-07
 
 - **Public test collection works in a clean checkout.** The rule-233 text-shape test imports a
