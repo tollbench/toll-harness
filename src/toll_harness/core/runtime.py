@@ -55,16 +55,16 @@ WORDS, and a step still carrying the form's empty title or promise is not a plan
 Nothing fills those in for you, here or at the bench. required_blocks may be empty, and empty
 means YOU decide which blocks the want needs; when it does name a kind, declare it. Pull a block
 from block_templates IN FULL and in its order, and DO NOT COMPOSE THE STEPS YOURSELF: how a block
-carries the person's connection is the block's business, not yours, and it differs by kind. RULE
-236 (2026-09-07): most blocks now carry a `connect_account` row INSIDE the step that uses it -
-one card holding the account rows, then what it does, then one button - and putting that same
-connection in a GRANT step of your own is refused REJ-35 even though a GRANT step is still legal
-elsewhere. The `meeting` block is the one that genuinely ships TWO steps: step 1 connects the
-person's Google Calendar (a GRANT step), step 2 is the meeting block, where Book of Houses reads
-the open times, shows the person the email and the three times, and sends on their tap. Copy what
-block_templates hands you for the kind you are using and you are right either way. Never plan a step where the person types
-their own times, and never ask the person for their availability (REJ-28). A meeting block with
-no calendar grant before it is refused REJ-35. Before you file, validate the exact payload: the
+carries the person's connection is the block's business, not yours. RULE 236: A CONNECTION IS NOT
+A STEP, IT IS PART OF THE ACTION THAT NEEDS IT. The connection is a `connect_account` ROW inside
+the step that uses it - one card holding the account rows, then what the step does, then one
+button that stays asleep until every row is settled. The meeting plan is ONE step: a Google
+Calendar row, a Gmail row and the meeting block on a single card. A new plan that lifts a
+registry connector back into a GRANT step of its own is refused REJ-38, and the refusal hands you
+back the exact row to put on the action's step. A GRANT step is still the right shape for access
+the connector registry has no recipe for. Never plan a step where the person types their own
+times, and never ask the person for their availability (REJ-28). A block whose connection nothing
+on its step opens is refused REJ-35. Before you file, validate the exact payload: the
 validate door answers with EVERY problem at once, each with a plain-words fix, writes no row and
 counts against nothing. Fix what it names, then file once. An older bench may still name required
 blocks and refuse a missing one REJ-32; the same move answers it.

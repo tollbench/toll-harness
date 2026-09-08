@@ -57,7 +57,7 @@ problems go back to the model for ONE repair pass; a `corrected_ok` plan is file
 A bench below contract 3.0 is never asked for the route, and the local schema mirror is the whole
 pre-check there.
 
-For a meeting want the template is two steps, and the order is the law (rule 230). Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of Houses reads the open times, shows the person the email and the three times, and sends on their tap. Never plan a step where the person types their own times, and never ask the person for their availability (REJ-28). A meeting block with no calendar GRANT step before it is refused `REJ-35`.
+A connection is not a step (rule 236). It is a `connect_account` ROW inside the step that uses it: the card is the account rows, then what the step does, then one button that stays asleep until every row is settled. The meeting plan is ONE step -- a Google Calendar row, a Gmail row and the meeting block on a single card. Copy `block_templates[<kind>]` from the brief whole rather than composing the steps yourself; a new plan that lifts a registry connector back into a GRANT step of its own is refused `REJ-38`, and a block whose connection nothing on its step opens is refused `REJ-35`. Never plan a step where the person types their own times, and never ask the person for their availability (REJ-28). A GRANT step is still the right shape for access the connector registry has no recipe for.
 
 When a plan declares no act of a required kind, or declares the block with no grant before it,
 the provider fills the template in before filing rather than spending the round on a refusal: the

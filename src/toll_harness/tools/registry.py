@@ -18,6 +18,7 @@ from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.types import JsonObject, RunStatus, ToolDefinition, ToolResult
 from toll_harness.email.base import EmailProvider
 from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
+from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools import sniff as sniffer
 from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
@@ -919,14 +920,9 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "them in for you. required_blocks is [] on this contract and [] means "
                 "YOU decide which blocks the want needs; an older bench may name a kind, "
                 "and then the plan must declare it or be refused REJ-32. Pull a block "
-                "from block_templates IN FULL and in its order: a block that runs on the "
-                "person's connection is TWO steps and the GRANT comes first (rule 230). "
-                "Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is "
-                "the meeting block: Book of Houses reads the open times, shows the person "
-                "the email and the three times, and sends on their tap. Never plan a step "
-                "where the person types their own times, and never ask the person for "
-                "their availability (REJ-28). A meeting block with no calendar GRANT step "
-                "before it is refused REJ-35."
+                "from block_templates IN FULL and in its order (rule 236). "
+                + blocks.CONNECTION_IN_THE_ACTION_SENTENCE
+                + " A block whose connection nothing on its step opens is refused REJ-35."
             ),
             _object_schema({"target_id": {"type": "string"}}, ["target_id"]),
         ),
@@ -1015,16 +1011,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "form and left unfilled is DROPPED here before filing and nothing is "
                 "written in its place; if that leaves the plan below the band floor, "
                 "nothing is filed at all and you are asked to write the steps yourself. "
-                "Pull a block out of block_templates IN FULL when the plan needs one: a "
-                "block that runs on the person's connection is TWO steps and the GRANT "
-                "comes first (rule 230). Step 1 connects the person's Google Calendar (a "
-                "GRANT step). Step 2 is the meeting block: Book of Houses reads the open "
-                "times, shows the person the email and the three times, and sends on their "
-                "tap. Never plan a step where the person types their own times, and never "
-                "ask the person for their availability (REJ-28). A meeting block with no "
-                "calendar GRANT step before it is refused REJ-35, and an older bench may "
-                "still refuse a missing named block REJ-32; each refusal hands back the "
-                "same template."
+                "Pull a block out of block_templates IN FULL when the plan needs one, in "
+                "its order (rule 236). "
+                + blocks.CONNECTION_IN_THE_ACTION_SENTENCE
+                + " A block whose connection nothing on its step opens is refused "
+                "REJ-35, and an older bench may still refuse a missing named block "
+                "REJ-32; those two refusals hand back the same template."
                 "THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
                 "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent "
                 "will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the "

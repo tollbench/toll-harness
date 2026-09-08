@@ -16,9 +16,14 @@ _LOGGER = logging.getLogger("toll_harness.toll_bench")
 REJ_REQUIRED_BLOCK = "REJ-32"
 REJ_BLOCK_DECLARATION = "REJ-33"
 REJ_HOLLOW_BLOCK = "REJ-34"
-# RULE 230 (contract 2.46): a block whose account no GRANT step in the plan
-# opens. Like REJ-32 it CARRIES THE FORM, so it is repaired and filed once.
+# RULE 236: a block whose account nothing on its step opens. Like REJ-32 it
+# CARRIES THE FORM, so it is repaired and filed once.
 REJ_BLOCK_GRANT = blocks.REJ_BLOCK_GRANT
+# RULE 236 (2026-09-08): a connection filed as a STEP OF ITS OWN. This one
+# carries NO form -- the shape it hands back is the connect_account row, in the
+# refusal's own words -- so it is repaired from the BRIEF's template instead,
+# and it is deliberately not in REJ_CARRIES_THE_FORM.
+REJ_GRANT_STEP_REMOVED = blocks.REJ_GRANT_STEP_REMOVED
 REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
 
 # CONTRACT 3.0 (2026-09-05): the free validate door, call 3 of six. It runs the
@@ -562,6 +567,51 @@ class BookOfHousesTollBenchProvider:
             self._act_kinds = self.api.act_kinds()
         return self._act_kinds
 
+    @staticmethod
+    def _published_steps(brief: dict[str, Any]) -> list[dict[str, Any]]:
+        """Every step this brief published: the skeleton AND the catalog.
+
+        Contract 3.0 hands out a blank `plan_template` and puts the blocks in
+        `block_templates`, so a rule-236 repair that read only the skeleton
+        would find no `connect_account` row on any live brief and silently do
+        nothing at all.
+        """
+        return blocks.published_template_steps(
+            brief.get("plan_template"), brief.get("block_templates")
+        )
+
+    def _grant_requirements(self) -> dict[str, tuple[str, ...]]:
+        """{kind: providers} off the act registry's own `requires_grants`.
+
+        RULE 236: nothing about which kind runs on which connection is written
+        in the harness any more -- the last hardcoded copy of that fact refused
+        the correct one-step plan at home for a day. The registry answers it,
+        the catalog read is memoized on the provider, and a read that fails
+        leaves the local mirror SILENT rather than refusing a legal plan: the
+        bench's own validate door is free and is the judge.
+        """
+        try:
+            catalog = self.list_act_kinds().get("kinds") or {}
+        except Exception:  # noqa: BLE001 - a catalog read never blocks a filing
+            return {}
+        if not isinstance(catalog, dict):
+            return {}
+        needs: dict[str, tuple[str, ...]] = {}
+        for name, spec in catalog.items():
+            if not isinstance(spec, dict):
+                continue
+            declared = spec.get("requires_grants")
+            if declared is None and isinstance(spec.get("declaration"), dict):
+                declared = spec["declaration"].get("requires_grants")
+            providers = tuple(
+                provider.strip().lower()
+                for provider in (declared or [])
+                if isinstance(provider, str) and provider.strip()
+            )
+            if providers:
+                needs[str(name).strip().lower()] = providers
+        return needs
+
     def _block_kinds(self) -> frozenset[str]:
         """The kinds the PLATFORM writes, files, runs and closes (rule 229).
 
@@ -726,15 +776,22 @@ class BookOfHousesTollBenchProvider:
         """A grant gap with no template to fix it is the door's to refuse.
 
         The local mirror of REJ-35 exists so a round is never spent on a plan
-        the door will refuse. When there is no template to insert -- an older
+        the door will refuse. When there is nothing to insert -- an older
         server, or a brief that has closed behind a selection -- refusing at
         home would only bury the plan the person is waiting on. File it, and
         let the refusal carry the form.
+
+        RULE 236: "something to insert" now means a published `connect_account`
+        ROW as well as a GRANT step, because the row is what the repair copies.
         """
         if validation.get("ok"):
             return validation
         template = plan_template if isinstance(plan_template, list) else []
-        if any(isinstance(step, dict) and blocks.grant_provider(step) for step in template):
+        if any(
+            isinstance(step, dict)
+            and (blocks.grant_provider(step) or blocks.connect_row_providers(step))
+            for step in template
+        ):
             return validation
         remaining = [
             problem
@@ -744,6 +801,62 @@ class BookOfHousesTollBenchProvider:
         if remaining:
             return {**validation, "problems": remaining}
         return {**validation, "ok": True, "problems": []}
+
+    def _retire_grant_step_after(
+        self, target_id: str, error: Any, plan: dict[str, Any], plan_template: Any
+    ) -> tuple[dict[str, Any], list[str]]:
+        """RULE 236 / REJ-38: the door refused a connection filed as a step.
+
+        The refusal is the whole teaching -- it names the step, the provider
+        and the exact `connect_account` row to put on the step that uses it --
+        so it is LOGGED VERBATIM here and handed back verbatim by
+        ``_grant_step_removed_refusal``. The repair reads the row off the
+        BRIEF's template, because this refusal carries no `plan_template` of
+        its own, and the caller re-files ONCE. No move, no re-file: a harness
+        that kept bouncing the same plan would spend the whole run.
+        """
+        _LOGGER.warning(
+            "Target %s refused the plan %s -- a connection was filed as a step "
+            "of its own: %s",
+            target_id,
+            error.rej,
+            error.message,
+        )
+        fixed, moved = blocks.retire_grant_steps(plan, plan_template)
+        if moved:
+            _LOGGER.warning(
+                "Target %s: rule 236 moved the connection into the action (%s); "
+                "re-filing once",
+                target_id,
+                "; ".join(moved),
+            )
+        else:
+            _LOGGER.warning(
+                "Target %s: nothing in this plan to move into the action, so "
+                "the door's own refusal is the answer; not re-filed",
+                target_id,
+            )
+        return fixed, moved
+
+    @staticmethod
+    def _grant_step_removed_refusal(error: Any) -> dict[str, Any]:
+        """The door's REJ-38, handed to the model in the door's own words."""
+        return {
+            "ok": False,
+            "error": "grant_step_removed",
+            "rej": error.rej,
+            "detail": error.message,
+            "terminal": False,
+            "fix": blocks.CONNECTION_IN_THE_ACTION_SENTENCE,
+            "message": (
+                "Nothing was filed. The bench refused this plan REJ-38: a "
+                "connection is not a step of its own, it is a "
+                "`connect_account` row on the step of the action that uses it. "
+                "`detail` names the step and carries the exact row to add. "
+                "Pull the block out of the brief's block_templates WHOLE "
+                "instead of composing its steps, and file once more."
+            ),
+        }
 
     def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
         """What the platform is running on this step, or None.
@@ -918,11 +1031,12 @@ class BookOfHousesTollBenchProvider:
         # the invitee address, and a message carrying a date or a clock time --
         # so a window typo never costs the one bid this target allows.
         problems.extend(blocks.declaration_problems(steps))
-        # RULE 230 / REJ-35 (contract 2.46): a meeting block reads and writes
-        # the person's calendar, so a GRANT step connecting it comes FIRST.
-        # Steven, 2026-09-05: "they are supposed to connect my calendar IN the
-        # plan." The repair inserts it; this is the mirror that names it.
-        problems.extend(blocks.grant_problems(steps))
+        # RULE 236 / REJ-35: a block that runs on the person's account carries
+        # the `connect_account` ROW on its own step. Steven, 2026-09-08: "fix
+        # it, remove the old path and lets do it." Which kinds need which
+        # provider is the REGISTRY's answer, never a list written here, and a
+        # registry we could not read leaves this silent.
+        problems.extend(blocks.grant_problems(steps, self._grant_requirements()))
         # RULE 230 (2026-09-05): the typed deliverable. Only a step that
         # CARRIES one is checked, so research, choice, handover and access
         # steps draw no new refusal. A blank left empty is named in the
@@ -968,6 +1082,8 @@ class BookOfHousesTollBenchProvider:
             brief.get("required_blocks"),
             brief.get("plan_template"),
             want=brief.get("want"),
+            needs=self._grant_requirements(),
+            block_templates=brief.get("block_templates"),
         )
         if inserted:
             _LOGGER.warning(
@@ -975,6 +1091,22 @@ class BookOfHousesTollBenchProvider:
                 "in and filed that (%s)",
                 target_id,
                 ", ".join(inserted),
+            )
+        # RULE 236 / REJ-38 (Steven, 2026-09-08). A CONNECTION IS NOT A STEP.
+        # A model that composes its own steps rather than copying the block
+        # writes the GRANT step it was taught for a year; on this bench that is
+        # refused and the round is gone. Fires only where the brief's own
+        # template publishes the row and no GRANT step for it, so an older
+        # bench, and the `access` mold, are untouched.
+        proposal, retired = blocks.retire_grant_steps(
+            proposal, self._published_steps(brief)
+        )
+        if retired:
+            _LOGGER.warning(
+                "Plan for target %s filed a connection as a step of its own; "
+                "rule 236 moved it into the action (%s)",
+                target_id,
+                "; ".join(retired),
             )
         # CONTRACT 3.0: THE TEMPLATE IS A FORM. `plan_template` is a blank
         # skeleton -- the mechanics filled, every agent-owned word an explicit
@@ -1156,32 +1288,51 @@ class BookOfHousesTollBenchProvider:
                 # the same plan_template the brief published, so the one move
                 # left is to fill it in and file once. Once: a second refusal
                 # is the round, not a retry loop.
-                if first.rej not in REJ_CARRIES_THE_FORM or not first.plan_template:
+                # RULE 236 / REJ-38 is the one refusal that carries NO form:
+                # what it hands back is the row, and the brief's template is
+                # where the row is published. Repair from there, or let the
+                # door's own words be the answer.
+                if first.rej == REJ_GRANT_STEP_REMOVED:
+                    proposal, moved = self._retire_grant_step_after(
+                        target_id, first, proposal, self._published_steps(brief)
+                    )
+                    if not moved:
+                        raise
+                    result = self.api.submit_proposal(
+                        target_id,
+                        proposal,
+                        f"{idempotency_key}-{_retry_tag(first.rej)}",
+                    )
+                elif first.rej not in REJ_CARRIES_THE_FORM or not first.plan_template:
                     raise
-                proposal, repaired = blocks.merge_required_blocks(
-                    proposal,
-                    [
-                        str(act.get("kind"))
-                        for step in first.plan_template
-                        if isinstance(step, dict)
-                        for act in (step.get("acts") or [])
-                        if isinstance(act, dict) and act.get("kind")
-                    ],
-                    first.plan_template,
-                    want=brief.get("want"),
-                )
-                if not repaired:
-                    raise
-                _LOGGER.warning(
-                    "Target %s refused the bid %s; filed the template steps "
-                    "the refusal carried (%s) and re-filed once",
-                    target_id,
-                    first.rej,
-                    ", ".join(repaired),
-                )
-                result = self.api.submit_proposal(
-                    target_id, proposal, f"{idempotency_key}-{_retry_tag(first.rej)}"
-                )
+                else:
+                    proposal, repaired = blocks.merge_required_blocks(
+                        proposal,
+                        [
+                            str(act.get("kind"))
+                            for step in first.plan_template
+                            if isinstance(step, dict)
+                            for act in (step.get("acts") or [])
+                            if isinstance(act, dict) and act.get("kind")
+                        ],
+                        first.plan_template,
+                        want=brief.get("want"),
+                        needs=self._grant_requirements(),
+                    )
+                    if not repaired:
+                        raise
+                    _LOGGER.warning(
+                        "Target %s refused the bid %s; filed the template steps "
+                        "the refusal carried (%s) and re-filed once",
+                        target_id,
+                        first.rej,
+                        ", ".join(repaired),
+                    )
+                    result = self.api.submit_proposal(
+                        target_id,
+                        proposal,
+                        f"{idempotency_key}-{_retry_tag(first.rej)}",
+                    )
         except BookOfHousesApiError as error:
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
                 if fleet_engaged and reservation is not None:
@@ -1204,6 +1355,17 @@ class BookOfHousesTollBenchProvider:
                     target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
+            if error.rej == REJ_GRANT_STEP_REMOVED:
+                # RULE 236: the round is NOT spent -- nothing was written -- so
+                # this comes back non-terminal, carrying the door's own words
+                # and the row to add. The reservation was released just above.
+                if fleet_engaged and reservation is not None:
+                    self.fleet.release_reservation(
+                        target_id=target_id,
+                        target_round=target_round,
+                        agent_id=self.fleet_agent_id,
+                    )
+                return self._grant_step_removed_refusal(error)
             if fleet_engaged and error.status in (404, 409):
                 # Terminal refusals for this round: bidding closed because an
                 # agent is selected, a bid already on file, participation
@@ -1349,7 +1511,19 @@ class BookOfHousesTollBenchProvider:
             brief.get("required_blocks"),
             brief.get("plan_template"),
             want=brief.get("want"),
+            needs=self._grant_requirements(),
+            block_templates=brief.get("block_templates"),
         )
+        submitted_plan, retired = blocks.retire_grant_steps(
+            submitted_plan, self._published_steps(brief)
+        )
+        if retired:
+            _LOGGER.warning(
+                "Informed plan for target %s carried a connection as a step of "
+                "its own; rule 236 moved it into the action (%s)",
+                target_id,
+                "; ".join(retired),
+            )
         if inserted:
             _LOGGER.warning(
                 "Informed plan for target %s did not carry the brief's form; "
@@ -1441,6 +1615,18 @@ class BookOfHousesTollBenchProvider:
                 target_id, proposal_id, submitted_plan, idempotency_key
             )
         except BookOfHousesApiError as error:
+            if error.rej == REJ_GRANT_STEP_REMOVED:
+                submitted_plan, moved = self._retire_grant_step_after(
+                    target_id, error, submitted_plan, self._published_steps(brief)
+                )
+                if not moved:
+                    return self._grant_step_removed_refusal(error)
+                return self.api.submit_informed_plan(
+                    target_id,
+                    proposal_id,
+                    submitted_plan,
+                    f"{idempotency_key}-{_retry_tag(error.rej)}",
+                )
             if error.rej in REJ_CARRIES_THE_FORM and error.plan_template:
                 submitted_plan, repaired = blocks.merge_required_blocks(
                     submitted_plan,
@@ -1453,6 +1639,7 @@ class BookOfHousesTollBenchProvider:
                     ],
                     error.plan_template,
                     want=brief.get("want"),
+                    needs=self._grant_requirements(),
                 )
                 if repaired:
                     _LOGGER.warning(

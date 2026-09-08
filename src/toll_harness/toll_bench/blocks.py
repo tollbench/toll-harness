@@ -51,25 +51,29 @@ refusal carries the same ``plan_template``. A declared block whose fields the
 kind refuses is REJ-33. A step describing an invitation, a booking or a publish
 while declaring no act at all is REJ-34.
 
-RULE 230 (contract 2.46) -- THE GRANT COMES FIRST, FOR MEETING. ``plan_template``
-for a meeting want is TWO steps in order: a GRANT step that connects the
-person's Google Calendar, then the meeting block that uses it.
+RULE 236 (Steven, 2026-09-08: "fix it, remove the old path and lets do it") --
+A CONNECTION IS NOT A STEP, IT IS PART OF THE ACTION THAT NEEDS IT. A block
+that runs on the person's account carries a ``connect_account`` ROW inside the
+step that uses it: the card is the account rows, then what the step does, then
+one button that stays asleep until every row is settled. ``plan_template`` for
+a meeting want is now ONE step -- a google-calendar row, a google-gmail row and
+the meeting block on a single card -- and a NEW plan that lifts a registry
+connector back into a GRANT step of its own is refused REJ-38
+(grant_step_removed) at the validate door and at the bid door.
 
-AMENDED BY RULE 236 (2026-09-07): that two-step shape is now the EXCEPTION,
-not the law. Most blocks carry a ``connect_account`` row inside the step that
-uses them - one card, the account rows then the work then one button - and a
-plan that lifts the same connection into a GRANT step of its own is refused
-REJ-35. ``BLOCK_GRANTS`` below stays meeting-only for exactly that reason: it
-is the list of kinds that really do need a separate grant step ahead of them,
-and adding a kind here that ships its own row would make this module "repair"
-correct plans. Copy what block_templates hands you, per kind, and neither half
-of this has to be remembered. A meeting block with no
-such GRANT step before it is refused REJ-35, and that refusal carries the same
-template. Steven, 2026-09-05: "I want the agent to start with connecting to my
-calendar, then looking for the times THEN coming back to me with the email and
-the times, then I approve and it goes out", and "they are supposed to connect
-my calendar IN the plan". So every step of the template is inserted, in the
-template's order, and the grant lands in front of the work.
+WHAT FORCED THE REWRITE HERE. This module carried the two-step law as a
+hardcoded fact (``BLOCK_GRANTS = {"meeting": "google-calendar"}``) and counted
+only an ``ask == "GRANT"`` step as a connection. Against the one-step template
+the bench now publishes, a CORRECT plan looked to the harness like a meeting
+block nothing opened the calendar for, so it manufactured a REJ-35 the bench
+never emits and refused the plan at home -- ``local_validation_failed``, no
+filing, the round spent on nothing. So nothing about which kind runs on which
+connection is written here any more: a row on the step counts, the brief's own
+template is the only source of the shape, and the fact that a kind needs a
+connection at all comes off the act registry (``requires_grants``) when the
+caller has read it. A GRANT step is still the right shape for access the
+connector registry has no recipe for -- the ``access`` mold -- and a bench that
+still hands out a two-step template is still filed exactly as it hands it over.
 
 This module is the harness's deterministic half of that: it reads the blocks
 off the brief, fills the template's blanks from the model's own plan, and
@@ -80,6 +84,7 @@ happens when it does not.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from typing import Any
@@ -89,13 +94,25 @@ from typing import Any
 # keep in step with the kind would refuse a legal block.
 CHECKED_KINDS: frozenset[str] = frozenset({"meeting"})
 
-# The bench's refusal for a block whose account nothing in the plan opens.
+# The bench's refusal for a block whose account nothing on its step opens.
 REJ_BLOCK_GRANT = "REJ-35"
 
-# The account a block needs open before it can run. A meeting block reads the
-# person's open times and writes the booking, so the plan connects their Google
-# Calendar in a GRANT step of its own BEFORE the block step (rule 230).
-BLOCK_GRANTS: dict[str, str] = {"meeting": "google-calendar"}
+# RULE 236: the bench's refusal for a connection filed as a STEP OF ITS OWN.
+# It carries no ``plan_template``: what it hands back is the ROW, written into
+# the refusal's own words, and the brief's template is where that row is read
+# from. A GRANT step for a provider the connector registry does not know is the
+# ``access`` mold and is not refused.
+REJ_GRANT_STEP_REMOVED = "REJ-38"
+
+# RULE 236: RETIRED, AND DELIBERATELY EMPTY. This used to say a meeting block
+# needs google-calendar opened by a step of its own, and that one hardcoded
+# fact refused the one-step template the bench now publishes. Which kinds run
+# on which connection is the act REGISTRY's answer (`requires_grants`), read
+# off the bench and passed in as ``needs=``. With nothing passed the local
+# mirror says nothing at all and the bench's free validate door is the judge --
+# which is the right way round for a fact that lives on the server. A kind
+# added tomorrow is held to whatever the registry says, with no edit here.
+BLOCK_GRANTS: dict[str, tuple[str, ...]] = {}
 
 # What the person reads, per provider key.
 PROVIDER_WORDS: dict[str, str] = {
@@ -111,20 +128,32 @@ GRANT_ASK = "GRANT"
 # a grant that names the account but not that action is no grant at all.
 GRANT_MIN_ACTIONS: dict[str, tuple[str, ...]] = {
     "google-calendar": ("calendar.events.read",),
+    # Rule 235: a mailbox connection that cannot send is not the access an
+    # outgoing message runs under, whatever else it names. Same floor the
+    # door holds, so the mirror and the door agree on what a row opens.
+    "google-gmail": ("gmail.message.send",),
 }
 
 # The HAR formats that ARE the connection, for a grant step that names its
 # provider on the block rather than in grant_request.
 _CONNECT_FORMATS = frozenset({"connect_account", "grant_access"})
 
-# The one sentence every planning surface carries about a meeting want, kept
-# here so the prompt, the tool words and the refusal cannot drift apart.
-GRANT_FIRST_SENTENCE = (
-    "Step 1 connects the person's Google Calendar (a GRANT step). Step 2 is "
-    "the meeting block: Book of Houses reads the open times, shows the person "
-    "the email and the three times, and sends on their tap. Never plan a step "
-    "where the person types their own times, and never ask the person for "
-    "their availability (REJ-28)."
+# RULE 236: the one format that is a connection ROW on the step that uses it.
+# Read strictly, exactly as the bench's own `connect_rows` reads it.
+CONNECT_FORMAT = "connect_account"
+
+# The one sentence every planning surface carries about a connection, kept here
+# so the prompt, the tool words and the refusal cannot drift apart (rule 236).
+CONNECTION_IN_THE_ACTION_SENTENCE = (
+    "The connection is a `connect_account` ROW inside the step that uses it, "
+    "never a step of its own: the card is the account rows, then what the step "
+    "does, then one button that stays asleep until every row is settled. The "
+    "meeting plan is ONE step -- a Google Calendar row, a Gmail row and the "
+    "meeting block on a single card. Copy `block_templates[<kind>]` from the "
+    "brief whole rather than composing the steps yourself; a new plan that "
+    "lifts a registry connector back into a GRANT step of its own is refused "
+    "REJ-38. Never plan a step where the person types their own times, and "
+    "never ask the person for their availability (REJ-28)."
 )
 
 # A template blank: the whole value is one <angle bracket> instruction.
@@ -359,54 +388,307 @@ def intended_grant_provider(step: Any) -> str | None:
     return None
 
 
+def connect_row_providers(step: Any) -> set[str]:
+    """The providers this step opens with `connect_account` ROWS of its own.
+
+    RULE 236 -- THE CONNECTION LIVES IN THE ACTION. This is the bench's own
+    ``connect_rows`` + ``_useful`` read, mirrored: the provider sits on
+    ``config.grant_request.connector`` and it must name the actions the block
+    cannot run without, because naming the account and none of its actions is
+    the same nothing a GRANT step naming no actions always was.
+    """
+    open_here: set[str] = set()
+    if not isinstance(step, dict):
+        return open_here
+    for block in step.get("har_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("format") or "").strip().lower() != CONNECT_FORMAT:
+            continue
+        config = block.get("config")
+        if not isinstance(config, dict):
+            continue
+        request = config.get("grant_request")
+        connector = request.get("connector") if isinstance(request, dict) else None
+        if not isinstance(connector, dict):
+            continue
+        provider = str(connector.get("provider") or "").strip().lower()
+        if not provider:
+            continue
+        actions = {
+            str(action).strip()
+            for action in (connector.get("actions") or [])
+            if isinstance(action, str)
+        }
+        if not all(action in actions for action in GRANT_MIN_ACTIONS.get(provider, ())):
+            continue
+        open_here.add(provider)
+    return open_here
+
+
+def step_opens(step: Any) -> set[str]:
+    """Every provider this ONE step opens, by a row or by being the grant.
+
+    Both shapes count, on purpose: the row is the law (rule 236) and the GRANT
+    step is what an older bench still hands out and what a signed deal still
+    walks.
+    """
+    open_here = connect_row_providers(step)
+    provider = grant_provider(step)
+    if provider:
+        open_here.add(provider)
+    return open_here
+
+
+def _needed_providers(kind: str, needs: Any) -> tuple[str, ...]:
+    """The providers one act kind runs on, off whatever the caller was told.
+
+    ``needs`` is {kind: provider | [providers]} -- the act registry's own
+    ``requires_grants``. Nothing here knows any kind by name.
+    """
+    if not isinstance(needs, dict):
+        return ()
+    value = needs.get(kind)
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value.strip().lower(),) if value.strip() else ()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(
+            provider.strip().lower()
+            for provider in value
+            if isinstance(provider, str) and provider.strip()
+        )
+    return ()
+
+
+def template_connect_rows(templates: Any, provider: str) -> list[dict[str, Any]]:
+    """The published `connect_account` row(s) for one provider.
+
+    Read off the brief's own template, so what lands on the step is the
+    PLATFORM's row, word for word. The harness writes none of it.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for step in templates if isinstance(templates, list) else []:
+        if not isinstance(step, dict):
+            continue
+        for block in step.get("har_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("format") or "").strip().lower() != CONNECT_FORMAT:
+                continue
+            config = block.get("config") if isinstance(block.get("config"), dict) else {}
+            request = config.get("grant_request")
+            connector = request.get("connector") if isinstance(request, dict) else None
+            named = (
+                str(connector.get("provider") or "").strip().lower()
+                if isinstance(connector, dict)
+                else ""
+            )
+            if named != provider:
+                continue
+            key = str(block.get("id") or "") or json.dumps(block, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(block)
+    return rows
+
+
+def add_connect_rows(
+    step: dict[str, Any], rows: list[dict[str, Any]]
+) -> tuple[dict[str, Any], bool]:
+    """Put the platform's published rows on the step that needs them."""
+    existing = step.get("har_blocks")
+    har = list(existing) if isinstance(existing, list) else []
+    have = {str(block.get("id") or "") for block in har if isinstance(block, dict)}
+    added = False
+    for row in rows:
+        if str(row.get("id") or "") in have:
+            continue
+        har.append(copy.deepcopy(row))
+        have.add(str(row.get("id") or ""))
+        added = True
+    if not added:
+        return step, False
+    return {**step, "har_blocks": har}, True
+
+
+def published_template_steps(
+    plan_template: Any, block_templates: Any = None
+) -> list[dict[str, Any]]:
+    """Every step the PLATFORM published on this brief, flattened.
+
+    CONTRACT 3.0 put the rows somewhere this module used to look right past.
+    ``plan_template`` is a blank SKELETON -- the band's work steps, no blocks --
+    and the blocks live in ``block_templates`` ({kind: [steps]}), the catalog
+    the agent pulls from. A rule-236 repair reads the published `connect
+    _account` row, so it has to read BOTH or it finds nothing on a live brief
+    and quietly does nothing.
+    """
+    steps: list[dict[str, Any]] = []
+    for step in plan_template if isinstance(plan_template, list) else []:
+        if isinstance(step, dict):
+            steps.append(step)
+    if isinstance(block_templates, dict):
+        for group in block_templates.values():
+            for step in group if isinstance(group, list) else []:
+                if isinstance(step, dict):
+                    steps.append(step)
+    return steps
+
+
+def retired_grant_providers(plan_template: Any) -> set[str]:
+    """The providers this bench has MOVED into the action (rule 236).
+
+    Positive evidence only: the brief's template publishes a `connect_account`
+    row for the provider and NO GRANT step for it. A bench still handing out
+    the two-step shape answers empty here, and a provider the connector
+    registry has no recipe for never appears in a template row at all, so the
+    ``access`` mold is never caught by this.
+    """
+    templates = [
+        step
+        for step in (plan_template if isinstance(plan_template, list) else [])
+        if isinstance(step, dict)
+    ]
+    rows: set[str] = set()
+    grants: set[str] = set()
+    for step in templates:
+        rows |= connect_row_providers(step)
+        provider = intended_grant_provider(step)
+        if provider is not None and str(step.get("ask") or "").strip().upper() == GRANT_ASK:
+            grants.add(provider)
+    return rows - grants
+
+
+def retire_grant_steps(
+    proposal: dict[str, Any], plan_template: Any
+) -> tuple[dict[str, Any], list[str]]:
+    """RULE 236 / REJ-38: a connection filed as a step of its own, moved back
+    into the action that needs it.
+
+    The refusal says it in one line -- "Delete the GRANT step and put its
+    connection on the step that uses it" -- so this does exactly that and
+    nothing else: the step goes, its provider's published ROW lands on the
+    first step that declares an act and does not already open it, and not one
+    word of the agent's is touched. It fires only on the positive evidence in
+    ``retired_grant_providers``, so against a bench that still hands out a
+    two-step template it does nothing at all. When there is no step to move
+    the row onto, the plan is left exactly as it was: the GRANT step was the
+    only work there, and burying it here would be worse than the door's own
+    refusal.
+    """
+    retired = retired_grant_providers(plan_template)
+    if not retired:
+        return proposal, []
+    original = proposal.get("steps")
+    steps: list[Any] = list(original) if isinstance(original, list) else []
+    moved: list[str] = []
+    for provider in sorted(retired):
+        index = next(
+            (
+                position
+                for position, step in enumerate(steps)
+                if isinstance(step, dict)
+                and str(step.get("ask") or "").strip().upper() == GRANT_ASK
+                and intended_grant_provider(step) == provider
+            ),
+            None,
+        )
+        if index is None:
+            continue
+        rows = template_connect_rows(plan_template, provider)
+        if not rows:
+            continue
+        target = next(
+            (
+                position
+                for position, step in enumerate(steps)
+                if position != index
+                and isinstance(step, dict)
+                and step_kinds(step)
+                and provider not in connect_row_providers(step)
+            ),
+            None,
+        )
+        if target is None:
+            continue
+        steps[target], added = add_connect_rows(steps[target], rows)
+        if not added:
+            continue
+        steps.pop(index)
+        moved.append(
+            f"{provider}: GRANT step {index + 1} removed, its connect row put on "
+            f"the step that uses it"
+        )
+    if not moved:
+        return proposal, []
+    return {**proposal, "steps": steps}, moved
+
+
 def provider_words(provider: str) -> str:
     return PROVIDER_WORDS.get(provider, provider)
 
 
-def grant_problems(steps: Any) -> list[dict[str, str]]:
-    """Every declared block no earlier step opens the account for (REJ-35).
+def grant_problems(steps: Any, needs: Any = None) -> list[dict[str, str]]:
+    """Every declared block whose connection nothing on the plan opens (REJ-35).
 
-    The bench refuses a meeting block that no GRANT step precedes. The same
-    check runs here so the plan is repaired before it is filed rather than
-    after the round is spent.
+    RULE 236: the `connect_account` ROW on the block's OWN step is counted
+    first, because that is where the connection now lives. A GRANT step at or
+    before the block still counts too -- an older bench hands out that shape
+    and a signed deal still walks it -- so this refuses neither half.
+
+    ``needs`` is {kind: provider | [providers]}, the act registry's own
+    ``requires_grants``. NOTHING IS HARDCODED HERE: called with no ``needs``
+    this returns nothing at all, and the bench's free validate door is the
+    judge. That is deliberate -- the last hardcoded copy of this fact refused
+    the correct plan for a day.
     """
+    table = BLOCK_GRANTS if needs is None else needs
     problems: list[dict[str, str]] = []
     granted: set[str] = set()
-    flagged: set[str] = set()
+    flagged: set[tuple[str, str]] = set()
     for index, step in enumerate(steps if isinstance(steps, list) else []):
         if not isinstance(step, dict):
             continue
+        here = step_opens(step)
         for kind in step_kinds(step):
-            provider = BLOCK_GRANTS.get(kind)
-            if provider is None or provider in granted or kind in flagged:
-                continue
-            flagged.add(kind)
-            problems.append(
-                {
-                    "path": f"steps.{index}",
-                    "rej": REJ_BLOCK_GRANT,
-                    "kind": kind,
-                    "provider": provider,
-                    "message": (
-                        f"step {index + 1} declares a {kind} block and nothing "
-                        f"before it connects the person's "
-                        f"{provider_words(provider)}. " + GRANT_FIRST_SENTENCE
-                        + " Copy the brief's plan_template steps in order; the "
-                        "bench refuses this as REJ-35."
-                    ),
-                }
-            )
+            for provider in _needed_providers(kind, table):
+                if provider in here or provider in granted:
+                    continue
+                if (kind, provider) in flagged:
+                    continue
+                flagged.add((kind, provider))
+                problems.append(
+                    {
+                        "path": f"steps.{index}",
+                        "rej": REJ_BLOCK_GRANT,
+                        "kind": kind,
+                        "provider": provider,
+                        "message": (
+                            f"step {index + 1} declares a {kind} block, and that "
+                            f"block runs on the person's "
+                            f"{provider_words(provider)} connection, which "
+                            f"nothing on that step opens. "
+                            + CONNECTION_IN_THE_ACTION_SENTENCE
+                            + " The bench refuses this as REJ-35."
+                        ),
+                    }
+                )
         provider = grant_provider(step)
         if provider:
             granted.add(provider)
     return problems
 
 
-def first_step_needing(steps: Any, provider: str) -> int | None:
+def first_step_needing(steps: Any, provider: str, needs: Any = None) -> int | None:
     """The index of the first step whose block needs `provider` open."""
+    table = BLOCK_GRANTS if needs is None else needs
     for index, step in enumerate(steps if isinstance(steps, list) else []):
         for kind in step_kinds(step):
-            if BLOCK_GRANTS.get(kind) == provider:
+            if provider in _needed_providers(kind, table):
                 return index
     return None
 
@@ -787,6 +1069,8 @@ def merge_required_blocks(
     plan_template: Any,
     *,
     want: str | None = None,
+    needs: Any = None,
+    block_templates: Any = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Fill in the brief's form: every template step the plan is missing.
 
@@ -795,13 +1079,13 @@ def merge_required_blocks(
     missing block, and a block whose account nothing opens, are both repaired
     here rather than discovered at the door.
 
-    RULE 230. The template is a group, in the template's order: the GRANT step
-    that connects the person's Google Calendar and then the meeting block that
-    uses it. The group goes in FRONT of the model's own work, because the
-    calendar has to be connected before anything can read it, and because a
-    block with no grant before it is refused REJ-35. When the model wrote the
-    block itself but no grant, only the grant is inserted, immediately before
-    the step that needs it.
+    RULE 236. The template is a group and it is copied in the template's own
+    order, whatever that order is: ONE step carrying the account rows and the
+    block on this bench, a GRANT step and then the block on an older one. The
+    group goes in FRONT of the model's own work. When the model wrote the block
+    itself and left its connection out, what goes in is the published `connect
+    _account` ROW, onto the step that uses it -- never a GRANT step of the
+    harness's own making, which is exactly what REJ-38 refuses.
     """
     original = proposal.get("steps")
     steps: list[Any] = list(original) if isinstance(original, list) else []
@@ -810,11 +1094,14 @@ def merge_required_blocks(
         for step in (plan_template if isinstance(plan_template, list) else [])
         if isinstance(step, dict)
     ]
-    if not missing_blocks(steps, required_blocks) and not grant_problems(steps):
+    if not missing_blocks(steps, required_blocks) and not grant_problems(steps, needs):
         return proposal, []
-    if not templates:
+    published = published_template_steps(templates, block_templates)
+    if not templates and not published:
         # No form to fill: the door's refusal is then the honest answer, and
-        # it carries the template with it.
+        # it carries the template with it. RULE 236: the CATALOG counts as a
+        # form, because on contract 3.0 `plan_template` is a blank skeleton
+        # and the connect rows live in `block_templates` alone.
         return proposal, []
 
     steps, inserted = _align_grant_steps(
@@ -831,21 +1118,30 @@ def merge_required_blocks(
                 want=want,
             )
             inserted.extend(labels)
-    # Whatever is still ungranted takes the grant alone, immediately before
-    # the step that needs it: the model wrote the block itself, or the
-    # template had no step for the kind that was missing.
+    # Whatever is still unopened is opened ON THE STEP THAT USES IT: the model
+    # wrote the block itself, or the template had no step for the kind that was
+    # missing. The ROW comes first (rule 236) and the GRANT step is the
+    # fallback, which is how an older bench's two-step template still works and
+    # how this one never manufactures the step REJ-38 refuses.
     opened: set[str] = set()
-    for gap in grant_problems(steps):
+    for gap in grant_problems(steps, needs):
         provider = gap["provider"]
         if provider in opened:
             continue
+        at = first_step_needing(steps, provider, needs)
+        if at is None:
+            continue
+        rows = template_connect_rows(published, provider)
+        if rows:
+            steps[at], added = add_connect_rows(steps[at], rows)
+            if added:
+                opened.add(provider)
+                inserted.append(f"connect row:{provider} (on the step that uses it)")
+                continue
         template_step = next(
             (step for step in templates if grant_provider(step) == provider), None
         )
         if template_step is None:
-            continue
-        at = first_step_needing(steps, provider)
-        if at is None:
             continue
         steps = _insert_steps(steps, at, [template_step], proposal=proposal, want=want)
         opened.add(provider)

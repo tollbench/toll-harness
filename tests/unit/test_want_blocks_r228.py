@@ -16,6 +16,15 @@ RULE 230 (contract 2.46) added a fifth: the template is a GROUP, in order, and
 the GRANT step that connects the person's Google Calendar comes before the
 meeting block that reads it. Steven, 2026-09-05: "they are supposed to connect
 my calendar IN the plan." A block with no grant before it is refused REJ-35.
+
+RULE 236 (2026-09-08) MOVED THE CONNECTION INTO THE ACTION, and these tests
+stayed to prove the OLD shape still files: a bench that has not been promoted
+yet still hands out the two-step template, and the harness may never wait for a
+server to catch up before it can file. The one-step shape, and the fact that
+the harness no longer knows the meeting-calendar law by heart, are covered in
+test_connection_in_the_action_r236.py. Which kinds need which connection is now
+the act registry's answer, so the fake bench below publishes `requires_grants`
+exactly as production does.
 """
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.toll_bench import blocks
@@ -109,6 +118,10 @@ GRANT_TEMPLATE = {
 
 TWO_STEP_TEMPLATE = [GRANT_TEMPLATE, MEETING_TEMPLATE]
 
+# What the act registry says a meeting runs on. Nothing in the harness knows
+# this by heart any more (rule 236); it is read off the bench and passed in.
+NEEDS = {"meeting": ("google-calendar",)}
+
 WORK_STEP = {
     "ask": "APPROVE",
     "actor": "agent",
@@ -165,7 +178,17 @@ class _Api:
         return self.me()
 
     def act_kinds(self):
-        return {"kinds": {"meeting": {"declaration": {}, "template": MEETING_TEMPLATE}}}
+        # Rule 236: `requires_grants` is where "a meeting runs on the person's
+        # calendar" lives now. The harness reads it here and nowhere else.
+        return {
+            "kinds": {
+                "meeting": {
+                    "declaration": {},
+                    "template": MEETING_TEMPLATE,
+                    "requires_grants": ["google-calendar"],
+                }
+            }
+        }
 
     def proposal_schema(self):
         return {"type": "object"}
@@ -313,7 +336,7 @@ def test_the_door_does_not_count_a_grant_without_the_access():
     named_only = {"ask": "GRANT", "grant_request": {"connector": {"provider": "google-calendar"}}}
     assert blocks.grant_provider(named_only) is None
     assert blocks.intended_grant_provider(named_only) == "google-calendar"
-    assert blocks.grant_problems([named_only, {"acts": [{"kind": "meeting"}]}])
+    assert blocks.grant_problems([named_only, {"acts": [{"kind": "meeting"}]}], NEEDS)
 
 
 def test_a_plan_that_carries_the_grant_and_the_block_is_filed_as_written():
@@ -356,14 +379,18 @@ def test_a_bad_window_is_caught_at_home():
 
 def test_the_local_validator_reports_a_block_no_grant_opens():
     """The REJ-35 mirror: a meeting block with no calendar grant before it."""
-    problems = blocks.grant_problems([{"acts": [{"kind": "meeting"}]}])
+    problems = blocks.grant_problems([{"acts": [{"kind": "meeting"}]}], NEEDS)
     assert len(problems) == 1
     assert problems[0]["rej"] == "REJ-35"
     assert problems[0]["provider"] == "google-calendar"
     assert "Google Calendar" in problems[0]["message"]
-    assert blocks.grant_problems([GRANT_TEMPLATE, {"acts": [{"kind": "meeting"}]}]) == []
+    assert blocks.grant_problems(
+        [GRANT_TEMPLATE, {"acts": [{"kind": "meeting"}]}], NEEDS
+    ) == []
     # The grant has to come BEFORE the block, not after it.
-    assert blocks.grant_problems([{"acts": [{"kind": "meeting"}]}, GRANT_TEMPLATE])
+    assert blocks.grant_problems([{"acts": [{"kind": "meeting"}]}, GRANT_TEMPLATE], NEEDS)
+    # RULE 236: told nothing, this says nothing. The bench is then the judge.
+    assert blocks.grant_problems([{"acts": [{"kind": "meeting"}]}]) == []
 
 
 def test_a_grant_gap_never_buries_the_plan_the_person_waits_on():

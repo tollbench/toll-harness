@@ -8,6 +8,93 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.31.0] - 2026-09-08
+
+**A connection is not a step. It is part of the action that needs it, and this
+package would have refused every correct plan.**
+
+Rule 236 was finished on the bench on 2026-09-08 (Steven: "fix it, remove the
+old path and lets do it"). The `meeting` block's `plan_template` is now ONE
+step - a `google-calendar` `connect_account` row, a `google-gmail` row and the
+meeting block on a single card - and a NEW plan carrying a standalone `GRANT`
+step whose only work is opening a connector the platform already holds in its
+registry is refused `REJ-38` (`grant_step_removed`) at the validate door and at
+the bid door. `record` and `email` ship rows too.
+
+**What forced this release.** 0.30.0 stopped teaching the two-step shape as a
+general law but left the machinery that enforced it. `blocks.BLOCK_GRANTS` said
+`{"meeting": "google-calendar"}` by heart, and `grant_provider()` counted a
+connection only when it was an `ask == "GRANT"` step. Against the one-step
+template the bench now publishes, a CORRECT plan looked to the harness like a
+meeting block nothing opened the calendar for: it manufactured a `REJ-35` the
+bench never emits, `local_validation_failed` came back, and nothing was ever
+filed. The harness would have refused the right answer, at home, for every
+meeting want.
+
+### Changed
+
+- **A `connect_account` ROW on the step counts as the connection.** New
+  `blocks.connect_row_providers()` and `blocks.step_opens()` read the row
+  exactly as the bench's own `connect_rows` + `_useful` do - the provider on
+  `config.grant_request.connector`, and the actions the block cannot run
+  without, because naming the account and none of its actions is the same
+  nothing a GRANT step naming no actions always was. `grant_problems()` counts
+  a row on the block's OWN step first; a GRANT step at or before the block
+  still counts, so an un-promoted bench and a signed deal both keep working.
+- **The harness knows no kind by heart any more.** `BLOCK_GRANTS` is retired
+  and deliberately empty. Which act kind runs on which connector is the act
+  REGISTRY's answer (`requires_grants` on `GET /api/bench/acts/kinds`), read
+  off the bench and passed to `grant_problems(steps, needs)`. Called with no
+  `needs`, the local mirror says nothing at all and the bench's free validate
+  door is the judge - which is the right way round for a fact that lives on the
+  server. A kind added tomorrow is covered with no edit here.
+- **A standalone GRANT step is never synthesised.** When a declared block's
+  connection is missing, what goes in is the PLATFORM's published
+  `connect_account` row, onto the step that uses it. The old behaviour -
+  inserting a GRANT step ahead of the block - now only happens where the brief
+  itself published a GRANT step, which is exactly the un-promoted bench.
+- **The rows are read off `block_templates`, not only `plan_template`.** On
+  contract 3.0 the skeleton is blank and the blocks live in the catalog, so a
+  repair reading the skeleton alone would find no row on any live brief and
+  quietly do nothing. New `blocks.published_template_steps()` flattens both.
+- **`REJ-38` is handled, once.** A GRANT step for a provider the brief
+  publishes as a ROW is moved into the action BEFORE filing
+  (`blocks.retire_grant_steps()`), on positive evidence only: a published row
+  for that provider and no published GRANT step for it. So an un-promoted bench
+  is untouched, and so is the `access` mold - a GRANT step for access the
+  connector registry has no recipe for is still the right shape and is the only
+  shape there is for it. If the door refuses `REJ-38` anyway, the refusal is
+  LOGGED verbatim, the plan is repaired from the brief's published blocks and
+  re-filed ONCE with a `-rej38` idempotency suffix; with nothing to move, the
+  door's own sentence and the fix come back non-terminal and nothing is filed
+  again. `REJ-38` carries no `plan_template` - what it hands back is the row -
+  so it is deliberately not in `REJ_CARRIES_THE_FORM`.
+- **Every planning surface says the row.** `GRANT_FIRST_SENTENCE` is retired
+  for `blocks.CONNECTION_IN_THE_ACTION_SENTENCE`, carried verbatim by the
+  runtime prompt, `read_brief`, `submit_proposal`, the standing Toll Bench
+  instruction and `docs/tools.md`: "The connection is a `connect_account` ROW
+  inside the step that uses it, never a step of its own: the card is the
+  account rows, then what the step does, then one button that stays asleep
+  until every row is settled. The meeting plan is ONE step - a Google Calendar
+  row, a Gmail row and the meeting block on a single card. Copy
+  `block_templates[<kind>]` from the brief whole rather than composing the
+  steps yourself; a new plan that lifts a registry connector back into a GRANT
+  step of its own is refused REJ-38. Never plan a step where the person types
+  their own times, and never ask the person for their availability (REJ-28)."
+  The runtime prompt's meeting carve-out ("the one that genuinely ships TWO
+  steps") is gone: rule 236 is the whole truth.
+- **`google-gmail` joins the action floor.** `GRANT_MIN_ACTIONS` now holds
+  `gmail.message.send` alongside `calendar.events.read`, the same floor the
+  door holds, so the mirror and the door agree on what a row actually opens.
+
+### Compatibility
+
+Nothing changes for a bench that still hands out the two-step template: the
+template is filed exactly as it hands it over, `grant_problems` still counts
+its GRANT step, and `retire_grant_steps` finds no evidence and does nothing.
+Deals already signed keep the shape they were signed in - none of this is read
+by the walk.
+
 ## [0.30.0] - 2026-09-07
 
 **The connection lives in the action, and this package was teaching the
