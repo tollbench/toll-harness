@@ -8,6 +8,83 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.0] - 2026-09-09
+
+**The plan is written a piece at a time, at the bench's own door, instead of
+whole and all at once.**
+
+### What forced this release
+
+The harness asked one model call for a WHOLE proposal, handed the whole
+document to the validate door, and handed every problem back at once. Overnight
+on 2026-09-08 every model but the strongest answered that list by rewriting the
+whole document and breaking something new on each pass; the next morning a raw
+frontier model, on a want with no worked program to copy, spent four
+whole-document passes and never filed. The missing thing was never better
+diagnostics. It was somewhere to put a PARTIAL answer.
+
+Steven Ochs, 2026-09-09 (rule 241, bench contract 3.11): *"send the outline for
+the full plan, then we send back the template for them to fill out, then they
+send it back and we send back each part that is refused until we get through
+the whole plan. If the plan is 3 steps or thirty that's how we get through it."*
+
+### Added
+
+- **The draft loop** (`toll_bench/draft.py`). The reference runtime now drives
+  bidding itself and asks the intelligence three small questions instead of one
+  enormous one:
+  1. an **outline** -- steps in order, each an `ask` and a `title`, and for a
+     step that touches the world the `tool` and the service it runs `on`. The
+     prompt carries the want, what the person said, a one-paragraph block
+     grammar and the tools index. Not the whole brief, and no worked program.
+  2. one **step's blanks** at a time -- that step's mechanics exactly as the
+     bench expanded them, plus its blank paths with the bench's own sentence on
+     each -- answered as `{path, value}` patches.
+  3. one **`next_fix`** at a time -- one path, its current value, the code and
+     one sentence of fix, with the step around it.
+  Then `POST .../proposals {"from_draft": true}` files the document the bench
+  has been holding, unchanged. The informed plan walks the same loop with
+  `kind: "plan"`, which opens EMPTY on purpose: a plan draft starts from the
+  steps already filed and the person's selection answers ride the answer.
+- **The three draft calls** on the API client (`put_proposal_draft`,
+  `patch_proposal_draft`, `get_proposal_draft`) and on the provider
+  (`put_draft`, `patch_draft`, `read_draft`), plus `file_from_draft` and
+  `file_plan_from_draft`. A refusal on any of them comes back as its BODY, not
+  as an exception, because the loop reads `closed` to decide what to do next.
+- **The same three doors as tools**, named for the bench's MCP twins:
+  `toll_bench.put_proposal_draft`, `toll_bench.patch_proposal_draft`,
+  `toll_bench.get_proposal_draft`, added to every reference agent config.
+- **One log line per round**: the round, what is left, and the one path and
+  code the bench named -- so a stuck loop is readable in `market.log` without
+  the log becoming a copy of the plan.
+
+### Changed
+
+- **The market scan and the `file_informed_plan` obligation walk the loop.**
+  The single-shot prompt and its tool set are kept ONLY for a bench that
+  publishes no draft door (the PUT answers 404/405), so an older bench is still
+  biddable from this package.
+- **The offline mirror no longer refuses an informed plan.** It used to answer
+  `informed_plan_validation_failed` and stop the filing; a mirror that has
+  drifted from the door buries a plan the person is already waiting on. The
+  plan is built at the draft door, which re-validates on every round, so the
+  mirror's problems go to the log and the bench decides.
+
+### Bounds, and there are no knobs
+
+THE BENCH'S BOUND IS THE ONLY BOUND (Steven, 2026-09-09: *"we don't have to
+have a three strike rule ... 3 strikes on a 30 step job is too little"*, *"I
+don't think we should do any levers"*). The loop runs until the answer says
+`ready` or says `closed`; the bench owns 24-hour expiry and three rounds per
+opening problem with a ceiling of 200, so a thirty-step plan gets a thirty-step
+plan's worth of rounds. There is no strike count and no round ceiling in this
+package. The one safety net is the bench's own arithmetic read back off its own
+answer: `rounds.left` at 0 stops the loop even from a bench that would keep
+answering. When the answer is `closed` the loop opens ONE fresh outline and then
+leaves the want for this cycle. What is left in the harness is prompt hygiene,
+not a loop lever: a prompt budget these prompts should never come near, and the
+per-run context budget from 0.34.0, unchanged.
+
 ## [0.34.0] - 2026-09-09
 
 **A run stops itself before the provider stops it, and a tool hands back what

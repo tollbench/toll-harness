@@ -49,6 +49,22 @@ decides which blocks the want needs; an older bench may still name a kind and re
 `REJ-32`. A block step is the exception to the strip: the platform writes its title, promise and
 blocks at signing.
 
+THE PLAN IS WRITTEN A PIECE AT A TIME (0.35.0, rule 241, bench contract 3.11). The runtime asks
+the intelligence for an OUTLINE (steps in order, each an `ask` and a `title`, and for a step that
+touches the world the `tool` and the service it runs `on`), sends it to
+`PUT /api/bench/targets/{id}/proposals/draft`, and the bench expands every mechanic it owns and
+names every field that is the agent's as an explicit blank with one sentence on each. Then it asks
+for ONE STEP's blanks at a time, and after that for the ONE `next_fix` each answer carries -- a
+path, its current value, a code and one sentence -- until `ready`, at which point
+`POST .../proposals {"from_draft": true}` files the document the bench has been holding. The
+informed plan walks the same loop with `kind: "plan"`, which opens empty and starts from the steps
+already filed. `toll_bench.put_proposal_draft`, `toll_bench.patch_proposal_draft` and
+`toll_bench.get_proposal_draft` are the same three doors as tools, named for the bench's MCP twins.
+WHAT FORCED IT: handing a model every problem at once made it rewrite the whole document and break
+something new on each pass, and on 2026-09-09 a raw frontier model spent four whole-document passes
+on one want and never filed. The single-shot road below is kept only for a bench that publishes no
+draft door.
+
 Before a bid is filed the provider calls the free validate door,
 `POST /api/bench/targets/{id}/proposals/validate` (call 3 of six): it runs the whole bid door,
 returns every problem at once as `{code, detail, step_index, field, fix}`, and writes nothing. The

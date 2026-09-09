@@ -285,6 +285,58 @@ class BookOfHousesApiClient:
             authenticated=True,
         )
 
+    # THE DRAFT DOOR (rule 241, contract 3.11). Three calls under the same
+    # bearer and the same `proposals:write` scope as filing a bid, and none of
+    # them file anything: the outline in, one piece back at a time, and a read
+    # that costs no round. MCP twins: put_proposal_draft, patch_proposal_draft,
+    # get_proposal_draft -- named the same here so an operator reading one
+    # surface recognises the other.
+    def put_proposal_draft(
+        self, target_id: str, outline: dict[str, Any], kind: str = "bid"
+    ) -> dict[str, Any]:
+        """The OUTLINE in. Replaces any draft here and starts the rounds at zero."""
+        target = urllib.parse.quote(str(target_id), safe="")
+        payload = dict(outline or {})
+        payload["kind"] = kind
+        return self._request(
+            "PUT",
+            f"/api/bench/targets/{target}/proposals/draft",
+            payload=payload,
+            authenticated=True,
+        )
+
+    def patch_proposal_draft(
+        self,
+        target_id: str,
+        patches: list[dict[str, Any]] | None = None,
+        kind: str = "bid",
+        document: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """ONE PIECE BACK. Merge by path, re-validate, one `next_fix`. Spends
+        one round."""
+        target = urllib.parse.quote(str(target_id), safe="")
+        payload: dict[str, Any] = {"kind": kind}
+        if patches is not None:
+            payload["patches"] = list(patches)
+        if document:
+            payload.update(document)
+        return self._request(
+            "PATCH",
+            f"/api/bench/targets/{target}/proposals/draft",
+            payload=payload,
+            authenticated=True,
+        )
+
+    def get_proposal_draft(self, target_id: str, kind: str = "bid") -> dict[str, Any]:
+        """Read the draft back. Costs no round."""
+        target = urllib.parse.quote(str(target_id), safe="")
+        return self._request(
+            "GET",
+            f"/api/bench/targets/{target}/proposals/draft",
+            authenticated=True,
+            query={"kind": kind},
+        )
+
     def submit_proposal(
         self, target_id: str, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:

@@ -1737,6 +1737,228 @@ class BookOfHousesTollBenchProvider:
             ),
         }
 
+    # ------------------------------------------------------------------
+    # THE DRAFT DOOR (rule 241, contract 3.11)
+    # ------------------------------------------------------------------
+    # The bench holds the plan while it is written, so the WHOLE-DOCUMENT
+    # repair loop this class used to run is not the road any more: the outline
+    # goes in, the blanks and the one next_fix come back, and the document the
+    # bench has been holding is what gets filed. Nothing below repairs a plan
+    # and nothing below invents a word -- the door is the validator now.
+    #
+    # A refusal on any of these three calls comes back as its BODY, not as an
+    # exception: a 409 `draft_closed` carries the sentence saying why and the
+    # loop reads it to decide whether to start a fresh outline.
+    def _draft_answer(self, call: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return call(*args, **kwargs)
+        except BookOfHousesApiError as error:
+            body = dict(getattr(error, "body", None) or {})
+            body.setdefault("ok", False)
+            body.setdefault("error", error.code)
+            body.setdefault("message", error.message)
+            body["status"] = error.status
+            return body
+
+    def put_draft(
+        self, target_id: str, outline: dict[str, Any], *, kind: str = "bid"
+    ) -> dict[str, Any]:
+        """The OUTLINE in. The bench expands every mechanic it owns and names
+        every blank that is the agent's, each with one sentence."""
+        return self._draft_answer(
+            self.api.put_proposal_draft, target_id, dict(outline or {}), kind
+        )
+
+    def patch_draft(
+        self, target_id: str, patches: list[dict[str, Any]], *, kind: str = "bid"
+    ) -> dict[str, Any]:
+        """ONE PIECE BACK, by path. Spends one of the bench's rounds."""
+        return self._draft_answer(
+            self.api.patch_proposal_draft, target_id, list(patches or []), kind
+        )
+
+    def read_draft(self, target_id: str, *, kind: str = "bid") -> dict[str, Any]:
+        """The draft as it stands. Costs no round."""
+        return self._draft_answer(self.api.get_proposal_draft, target_id, kind)
+
+    def file_from_draft(
+        self, target_id: str, idempotency_key: str = ""
+    ) -> dict[str, Any]:
+        """File the document the bench is holding, through the ordinary bid
+        door, unchanged: `POST .../proposals {"from_draft": true}`.
+
+        Nothing is repaired here. Every mechanic was the bench's own and every
+        word was the agent's, checked at the door on the way in, so the only
+        things this method owns are the ones filing has always owned: the
+        reachability handshake and this fleet's slot on the want.
+        """
+        reachability = self.ensure_reachable()
+        if not reachability.get("ok"):
+            return {
+                "ok": False,
+                "error": "agent_not_reachable",
+                "message": (
+                    "The two-ping reachability handshake did not complete. "
+                    "No proposal was filed."
+                ),
+                "reachability": reachability,
+            }
+        reservation = None
+        target_round = None
+        fleet_engaged = self.fleet is not None and bool(self.fleet_agent_id)
+        if fleet_engaged:
+            try:
+                brief = self._brief_for(target_id)
+            except BookOfHousesApiError:
+                brief = {}
+            target_round = str(brief.get("round") or 1)
+            your_bid = brief.get("your_bid") or None
+            if your_bid:
+                self.fleet.mark_target_reviewed(
+                    agent_id=self.fleet_agent_id,
+                    target_id=target_id,
+                    target_round=target_round,
+                )
+                if your_bid.get("status") == "withdrawn":
+                    return {
+                        "ok": False,
+                        "error": "participation_ended_this_round",
+                        "terminal": True,
+                        "message": (
+                            "This agent withdrew from the current round; "
+                            "participation is over until the want reposts."
+                        ),
+                    }
+                return {
+                    "ok": True,
+                    "proposal_id": your_bid.get("proposal_id"),
+                    "idempotent": True,
+                    "message": "A bid from this agent is already live on the current round.",
+                }
+            reservation = self.fleet.reserve_proposal(
+                target_id=target_id,
+                target_round=target_round,
+                agent_id=self.fleet_agent_id,
+                idempotency_key=idempotency_key,
+                limit=self.fleet_proposal_limit,
+            )
+            if not reservation.allowed:
+                return {
+                    "ok": False,
+                    "error": "fleet_proposal_limit",
+                    "message": (
+                        f"This Toll Harness fleet already reserved {reservation.count} of "
+                        f"{reservation.limit} proposal slots for the target's current round."
+                    ),
+                    "fleet_count": reservation.count,
+                    "fleet_limit": reservation.limit,
+                    "target_round": target_round,
+                }
+            if reservation.status == "confirmed" and reservation.proposal_id:
+                return {
+                    "ok": True,
+                    "proposal_id": reservation.proposal_id,
+                    "idempotent": True,
+                }
+            idempotency_key = reservation.idempotency_key
+        try:
+            result = self.api.submit_proposal(
+                target_id, {"from_draft": True}, idempotency_key
+            )
+        except BookOfHousesApiError as error:
+            self._log_refusal(
+                "filing",
+                target_id,
+                {
+                    "status": error.status,
+                    "code": error.code,
+                    "rej": error.rej,
+                    "detail": error.message,
+                    "body": getattr(error, "body", None),
+                    "from_draft": True,
+                },
+            )
+            if fleet_engaged and reservation is not None and 400 <= error.status < 500:
+                self.fleet.release_reservation(
+                    target_id=target_id,
+                    target_round=target_round,
+                    agent_id=self.fleet_agent_id,
+                )
+            if fleet_engaged and error.status in (404, 409):
+                self.fleet.mark_target_reviewed(
+                    agent_id=self.fleet_agent_id,
+                    target_id=target_id,
+                    target_round=target_round,
+                )
+                return {
+                    "ok": False,
+                    "error": "proposal_refused_terminally",
+                    "terminal": True,
+                    "status": error.status,
+                    "refusal": error.code,
+                    "message": (
+                        f"Production refused the bid ({error.code}). This round is "
+                        "recorded as reviewed; do not retry it."
+                    ),
+                }
+            return {
+                "ok": False,
+                "error": error.code,
+                "status": error.status,
+                "message": error.message,
+            }
+        if fleet_engaged and reservation is not None:
+            proposal_id = str(result.get("proposal_id") or "")
+            if proposal_id:
+                self.fleet.confirm_proposal(
+                    target_id=target_id,
+                    target_round=target_round,
+                    agent_id=self.fleet_agent_id,
+                    proposal_id=proposal_id,
+                )
+            elif result.get("ok") is False:
+                self.fleet.release_reservation(
+                    target_id=target_id,
+                    target_round=target_round,
+                    agent_id=self.fleet_agent_id,
+                )
+        return self._filing_receipt(result)
+
+    def file_plan_from_draft(
+        self, target_id: str, proposal_id: str, idempotency_key: str = ""
+    ) -> dict[str, Any]:
+        """The informed plan, filed from the draft the bench holds (rule 113
+        through rule 241). `accept_rules` rides the body because filing the
+        plan IS the agent's signature, and it is the agent's to give."""
+        try:
+            return self._filing_receipt(
+                self.api.submit_informed_plan(
+                    target_id,
+                    proposal_id,
+                    {"from_draft": True, "accept_rules": True},
+                    idempotency_key,
+                )
+            )
+        except BookOfHousesApiError as error:
+            self._log_refusal(
+                "plan",
+                target_id,
+                {
+                    "status": error.status,
+                    "code": error.code,
+                    "rej": error.rej,
+                    "detail": error.message,
+                    "body": getattr(error, "body", None),
+                    "from_draft": True,
+                },
+            )
+            return {
+                "ok": False,
+                "error": error.code,
+                "status": error.status,
+                "message": error.message,
+            }
+
     def submit_proposal(
         self, target_id: str, proposal: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -2425,20 +2647,23 @@ class BookOfHousesTollBenchProvider:
         candidate["finish_line_cents"] = submitted_plan.get(
             "finish_line_cents", original.get("finish_line_cents") or 0
         )
+        # RULE 241: THE BENCH IS THE VALIDATOR NOW. This used to be an offline
+        # jsonschema mirror standing between the person and the plan they are
+        # waiting on -- and a mirror that has drifted buries a plan the door
+        # would have taken. The plan is built at the draft door, which
+        # re-validates on every round, so the mirror runs for the LOG and
+        # refuses nothing. If the plan is really wrong the bench says so, in
+        # its own words, on the filing that follows.
         validation = self._grant_gap_never_blocks_the_filing(
             self.validate_proposal(candidate), brief.get("plan_template")
         )
         if not validation["ok"]:
-            return {
-                "ok": False,
-                "error": "informed_plan_validation_failed",
-                "problems": validation["problems"],
-                "sealed_terms": {
-                    "total_ask_cents": original.get("total_ask_cents"),
-                    "timeline_days": original.get("timeline_days"),
-                    "allocation": original.get("allocation"),
-                },
-            }
+            _LOGGER.warning(
+                "Local mirror has problems with the informed plan for target "
+                "%s; filing anyway and letting the bench decide (%s)",
+                target_id,
+                self._problem_summary(validation.get("problems") or []),
+            )
         # RULE 230: the placeholder never reaches the person's card, and it
         # comes out only here -- the validator has already had its say, so the
         # model was told before the harness decided anything.

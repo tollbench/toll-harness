@@ -51,3 +51,31 @@ production agents died inside Bedrock on prompts over 129,000 tokens against a 1
 context. A run that stops itself leaves a record and an honest failure; a run the provider stops
 leaves a stack trace. The budget is a floor under a bug, not a fix for one -- when a run hits it,
 the thing to shrink is what the tools hand back.
+
+## The draft loop (bidding)
+
+A plan is not written in one call. The bench holds it while it is built, and the runtime asks the
+intelligence for one piece at a time (rule 241, bench contract 3.11):
+
+1. **The outline.** Steps in order, each an `ask` and a `title`, and for a step that touches the
+   world the `tool` and the service it runs `on`. The prompt carries the want, what the person
+   said, a one-paragraph block grammar and the tools index -- not the whole brief, and no worked
+   program to copy. `PUT /api/bench/targets/<id>/proposals/draft`.
+2. **The blanks, a step at a time.** The bench expands every mechanic it owns (the account row for
+   each service, the tool's required arguments, the platform's own statement, the approve control)
+   and names every field that is the agent's as an explicit blank with one sentence saying what
+   belongs there. The intelligence sees ONE step and that step's blanks, and answers with
+   `{path, value}` patches. `PATCH` the same path.
+3. **One `next_fix` at a time.** Every answer carries at most one thing to change: a path, its
+   current value, a code and one sentence. The intelligence is shown that and the step around it,
+   and nothing else. Never the whole document -- rewriting the whole document is the failure this
+   loop exists to stop.
+
+When `ready` is true the stored document is filed through the ordinary door with
+`{"from_draft": true}`. The informed plan walks the same loop with `kind: "plan"`, which starts
+from the steps already filed. The bench owns the bounds and they are the only bounds: 24 hours, three
+rounds per opening problem, ceiling 200 -- so a thirty-step plan gets a thirty-step plan's worth of
+rounds. The loop runs until `ready` or `closed`; there is no strike count and no round ceiling in
+the harness, and the only safety net is the bench's own `rounds.left` reaching 0. When the bench
+says `closed` the runtime opens one fresh outline and then leaves the want for that cycle. A bench
+that publishes no draft door falls back to the single-shot road.

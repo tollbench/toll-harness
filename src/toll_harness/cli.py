@@ -48,6 +48,7 @@ from toll_harness.onboarding import (
 from toll_harness.operator.channel import OperatorChannel
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
+from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
 from toll_harness.worker import install_market_worker, market_worker_status
 
@@ -1362,6 +1363,13 @@ def _process_market_attention(
             "run": None,
         }
     kind = str(obligation.get("kind") or "")
+    # RULE 241: the informed plan is built up in pieces too, at the same door.
+    if kind == "file_informed_plan" and _draft_door_available(resources):
+        planned = _file_the_informed_plan_from_draft(
+            resources, obligation, reachability, len(obligations), threshold
+        )
+        if planned is not None:
+            return planned
     dispatch = _OBLIGATION_DISPATCH.get(kind)
     if dispatch is None:
         # Unranked/unknown kind: fall back to the full obligation instruction and
@@ -1548,6 +1556,184 @@ def _market_scan_candidates(
     return len(targets), summaries, [_market_target_key(target) for target in selected]
 
 
+# ---------------------------------------------------------------------------
+# THE DRAFT LOOP (rule 241, contract 3.11) — how a bid gets written now
+# ---------------------------------------------------------------------------
+# The model used to be handed the whole brief, a worked program and every
+# problem at once, and asked for a whole proposal. Now it is asked for an
+# OUTLINE, then for one step's blanks, then for one next_fix at a time, and
+# the bench holds the document in between. The long single-shot prompt below
+# is kept for a bench that publishes no draft door: an older bench must still
+# be biddable from this package.
+def _draft_door_available(resources: Any) -> bool:
+    provider = getattr(resources, "toll_bench", None)
+    model = getattr(getattr(resources, "runtime", None), "model", None)
+    return bool(
+        provider is not None
+        and model is not None
+        and callable(getattr(provider, "put_draft", None))
+        and callable(getattr(provider, "patch_draft", None))
+    )
+
+
+def _door_is_missing(outcome: dict[str, Any]) -> bool:
+    """True when the bench answered the draft PUT with "no such route"."""
+    return outcome.get("error") in (
+        "draft_door_refused",
+        "http_error",
+        "not_found",
+    ) and int(outcome.get("status") or 0) in (404, 405)
+
+
+def _brief_for_the_loop(resources: Any, target_id: str, want: Any = None) -> dict[str, Any]:
+    brief: dict[str, Any] = {}
+    try:
+        brief = (resources.toll_bench.read_brief(target_id) or {}).get("brief") or {}
+    except Exception as error:  # noqa: BLE001 - a brief that will not read is not the end
+        _LOGGER.warning("Brief for target %s could not be read (%s)", target_id, error)
+        brief = {}
+    if want and not brief.get("want"):
+        brief["want"] = want
+    return brief
+
+
+def _act_kinds_for_the_loop(resources: Any) -> Any:
+    try:
+        return resources.toll_bench.list_act_kinds()
+    except Exception as error:  # noqa: BLE001 - the grammar summary survives without it
+        _LOGGER.warning("Act registry could not be read (%s)", error)
+        return None
+
+
+def _bid_through_the_draft_loop(
+    resources: Any,
+    target: dict[str, Any],
+    reachability: dict[str, Any],
+    target_count: int,
+    review_targets: list[Any],
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    """One want, written up in pieces at the bench's own door.
+
+    Returns None when this bench publishes no draft door, so the caller falls
+    back to the single-shot road rather than filing nothing.
+    """
+    target_id = str(target.get("target_id") or "")
+    brief = _brief_for_the_loop(resources, target_id, target.get("want"))
+    loop = DraftLoop(resources.runtime.model, resources.toll_bench)
+    outcome = loop.run(
+        target_id,
+        kind="bid",
+        brief=brief,
+        act_kinds=_act_kinds_for_the_loop(resources),
+        idempotency_key=f"draft-bid-{target_id}-{brief.get('round') or target.get('round') or 1}",
+        file=not dry_run,
+    )
+    if _door_is_missing(outcome):
+        _LOGGER.warning(
+            "This bench publishes no draft door; bidding on %s the old way",
+            target_id,
+        )
+        return None
+    filed = bool(outcome.get("filed"))
+    identity = resources.agent_identity
+    fleet = getattr(resources.toll_bench, "fleet", None)
+    if filed and fleet is not None and identity is not None:
+        fleet.mark_targets_reviewed(agent_id=identity.id, targets=review_targets)
+    payload: dict[str, Any] = {
+        "ok": bool(outcome.get("ok")),
+        "reachability": reachability,
+        "attention_count": 0,
+        "market_scan": True,
+        "open_target_count": target_count,
+        "candidate_count": 1,
+        "proposal_filed": filed,
+        "dispatch": {
+            "kind": "market_scan_draft_loop",
+            "model_calls": outcome.get("model_calls"),
+            "rounds": outcome.get("rounds"),
+            "tool_count": 0,
+        },
+        "dry_run": bool(dry_run),
+        "dry_run_plans": (
+            [{"target_id": target_id, "proposal": outcome.get("draft")}]
+            if dry_run and outcome.get("draft")
+            else []
+        ),
+        "draft_loop": outcome,
+        "run": None,
+    }
+    if not payload["ok"]:
+        payload["error"] = outcome.get("error")
+    return payload
+
+
+def _file_the_informed_plan_from_draft(
+    resources: Any,
+    obligation: dict[str, Any],
+    reachability: dict[str, Any],
+    attention_count: int,
+    threshold: int,
+) -> dict[str, Any] | None:
+    """The informed plan, built up the same way (rule 113 through rule 241).
+
+    The draft opens EMPTY on purpose: a `plan` draft starts from the steps
+    this agent already filed and the person's selection answers ride the
+    answer, so the loop sharpens the plan the person picked instead of
+    replacing it. Returns None when the bench has no draft door.
+    """
+    target_id = str(obligation.get("target_id") or "")
+    proposal_id = str(obligation.get("proposal_id") or "")
+    if not target_id or not proposal_id:
+        return None
+    brief = _brief_for_the_loop(resources, target_id)
+    loop = DraftLoop(resources.runtime.model, resources.toll_bench)
+    outcome = loop.run(
+        target_id,
+        kind="plan",
+        brief=brief,
+        act_kinds=_act_kinds_for_the_loop(resources),
+        proposal_id=proposal_id,
+        idempotency_key=f"draft-plan-{proposal_id}",
+    )
+    if _door_is_missing(outcome):
+        _LOGGER.warning(
+            "This bench publishes no draft door; filing the plan for %s the old way",
+            target_id,
+        )
+        return None
+    ok = bool(outcome.get("filed"))
+    postcondition_error = None
+    if ok:
+        ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
+    payload: dict[str, Any] = {
+        "ok": ok,
+        "reachability": reachability,
+        "attention_count": attention_count,
+        "dispatch": {
+            "kind": "file_informed_plan_draft_loop",
+            "model_calls": outcome.get("model_calls"),
+            "rounds": outcome.get("rounds"),
+            "tool_count": 0,
+        },
+        "plan_filing_verified": ok,
+        "draft_loop": outcome,
+        "run": None,
+    }
+    if ok:
+        _breaker_reset(obligation)
+        return payload
+    breaker = _breaker_record_failure(
+        resources,
+        obligation,
+        postcondition_error or str(outcome.get("error") or "draft_loop_failed"),
+        threshold=threshold,
+    )
+    payload["breaker"] = breaker
+    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+    return payload
+
+
 def _process_market_opportunities(
     resources: Any,
     reachability: dict[str, Any],
@@ -1575,6 +1761,19 @@ def _process_market_opportunities(
         }
     identity = resources.agent_identity
     mode = identity.autonomy_mode if identity else AutonomyMode.AUTONOMOUS
+    # RULE 241: the outline, then the blanks, then one fix at a time. The
+    # single-shot road below runs only for a bench with no draft door.
+    if _draft_door_available(resources):
+        scanned = _bid_through_the_draft_loop(
+            resources,
+            candidates[0],
+            reachability,
+            target_count,
+            review_targets,
+            dry_run,
+        )
+        if scanned is not None:
+            return scanned
     goal = (
         "Respond to the single open Toll Bench want below by making and submitting one concrete, "
         "honest proposal. Existing obligations were checked first and none are pending. Do not "

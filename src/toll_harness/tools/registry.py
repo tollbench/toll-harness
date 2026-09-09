@@ -998,6 +998,94 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ),
         lambda context, _: require_toll_bench(context).list_proposals(),
     )
+    # THE DRAFT DOOR (rule 241, contract 3.11). Named for the bench's own MCP
+    # twins -- put_proposal_draft / patch_proposal_draft / get_proposal_draft --
+    # so an operator reading one surface recognises the other. The reference
+    # runtime drives this loop itself; these exist so a model steering its own
+    # run has the same three doors and not only the whole-document one.
+    registry.register(
+        ToolDefinition(
+            "toll_bench.put_proposal_draft",
+            (
+                "Send the OUTLINE of a plan and get the form back. Steps in "
+                "order, each with an `ask` and a `title`, and for a step that "
+                "touches the world the `tool` and the service it runs `on`. The "
+                "bench fills every mechanic it owns (the connect_account row for "
+                "each service, the tool's required arguments, the platform's "
+                "statement, the approve control) and names every field that is "
+                "yours as an explicit blank with one sentence saying what belongs "
+                "there. Nothing is filed. It replaces any draft on this target "
+                "and starts the rounds at zero. kind is `bid` (default) or "
+                "`plan` (the informed plan, which starts from the steps already "
+                "filed -- send no steps and you get your own plan back)."
+            ),
+            _object_schema(
+                {
+                    "target_id": {"type": "string"},
+                    "outline": {"type": "object"},
+                    "kind": {"type": "string", "enum": ["bid", "plan"]},
+                },
+                ["target_id"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).put_draft(
+            arguments["target_id"],
+            arguments.get("outline") or {},
+            kind=arguments.get("kind", "bid"),
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.patch_proposal_draft",
+            (
+                "Send ONE piece back: patches of {path, value} against the draft "
+                "the bench is holding. Paths are dotted "
+                "(steps.2.outcome_promise, steps.1.acts.0.runs.1.args.subject) "
+                "and are the ones `blanks` and `next_fix` name. The bench merges, "
+                "re-validates and hands back ONE `next_fix` -- answer that one "
+                "thing and send it back again. NEVER rewrite the whole document: "
+                "that is the failure this door exists to stop. Spends one round; "
+                "a draft past its rounds answers 409 draft_closed and a fresh "
+                "outline starts again."
+            ),
+            _object_schema(
+                {
+                    "target_id": {"type": "string"},
+                    "patches": {
+                        "type": "array",
+                        "items": _object_schema({"path": {"type": "string"}}, ["path"]),
+                    },
+                    "kind": {"type": "string", "enum": ["bid", "plan"]},
+                },
+                ["target_id", "patches"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).patch_draft(
+            arguments["target_id"],
+            arguments.get("patches") or [],
+            kind=arguments.get("kind", "bid"),
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.get_proposal_draft",
+            (
+                "Read the draft the bench is holding, in the same shape the other "
+                "two answer with: {ok, draft, blanks, next_fix, remaining, ready, "
+                "rounds, closed, file_call}. Costs no round and files nothing."
+            ),
+            _object_schema(
+                {
+                    "target_id": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["bid", "plan"]},
+                },
+                ["target_id"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).read_draft(
+            arguments["target_id"], kind=arguments.get("kind", "bid")
+        ),
+    )
     registry.register(
         ToolDefinition(
             "toll_bench.validate_proposal",

@@ -559,24 +559,33 @@ def test_live_bid_on_current_round_short_circuits_and_marks_reviewed(tmp_path):
     assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
 
 
-def test_informed_plan_rejects_line_items_that_change_the_sealed_total():
+def test_the_local_mirror_no_longer_buries_an_informed_plan(caplog):
+    """RULE 241: the bench is the validator, so the offline mirror warns.
+
+    It used to refuse here -- `informed_plan_validation_failed` -- and a
+    mirror that has drifted from the door buries a plan the person is already
+    waiting on. The plan is built at the draft door now, which re-validates
+    every round, so the mirror's problems go to the log and the filing goes to
+    the bench.
+    """
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
 
-    result = provider.submit_informed_plan(
-        "t1",
-        "p1",
-        {
-            "steps": [{"title": "Deliver", "line_item_amount": 1000}],
-            "finish_line_cents": 0,
-            "accept_rules": True,
-        },
-        "plan-key",
-    )
+    with caplog.at_level("WARNING"):
+        result = provider.submit_informed_plan(
+            "t1",
+            "p1",
+            {
+                "steps": [{"title": "Deliver", "line_item_amount": 1000}],
+                "finish_line_cents": 0,
+                "accept_rules": True,
+            },
+            "plan-key",
+        )
 
-    assert result["error"] == "informed_plan_validation_failed"
-    assert any(problem["path"] == "steps" for problem in result["problems"])
-    assert api.submissions == []
+    assert result["ok"] is True
+    assert api.submissions
+    assert "Local mirror has problems" in caplog.text
 
 
 def test_guide_returns_only_the_requested_live_section():
