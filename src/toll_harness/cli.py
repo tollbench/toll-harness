@@ -1011,6 +1011,30 @@ def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | No
 # Process-local by design, like the idle-step memo: a restart costs one extra
 # attempt per key, which is the safe direction.
 _OBLIGATION_FAILURES: dict[tuple[str, ...], dict[str, Any]] = {}
+
+# A WANT THE DOOR CLOSED IS NOT RETRIED UNTIL IT IS POSTED AGAIN. On
+# 2026-09-09 four fleet agents asked the draft door for the same walked want
+# every cycle, got `bidding_closed` every cycle (0 rounds, 0 model calls), and
+# because it sorted first, the wants behind it waited. The key carries the
+# round, so a repost -- a new round -- is a new want to this memo.
+# Process-local like the memos above: a restart costs one extra ask per key.
+_CLOSED_TARGET_MEMO: set[str] = set()
+_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed"})
+
+
+def _remember_closed(target: dict[str, Any], error: Any) -> bool:
+    """Memo a want the door closed; True when it was just added."""
+    if str(error or "") not in _TERMINAL_DOOR_ERRORS:
+        return False
+    key = _market_target_key(target)[0]
+    if not key or key in _CLOSED_TARGET_MEMO:
+        return False
+    _CLOSED_TARGET_MEMO.add(key)
+    return True
+
+
+def _door_closed_this_round(target: dict[str, Any]) -> bool:
+    return _market_target_key(target)[0] in _CLOSED_TARGET_MEMO
 _STALL_THRESHOLD_DEFAULT = 5
 _STALL_DELAY_CAP_SECONDS = 3600.0
 
@@ -1512,6 +1536,8 @@ def _market_scan_candidates(
             continue
         if target_key in reviewed:
             continue
+        if target_key in _CLOSED_TARGET_MEMO:
+            continue
         if fleet is not None and fleet.proposal_count(target_id, round_value) >= fleet_limit:
             continue
         # Optional crowding limit (fleet.open_bid_limit, default off): skip
@@ -1629,6 +1655,12 @@ def _bid_through_the_draft_loop(
         idempotency_key=f"draft-bid-{target_id}-{brief.get('round') or target.get('round') or 1}",
         file=not dry_run,
     )
+    if _remember_closed(target, outcome.get("error") if isinstance(outcome, dict) else None):
+        _LOGGER.info(
+            "the door closed want %s for this round (%s); not asked again until it is posted again",
+            target_id,
+            outcome.get("error"),
+        )
     if _door_is_missing(outcome):
         _LOGGER.warning(
             "This bench publishes no draft door; bidding on %s the old way",

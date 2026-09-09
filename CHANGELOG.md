@@ -8,6 +8,17 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.7] - 2026-09-09
+
+**A want the door closed is not asked again until it is posted again.**
+
+- The market scan skips a want whose draft door answered `bidding_closed`
+  this round. Four fleet agents asked the same walked want every cycle on
+  2026-09-09 (0 rounds, 0 model calls each time) and, because it sorted
+  first, the wants behind it waited. The memo is keyed by want AND round, so
+  a repost is a new want to it; it is process-local, so a restart costs one
+  extra ask per key.
+
 ## [0.35.6] - 2026-09-09
 
 **The asked path is the path, and an empty answer gets one more ask.**
