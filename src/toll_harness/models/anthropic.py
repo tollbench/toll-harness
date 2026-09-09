@@ -18,6 +18,16 @@ from toll_harness.models.base import ModelAdapter, ModelInvocationError
 # model.model_id in agent.yaml.
 _DEFAULT_MODEL = "claude-opus-4-8"
 
+# PROMPT CACHING. The draft loop sends the same stable prefix -- the front door,
+# the tools index, the block index -- in front of every round on a want, and the
+# runtime sends the same system instruction on every call of a run. Marking that
+# block cacheable is what turns ~25,000 input tokens a plan into a fraction of
+# it. The provider caches from 1,024 tokens up (2,048 on the small models) and
+# IGNORES a marker on anything shorter, so a floor here only keeps the request
+# honest; it is never an error. Four characters to a token, deliberately
+# pessimistic.
+CACHE_MIN_CHARS = 4_000
+
 
 def _tool_alias(name: str) -> str:
     # Tool names carry dots (e.g. "state.save"); Anthropic requires ^[a-zA-Z0-9_-]{1,64}$.
@@ -45,9 +55,11 @@ class AnthropicModelAdapter(ModelAdapter):
         api_key: str | None = None,
         max_tokens: int = 2048,
         client: Any | None = None,
+        prompt_caching: bool = True,
     ):
         self._model_id = model_id
         self.max_tokens = max_tokens
+        self.prompt_caching = prompt_caching
         if client is None:
             try:
                 import anthropic
@@ -88,6 +100,26 @@ class AnthropicModelAdapter(ModelAdapter):
                 raise ValueError(f"Unsupported normalized content type: {block_type}")
         return {"role": message.role, "content": content}
 
+    def caches_a_stable_prefix(self) -> bool:
+        return bool(self.prompt_caching)
+
+    def _system_field(self, system: str) -> Any:
+        """The system as a cacheable block, or exactly the string it was.
+
+        A short system goes over the wire unchanged, so a caller that never
+        needed caching sees the request it always sent.
+        """
+        text = str(system or "")
+        if not (self.prompt_caching and len(text) >= CACHE_MIN_CHARS):
+            return text
+        return [
+            {
+                "type": "text",
+                "text": text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
     def invoke(
         self,
         *,
@@ -98,7 +130,7 @@ class AnthropicModelAdapter(ModelAdapter):
         request: JsonObject = {
             "model": self.model_id,
             "max_tokens": self.max_tokens,
-            "system": system,
+            "system": self._system_field(system),
             "messages": [self._message_to_anthropic(message) for message in messages],
         }
         if tools:
@@ -144,6 +176,11 @@ class AnthropicModelAdapter(ModelAdapter):
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "input_tokens", 0) or 0
         output_tokens = getattr(usage, "output_tokens", 0) or 0
+        # What the cache did, in the provider's own words, so the caller can log
+        # it: read tokens are the ones that cost a tenth, creation tokens are
+        # the ones that paid to put the prefix there.
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
         return ModelResponse(
             message=ModelMessage(role="assistant", content=normalized),
             text="\n".join(text_parts),
@@ -152,7 +189,12 @@ class AnthropicModelAdapter(ModelAdapter):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
-                raw={"input_tokens": input_tokens, "output_tokens": output_tokens},
+                raw={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": cache_write,
+                },
             ),
             stop_reason=getattr(response, "stop_reason", None),
             raw_metadata={"model": getattr(response, "model", self.model_id)},

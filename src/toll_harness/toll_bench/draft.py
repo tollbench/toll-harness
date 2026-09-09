@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from toll_harness.core.types import ModelMessage
-from toll_harness.toll_bench import blocks
+from toll_harness.toll_bench import blocks, programs
 
 _LOGGER = logging.getLogger("toll_harness.draft")
 
@@ -69,51 +69,87 @@ _LOGGER = logging.getLogger("toll_harness.draft")
 # dozens of PUTs on the same targets in two minutes, red the same number every
 # time, almost no PATCH between them. A run now READS first (a GET costs no
 # round) and PUTs only when there is nothing standing to carry on with.
-# A loop prompt is SMALL BY DESIGN -- one step, or one problem. The 90k context
-# budget in core/budget.py still guards a runtime run; this is the guard for a
-# prompt this module builds itself, and it should never fire.
-PROMPT_CHAR_BUDGET = 12_000
+# A loop prompt is SMALL BY DESIGN -- one step, or one problem, never the
+# document. The 90k context budget in core/budget.py still guards a runtime run;
+# these are the guards for a prompt this module builds itself. Four characters
+# to a token, so 8,000 characters is about 2,000 tokens of tail on top of a
+# cached prefix.
+PROMPT_CHAR_BUDGET = 8_000
+# ONE STEP, and one step is not a document. A thirty-step draft has thirty of
+# these and the round is only ever shown the one it is about.
+STEP_CHAR_BUDGET = 3_000
+# The plan's SHAPE for a fix round: one line per step, so the model can see
+# where the thing it is changing sits without being handed the whole draft.
+OUTLINE_LINE_CHARS = 80
 # The keys of an expanded step that are the platform's own machinery and the
 # first thing to shed when a step's context runs long. The blanks themselves
 # are never shed: they are the question.
 _HEAVY_STEP_KEYS = ("service_setup", "statement", "har_blocks", "examples")
 
-DRAFT_SYSTEM = (
+# THE FRONT DOOR — said ONCE, at the top of every call, byte for byte.
+#
+# This is the stable prefix. It does not move between the outline, a blanks
+# round and a fix round, and it does not move between rounds on the same want,
+# because that is what makes it cacheable: a provider that has seen this block
+# already charges a fraction for it. Everything that CHANGES rides the user
+# message underneath. Steven measured ~25,000 input tokens to write one plan
+# and asked for ~8,000; repeating the rules of the game in every round is where
+# most of the difference was.
+FRONT_DOOR = (
     "You are writing ONE plan for a Toll Bench want, and the bench is holding "
-    "it for you while you write. You are asked for one piece at a time and you "
-    "answer with that piece and nothing else. Never rewrite the whole "
-    "document: that is the failure this door exists to stop. Answer with JSON "
-    "and no other words, no code fence, no explanation."
+    "it for you while you write.\n"
+    "HOW THIS GOES. You are asked for one piece at a time -- the outline, then "
+    "one step's blanks, then one problem -- and you answer with that piece and "
+    "nothing else. NEVER rewrite the whole document: that is the failure this "
+    "door exists to stop.\n"
+    "A STEP carries an `ask` (APPROVE, CHOOSE, PROVIDE, GRANT or CONTACT) and a "
+    "`title` in your own words. A step that touches the world outside this "
+    "platform -- an email, a booking, a calendar event, a publish, a purchase -- "
+    "also names the tool it runs and the service it runs `on`: "
+    '{"ask": "APPROVE", "title": "Offer the times and book it", "tool": '
+    '"gmail.message.send", "on": "google-gmail"}. A step that touches nothing '
+    "outside names its block instead, or just its ask: "
+    '{"ask": "APPROVE", "title": "Find three cafes", "block": "research"}.\n'
+    "THE BENCH FILLS EVERY MECHANIC IT OWNS -- the account row for each service, "
+    "the required arguments of each call, the platform's own statement, the "
+    "approve control -- and hands back every field that is YOURS as a blank with "
+    "one sentence saying what belongs there. You never write a mechanic and "
+    "nothing is ever invented for you.\n"
+    "PATHS ARE DOTTED (`steps.2.outcome_promise`, "
+    "`steps.1.acts.0.runs.1.args.subject`) and that is the form a patch takes. "
+    "If a path names a list, send the whole list.\n"
+    "ANSWER WITH JSON and no other words: no code fence, no explanation."
+)
+
+# The same door, for a provider that caches NOTHING. Everything the long one
+# says is still said -- once, on the outline call, where the choice of shape is
+# actually made -- because repeating 470 tokens of rules in front of thirty
+# rounds that nobody caches is 15,000 tokens spent to say what the model was
+# told at the start. Measured on a thirty-step plan: 40,200 input tokens with
+# the long door repeated uncached, 35,300 with this one.
+SHORT_FRONT_DOOR = (
+    "You are writing ONE plan for a Toll Bench want, one piece at a time, and "
+    "the bench is holding it for you. Answer the piece you are asked for and "
+    "nothing else; never rewrite the whole document. Paths are dotted "
+    "(`steps.2.outcome_promise`) and that is the form a patch takes. ANSWER "
+    "WITH JSON and no other words: no code fence, no explanation."
 )
 
 OUTLINE_INSTRUCTION = (
-    "Write the OUTLINE of your plan for the want below. Steps in the order "
-    "they happen, and nothing else.\n"
-    'Every step carries an `ask` (APPROVE, CHOOSE, PROVIDE, GRANT or CONTACT) '
-    "and a `title` in your own words.\n"
-    "A step that touches the world outside this platform -- an email, a "
-    "booking, a calendar event, a publish, a purchase -- also names the tool "
-    "it runs and the service it runs on:\n"
-    '  {"ask": "APPROVE", "title": "Offer them the times and book it", '
-    '"tool": "gmail.message.send", "on": "google-gmail"}\n'
-    "A step that touches nothing outside names its block instead, or just its "
-    'ask:  {"ask": "APPROVE", "title": "Find three cafes", "block": '
-    '"research"}\n'
-    "Do NOT write promises, a pitch, questions, money, odds, arguments or "
-    "connection rows here. The bench fills every mechanic it owns and then "
-    "asks you for each of your own words, one at a time.\n"
-    'Answer with JSON and nothing else: {"steps": [ ... ]}.'
+    "Write the OUTLINE of your plan for the want below: the steps, in the order "
+    "they happen, and nothing else. No promises, no pitch, no questions, no "
+    "money, no odds, no arguments, no connection rows -- you are asked for each "
+    "of those, one at a time, after the bench hands back the form.\n"
+    'Answer: {"steps": [ ... ]}.'
 )
 
 BLANKS_INSTRUCTION = (
-    "The bench expanded your outline and filled every mechanic it owns. Below "
-    "is ONE step of that plan exactly as it now stands, and every blank on it "
-    "that is YOURS to write, each with the bench's own sentence saying what "
-    "belongs there.\n"
-    "Fill them in your own words. Leave nothing you can answer empty. Change "
-    "nothing else: paths not listed are the platform's.\n"
-    'Answer with JSON and nothing else: {"patches": [{"path": "<the exact '
-    'path>", "value": <your value>}, ...]}.'
+    "Below is ONE step of your plan as the bench expanded it, and every blank on "
+    "it that is yours to write, each with the bench's own sentence saying what "
+    "belongs there. Fill them in your own words; leave nothing you can answer "
+    "empty; change nothing else.\n"
+    'Answer: {"patches": [{"path": "<the exact path>", "value": <your value>}, '
+    "...]}."
 )
 
 REPEATED_FIX_INSTRUCTION = (
@@ -127,11 +163,12 @@ REPEATED_FIX_INSTRUCTION = (
 )
 
 FIX_INSTRUCTION = (
-    "The bench read the plan and named ONE thing to change. Change exactly "
-    "that one thing. Do not touch any other path and do not resend the "
-    "document.\n"
-    'Answer with JSON and nothing else: {"patches": [{"path": "<the path '
-    'named below>", "value": <the new value>}]}.'
+    "The bench read the plan and named ONE thing to change. Change exactly that "
+    "one thing. Do not touch any other path and do not resend the document. "
+    "`plan` below is the shape of the whole plan, one line per step, so you can "
+    "see where this sits; `step` is the only step you are changing.\n"
+    'Answer: {"patches": [{"path": "<the path named below>", '
+    '"value": <the new value>}]}.'
 )
 
 
@@ -211,6 +248,31 @@ def read_outline(answer: dict[str, Any]) -> dict[str, Any]:
     return {"steps": [step for step in steps if isinstance(step, dict)]}
 
 
+def cached_input_tokens(usage: Any) -> int | None:
+    """The share of this call's input the provider served from cache, or None.
+
+    Every provider calls it something else and some report nothing at all;
+    None means "not reported", which is not the same as zero and must not read
+    as it.
+    """
+    raw = getattr(usage, "raw", None)
+    if not isinstance(raw, dict):
+        return None
+    for key in (
+        "cache_read_input_tokens",   # Anthropic
+        "cacheReadInputTokens",      # Bedrock Converse
+        "cached_tokens",             # OpenAI / OpenRouter
+        "cached_input_tokens",
+    ):
+        value = raw.get(key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    details = raw.get("prompt_tokens_details")
+    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), (int, float)):
+        return int(details["cached_tokens"])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # THE PIECES — a step at a time, a fix at a time
 # ---------------------------------------------------------------------------
@@ -250,7 +312,26 @@ def step_context(document: Any, index: int | None) -> Any:
     return steps[index]
 
 
-def _fit(value: Any, budget: int = PROMPT_CHAR_BUDGET) -> Any:
+def outline_summary(document: Any) -> list[str]:
+    """The plan in one line per step: number, ask, title.
+
+    A fix round needs to know where the step it is changing SITS, and that is
+    a list of titles, not a copy of the draft.
+    """
+    steps = (document or {}).get("steps") if isinstance(document, dict) else None
+    lines = []
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict):
+            continue
+        title = " ".join(str(step.get("title") or "").split())
+        if len(title) > OUTLINE_LINE_CHARS:
+            title = title[: OUTLINE_LINE_CHARS - 1] + "\u2026"
+        ask = str(step.get("ask") or "").upper()
+        lines.append(f"{index + 1} {ask} {title}".rstrip())
+    return lines
+
+
+def _fit(value: Any, budget: int = STEP_CHAR_BUDGET) -> Any:
     """A step small enough to hand over. The platform's own machinery comes
     off first; the agent's words and the blanks never do."""
     if value is None:
@@ -404,6 +485,41 @@ _STRATEGY_KEYS = (
 STRATEGY_CHAR_BUDGET = 3_000
 
 
+def stable_prefix(brief: Any = None, act_kinds: Any = None, with_tools: bool = True) -> str:
+    """THE PREFIX EVERY CALL ON A WANT OPENS WITH, byte for byte.
+
+    The front door, the tools this bench publishes, and the blocks it has. It
+    is built ONCE per want and never varies between the outline, a blanks round
+    and a fix round -- which is the whole point: a provider that has seen this
+    block already charges a fraction for it, and the adapters mark it cacheable
+    where the provider takes a marker.
+
+    Nothing per-round and nothing per-step is allowed in here. Anything that
+    changes rides the user message and breaks no cache.
+
+    `with_tools` is FALSE for a provider that caches nothing (the adapter says
+    so: `caches_a_stable_prefix`). Repeating a 5KB index in front of thirty
+    rounds at full price is not a saving, it is the bill doubled -- measured,
+    on a thirty-step plan: 35,600 input tokens the old way, 25,300 with the
+    prefix cached, 71,200 with it repeated and never cached. So where nothing
+    caches, the tools go back to riding the outline call once and the prefix
+    is the front door alone.
+    """
+    if not with_tools:
+        # Nothing caches here, so the prefix is the short door and the rules
+        # ride the outline call once (`the_rules` in its payload).
+        return SHORT_FRONT_DOOR
+    parts = [FRONT_DOOR, block_grammar_summary(brief, act_kinds)]
+    tools = tools_index(brief)
+    if tools:
+        parts.append(
+            "THE TOOLS YOU MAY NAME (`tool`, the service it runs `on`, what it "
+            "does):\n"
+            + json.dumps(tools, separators=(",", ":"), sort_keys=True, default=str)
+        )
+    return "\n\n".join(part for part in parts if part)
+
+
 def person_strategy(brief: Any) -> Any:
     """What the person said about how they want this done, in their words.
 
@@ -424,6 +540,193 @@ def person_strategy(brief: Any) -> Any:
             continue
         strategy = candidate
     return strategy or None
+
+
+# ---------------------------------------------------------------------------
+# AN AGENT'S OWN WINS ARE ITS SHELF (Steven, 2026-09-09)
+# ---------------------------------------------------------------------------
+# The bench used to push worked programs onto every brief; it does not any
+# more, and the right shelf was never a stranger's plan. It is the plans THIS
+# agent has already had accepted. A want that needs the same tools as a job it
+# already won is that job again with different words, so the outline for it is
+# that plan's shape and the model is asked only what changes.
+#
+# Nothing here reads the bench's programs, and nothing here is a model call:
+# the pick is token overlap and tool families, deterministic and explainable in
+# one line, so the log can always say which win seeded an outline.
+WIN_STATUSES = frozenset({"accepted", "selected"})
+# A shared tool family is the thing that makes one job the same shape as
+# another: a want that needs a mailbox and a calendar is the same work as the
+# last want that needed a mailbox and a calendar, whatever either was about.
+FAMILY_WEIGHT = 3
+WORD_WEIGHT = 1
+
+
+def _plan_tools(plan: Any) -> set[str]:
+    """Every tool the runs of a plan's steps actually name."""
+    found: set[str] = set()
+    for step in (plan or {}).get("steps", []) if isinstance(plan, dict) else []:
+        if not isinstance(step, dict):
+            continue
+        for act in step.get("acts") or []:
+            if not isinstance(act, dict):
+                continue
+            for run in act.get("runs") or []:
+                if isinstance(run, dict) and run.get("tool"):
+                    found.add(str(run["tool"]))
+    return found
+
+
+def _family_of(tool: str, index: Any) -> str:
+    for row in index if isinstance(index, list) else []:
+        if isinstance(row, dict) and str(row.get("tool") or "") == tool:
+            return str(row.get("family") or "")
+    # No index, or a tool it does not list: the head of the name is the family
+    # this package can still tell ("gmail.message.send" -> "gmail").
+    return tool.split(".", 1)[0].split(":")[-1]
+
+
+def _families(tools: Any, index: Any) -> set[str]:
+    return {_family_of(str(tool), index) for tool in tools if tool}
+
+
+def families_the_want_needs(brief: Any) -> set[str]:
+    """The tool families this want reads like it needs.
+
+    Read off the bench's own index: a family whose name, or the words of one
+    of its calls, appears in the want. No model call and no guessing at what a
+    plan should be -- just which shelves are worth looking at.
+    """
+    if not isinstance(brief, dict):
+        return set()
+    asked = programs._tokens(
+        [brief.get("want"), brief.get("want_in_own_words")]
+    )
+    if not asked:
+        return set()
+    found: set[str] = set()
+    for row in brief.get("tools") if isinstance(brief.get("tools"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        family = str(row.get("family") or "")
+        if not family or "<" in family:
+            continue
+        words = programs._tokens([family, row.get("tool"), row.get("one_line")])
+        if asked & words:
+            found.add(family)
+    return found
+
+
+def own_wins(proposals: Any, brief: Any = None) -> list[dict[str, Any]]:
+    """The plans this agent already got picked for, newest first.
+
+    Accepted, selected (a finalist ordinal is the person's pick), or a walk
+    the brief says this agent finished. A row with no steps is not a shelf.
+    """
+    finished = {
+        str(row.get("deal_id") or "")
+        for row in ((brief or {}).get("your_finished_walks") or [])
+        if isinstance(row, dict)
+    }
+    wins = []
+    for row in proposals if isinstance(proposals, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("steps"), list):
+            continue
+        if not row["steps"]:
+            continue
+        deal = row.get("deal") if isinstance(row.get("deal"), dict) else {}
+        won = (
+            str(row.get("status") or "").lower() in WIN_STATUSES
+            or row.get("finalist_ordinal") is not None
+            or (finished and str(deal.get("deal_id") or "") in finished)
+        )
+        if won:
+            wins.append(row)
+    return wins
+
+
+def score_win(win: Any, brief: Any, wanted_families: set[str] | None = None) -> int:
+    """How near one of this agent's own wins is to this want.
+
+    Three points for a tool FAMILY the want needs and this plan already ran --
+    that is what makes two jobs the same shape -- and one for a word the two
+    wants share.
+    """
+    if not isinstance(win, dict):
+        return 0
+    index = (brief or {}).get("tools") if isinstance(brief, dict) else None
+    wanted = (
+        families_the_want_needs(brief) if wanted_families is None else wanted_families
+    )
+    mine = _families(_plan_tools(win), index)
+    asked = programs._tokens(
+        [(brief or {}).get("want"), (brief or {}).get("want_in_own_words")]
+    )
+    theirs = programs._tokens(
+        [win.get("want"), win.get("pitch_title"), win.get("finish_line")]
+    )
+    return FAMILY_WEIGHT * len(wanted & mine) + WORD_WEIGHT * len(asked & theirs)
+
+
+def nearest_win(wins: Any, brief: Any) -> tuple[dict[str, Any] | None, int]:
+    """The one win worth copying, or (None, 0).
+
+    A win only seeds an outline when it shares a TOOL FAMILY with what this
+    want needs. Shared words alone are not a shape: two wants can both be
+    about a wedding and need nothing in common to run.
+    """
+    wanted = families_the_want_needs(brief)
+    if not wanted:
+        return None, 0
+    best, best_score = None, 0
+    index = (brief or {}).get("tools") if isinstance(brief, dict) else None
+    for win in wins if isinstance(wins, list) else []:
+        if not (wanted & _families(_plan_tools(win), index)):
+            continue
+        score = score_win(win, brief, wanted)
+        if score > best_score:
+            best, best_score = win, score
+    return best, best_score
+
+
+def outline_of(plan: Any) -> dict[str, Any]:
+    """One of this agent's own plans, read back as an OUTLINE: per step the
+    ask, the title, and the tool and service its first run stood on."""
+    steps = []
+    for step in (plan or {}).get("steps", []) if isinstance(plan, dict) else []:
+        if not isinstance(step, dict):
+            continue
+        spec: dict[str, Any] = {
+            "ask": str(step.get("ask") or "APPROVE").upper(),
+            "title": str(step.get("title") or ""),
+        }
+        for act in step.get("acts") or []:
+            if not isinstance(act, dict):
+                continue
+            runs = [run for run in (act.get("runs") or []) if isinstance(run, dict)]
+            tools = [
+                {"tool": str(run.get("tool")), "on": str(run.get("on") or run.get("row") or "")}
+                for run in runs
+                if run.get("tool")
+            ]
+            if tools:
+                spec["tool"] = tools[0]["tool"]
+                spec["on"] = tools[0]["on"]
+                if len(tools) > 1:
+                    spec["tools"] = tools
+                break
+        steps.append(spec)
+    return {"steps": steps}
+
+
+SEEDED_OUTLINE_INSTRUCTION = (
+    "You have done a job like this one before and it was accepted. Below is "
+    "`outline_you_ran`: that plan, step by step, as an outline. Send it back "
+    "ADJUSTED for the want above -- retitle each step in this want's words, "
+    "drop a step this want does not need, add one it does, change a tool only "
+    "where this want needs a different one. Keep the shape that worked.\n"
+    'Answer: {"steps": [ ... ]}.'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -464,25 +767,55 @@ class DraftLoop:
         # Every patch sent, in order, so a repeated fix can be handed back with
         # what the agent already tried.
         self._sent: list[tuple[str, Any]] = []
+        # The stable prefix for this run, built once in `run` and unchanged
+        # after. Until then, the front door alone.
+        self.prefix: str = FRONT_DOOR
+        self.prompt_chars = 0
+        self.cached_tokens = 0
+        # This agent's own accepted plans, read ONCE per run (the client's
+        # ETag rail makes the repeat read free anyway, but a cycle should not
+        # ask twice). None means "not asked yet".
+        self._wins: list[dict[str, Any]] | None = None
+        self.seeded_by: str | None = None
+        # A provider that caches nothing gets the tools index ONCE, on the
+        # outline, instead of in front of every round.
+        self._tools_ride_the_outline = False
+        self._act_kinds: Any = None
 
     # -- the model ---------------------------------------------------------
-    def _ask(self, instruction: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _ask(self, instruction: str, payload: dict[str, Any], what: str = "") -> dict[str, Any]:
+        """One question: the stable prefix as the system, the variable tail as
+        the message. Every call is measured, and what the cache did is logged
+        where the provider reports it."""
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
-        prompt = instruction + "\n\n" + body
-        if len(prompt) > PROMPT_CHAR_BUDGET:
+        tail = instruction + "\n\n" + body
+        if len(tail) > PROMPT_CHAR_BUDGET:
             # A loop prompt should never come near this. Say so out loud
             # rather than quietly spending a window on it.
             self.log.warning(
-                "draft loop prompt ran to %d characters (budget %d); the loop's "
+                "draft loop tail ran to %d characters (budget %d); the loop's "
                 "prompts are small by design, so this is worth reading",
-                len(prompt),
+                len(tail),
                 PROMPT_CHAR_BUDGET,
             )
         self.calls += 1
+        self.prompt_chars += len(tail)
         response = self.model.invoke(
-            system=DRAFT_SYSTEM,
-            messages=[ModelMessage.text("user", prompt)],
+            system=self.prefix,
+            messages=[ModelMessage.text("user", tail)],
             tools=[],
+        )
+        cached = cached_input_tokens(getattr(response, "usage", None))
+        if cached:
+            self.cached_tokens += cached
+        self.log.info(
+            "draft loop ask %s: prefix=%d chars (cacheable) tail=%d chars "
+            "(~%d tokens) cached_in=%s",
+            what or "?",
+            len(self.prefix),
+            len(tail),
+            (len(self.prefix) + len(tail)) // 4,
+            "unreported" if cached is None else cached,
         )
         return read_json_object(getattr(response, "text", ""))
 
@@ -640,6 +973,65 @@ class DraftLoop:
         self._record(target_id, kind, answer, "resume")
         return self.STANDING, answer
 
+    def _own_wins(self, brief: Any) -> list[dict[str, Any]]:
+        """The plans this agent already got picked for. One bench call a run."""
+        if self._wins is not None:
+            return self._wins
+        rows: Any = []
+        for name in ("_owned_proposals", "list_proposals"):
+            reader = getattr(self.provider, name, None)
+            if not callable(reader):
+                continue
+            try:
+                answer = reader()
+            except Exception:  # noqa: BLE001 - no shelf is not a failed run
+                self.log.warning("draft loop: own proposals unreadable", exc_info=True)
+                continue
+            rows = answer if isinstance(answer, list) else (answer or {}).get("proposals")
+            if rows:
+                break
+        self._wins = own_wins(rows, brief)
+        return self._wins
+
+    def _seed(self, brief: Any) -> tuple[dict[str, Any] | None, int]:
+        win, score = nearest_win(self._own_wins(brief), brief)
+        if win is None:
+            self.log.info(
+                "draft loop: no accepted plan of this agent's shares a tool "
+                "family with this want; writing the outline from scratch"
+            )
+            return None, 0
+        outline = outline_of(win)
+        if not outline.get("steps"):
+            return None, 0
+        self.seeded_by = str(win.get("id") or win.get("proposal_id") or "")
+        self.log.info(
+            "draft loop: outline seeded by this agent's own accepted plan %s "
+            "(%s, %d step(s), score %d)",
+            self.seeded_by or "?",
+            " ".join(str(win.get("pitch_title") or win.get("want") or "").split())[:60],
+            len(outline["steps"]),
+            score,
+        )
+        return outline, score
+
+    def _outline_payload(
+        self, want: Any, strategy: Any, brief: Any, seed: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"want": want, "what_the_person_said": strategy}
+        if seed:
+            payload["outline_you_ran"] = seed["steps"]
+        elif self._tools_ride_the_outline:
+            # Nothing here caches, so the rules and the index are sent ONCE, on
+            # the only call that chooses a shape and a tool. A SEEDED call gets
+            # neither: the shape is in front of it and the tools are the ones
+            # that already worked, so the index would be paid for twice and
+            # read once.
+            payload["the_rules"] = FRONT_DOOR
+            payload["blocks"] = block_grammar_summary(brief, self._act_kinds)
+            payload["tools"] = tools_index(brief)
+        return payload
+
     def _open(
         self, target_id: str, kind: str, want: Any, strategy: Any, brief: Any, act_kinds: Any
     ) -> dict[str, Any] | None:
@@ -651,17 +1043,27 @@ class DraftLoop:
             # draft is opened empty and the bench hands back the owned plan
             # with the selection answers beside it.
             return self._put(target_id, kind, {})
+        # AN AGENT'S OWN WINS ARE ITS SHELF. A want that needs the tools of a
+        # job this agent already won is that job again in other words, so the
+        # outline starts as that plan's shape and the one call asks only what
+        # changes.
+        seed, _score = self._seed(brief)
         outline = read_outline(
             self._ask(
-                OUTLINE_INSTRUCTION,
-                {
-                    "want": want,
-                    "what_the_person_said": strategy,
-                    "block_grammar": block_grammar_summary(brief, act_kinds),
-                    "tools": tools_index(brief),
-                },
+                SEEDED_OUTLINE_INSTRUCTION if seed else OUTLINE_INSTRUCTION,
+                self._outline_payload(want, strategy, brief, seed),
+                "outline seeded" if seed else "outline",
             )
         )
+        if seed and not outline.get("steps"):
+            # The model was shown a shape that worked and answered with
+            # nothing. The shape is still the best thing anyone has for this
+            # want, so it goes in as it stands rather than costing the want.
+            self.log.warning(
+                "draft loop: the adjust call answered with no steps; sending "
+                "the plan that was accepted before, unchanged"
+            )
+            outline = seed
         if not outline.get("steps"):
             return None
         return self._put(target_id, kind, outline)
@@ -678,6 +1080,8 @@ class DraftLoop:
             payload = {
                 "want": want,
                 "step_number": None if index is None else index + 1,
+                # ONE step. The draft has every other one and the model needs
+                # none of them to write this one's words.
                 "step": _fit(step_context(answer.get("draft"), index)),
                 "blanks": [
                     {
@@ -693,7 +1097,13 @@ class DraftLoop:
                 payload["these_are"] = (
                     "the fields of the bid itself, not of any one step"
                 )
-            patches = read_patches(self._ask(BLANKS_INSTRUCTION, payload))
+            patches = read_patches(
+                self._ask(
+                    BLANKS_INSTRUCTION,
+                    payload,
+                    "blanks" if index is None else f"step {index + 1}",
+                )
+            )
             if not patches:
                 self.log.warning(
                     "draft loop %s target=%s: the model answered a step's blanks "
@@ -748,6 +1158,10 @@ class DraftLoop:
                     "detail": fix.get("detail"),
                 },
                 "step_number": None if index is None else index + 1,
+                # The plan in one line per step, and the ONE step being
+                # changed. Never the draft: a thirty-step document in front of
+                # a one-field fix is the cost this loop exists to avoid.
+                "plan": outline_summary(answer.get("draft")),
                 "step": _fit(step_context(answer.get("draft"), index)),
             }
             # SAME PATH, SAME CODE AS LAST ROUND: say so, and hand back what
@@ -773,7 +1187,7 @@ class DraftLoop:
                     code or "?",
                 )
             last_named = (path, code)
-            patches = read_patches(self._ask(instruction, payload))
+            patches = read_patches(self._ask(instruction, payload, f"fix {path or '?'}"))
             if not patches:
                 self.log.warning(
                     "draft loop %s target=%s: no patch came back for %s; "
@@ -805,6 +1219,13 @@ class DraftLoop:
         """
         want = (brief or {}).get("want") if isinstance(brief, dict) else None
         strategy = person_strategy(brief)
+        # ONCE, and byte-identical from here to the end of the run: the front
+        # door, the block index and the tools index. Everything after this is
+        # a small tail on top of a prefix the provider has already seen.
+        self._act_kinds = act_kinds
+        caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
+        self.prefix = stable_prefix(brief, act_kinds, with_tools=caches)
+        self._tools_ride_the_outline = not caches
         # READ FIRST, EVERY CYCLE. This is the loop's first step and the only
         # thing that decides whether an outline goes out at all.
         state, answer = self._read_first(target_id, kind)
@@ -877,12 +1298,18 @@ class DraftLoop:
         else:
             filed = self.provider.file_from_draft(target_id, idempotency_key)
         self.log.info(
-            "draft loop %s target=%s filed=%s after %d round(s) and %d model call(s)",
+            "draft loop %s target=%s filed=%s after %d round(s) and %d model "
+            "call(s); prefix %d chars sent once and cached, tails %d chars "
+            "(~%d tokens), cached input %s",
             kind,
             target_id,
             bool(filed.get("ok")),
             self.rounds,
             self.calls,
+            len(self.prefix),
+            self.prompt_chars,
+            (len(self.prefix) + self.prompt_chars) // 4,
+            self.cached_tokens or "unreported",
         )
         return {
             "ok": bool(filed.get("ok")),

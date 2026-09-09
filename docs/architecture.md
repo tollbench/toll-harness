@@ -87,3 +87,23 @@ rounds. The loop runs until `ready` or `closed`; there is no strike count and no
 the harness, and the only safety net is the bench's own `rounds.left` reaching 0. When the bench
 says `closed` the runtime opens one fresh outline and then leaves the want for that cycle. A bench
 that publishes no draft door falls back to the single-shot road.
+
+## What a plan costs
+
+Every call of a draft-loop run is `[stable prefix][variable tail]`. The prefix is the front door,
+the block index and the bench's `tools` index -- byte for byte the same on every call of a want,
+which is what lets a provider charge a fraction for it. `ModelAdapter.caches_a_stable_prefix()`
+says whether that is worth doing: Anthropic marks the system block `cache_control: ephemeral`,
+Bedrock Converse appends a `cachePoint` for the families that take one, OpenRouter gets the marker
+an Anthropic model behind it needs, OpenAI caches by itself. The default for an unknown provider is
+FALSE, and there the rules and the tools ride the outline call ONCE instead of every round.
+
+The tail is small by design: a blanks round carries one step (3,000 characters at most) and that
+step's blanks; a fix round carries the one problem, the step it is on, and the plan's shape as one
+line per step. Never the document. Each ask logs its own size and the cached share the provider
+reported.
+
+Before an outline is written, the loop reads this agent's own accepted plans and picks the nearest
+by tool-family overlap with what the want needs. A win that overlaps seeds the outline with its own
+shape and the model is asked only to adjust it; nothing overlaps, nothing seeds. That is the shelf:
+not a stranger's worked program, but the jobs this agent has already been picked for.

@@ -14,6 +14,19 @@ from toll_harness.core.types import (
 )
 from toll_harness.models.base import ModelAdapter, ModelInvocationError
 
+# PROMPT CACHING. OpenAI caches long prefixes by itself and takes no marker, so
+# nothing is added for it. OpenRouter is the one that needs one: it passes
+# `cache_control` through to Anthropic models, and without it an Anthropic model
+# reached through OpenRouter pays full price for a prefix it has already seen.
+# The marker rides the system message content parts, which is why it goes on
+# only when the client is pointed at OpenRouter -- an unknown key on a strict
+# endpoint is a refused call, not a slower one.
+CACHE_MIN_CHARS = 4_000
+
+
+def _is_openrouter(client: Any) -> bool:
+    return "openrouter" in str(getattr(client, "base_url", "") or "").lower()
+
 
 def _tool_alias(name: str) -> str:
     # Tool names carry dots (e.g. "state.save"); OpenAI requires ^[a-zA-Z0-9_-]{1,64}$.
@@ -38,9 +51,11 @@ class OpenAIModelAdapter(ModelAdapter):
         api_key: str | None = None,
         max_tokens: int = 2048,
         client: Any | None = None,
+        prompt_caching: bool = True,
     ):
         self._model_id = model_id
         self.max_tokens = max_tokens
+        self.prompt_caching = prompt_caching
         if client is None:
             try:
                 import openai
@@ -53,10 +68,29 @@ class OpenAIModelAdapter(ModelAdapter):
     def model_id(self) -> str:
         return self._model_id
 
+    def caches_a_stable_prefix(self) -> bool:
+        # OpenAI caches a long prefix by itself and takes no marker; OpenRouter
+        # needs the marker `_system_content` adds. Either way a repeated prefix
+        # is cheaper than sending the same bytes anew.
+        return bool(self.prompt_caching)
+
+    def _system_content(self, system: str) -> Any:
+        """The system content, and a cache marker only where it is understood."""
+        text = str(system or "")
+        if not (
+            self.prompt_caching
+            and len(text) >= CACHE_MIN_CHARS
+            and _is_openrouter(self.client)
+        ):
+            return text
+        return [
+            {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+        ]
+
     def _messages_to_openai(
         self, system: str, messages: Sequence[ModelMessage]
     ) -> list[JsonObject]:
-        out: list[JsonObject] = [{"role": "system", "content": system}]
+        out: list[JsonObject] = [{"role": "system", "content": self._system_content(system)}]
         for message in messages:
             if message.role == "assistant":
                 text_parts: list[str] = []
@@ -169,7 +203,20 @@ class OpenAIModelAdapter(ModelAdapter):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                raw={"prompt_tokens": input_tokens, "completion_tokens": output_tokens},
+                raw={
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                    # Both providers report the cached share here; OpenAI as
+                    # prompt_tokens_details.cached_tokens, OpenRouter the same.
+                    "cached_tokens": int(
+                        getattr(
+                            getattr(usage, "prompt_tokens_details", None),
+                            "cached_tokens",
+                            0,
+                        )
+                        or 0
+                    ),
+                },
             ),
             stop_reason=getattr(choice, "finish_reason", None),
             raw_metadata={"model": getattr(response, "model", self.model_id)},

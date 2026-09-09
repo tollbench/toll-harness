@@ -8,6 +8,71 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.4] - 2026-09-09
+
+**What a plan costs: a stable prefix the provider can cache, a small tail every
+round, and an agent's own wins as its shelf.**
+
+### What forced this release
+
+Steven measured about 25,000 input tokens to write one plan and asked for about
+8,000. Three things were paying for it: the rules of the game were re-explained
+in every round, a blanks round could carry a whole expanded step (the old step
+budget let 12,000 characters through), and a fix round carried no cheap way to
+see where the step it was changing sat. On top of that the bench stopped pushing
+worked programs onto briefs, so a want with no example had nothing to start from
+but a blank page.
+
+### Added
+
+- **A stable prefix, and the adapters mark it cacheable.** Every call of a run
+  opens with the same block, byte for byte: the front door, the block index and
+  the bench's tools index. Anthropic gets `cache_control: ephemeral` on the
+  system block, Bedrock Converse gets a `cachePoint` (only for the model
+  families that take one -- one that does not refuses the whole call), and
+  OpenRouter gets the `cache_control` an Anthropic model behind it needs. OpenAI
+  caches long prefixes by itself and is left alone. Each adapter answers
+  `caches_a_stable_prefix()`; the honest default for an unknown provider is
+  FALSE, and where nothing caches the rules and the tools ride the outline call
+  ONCE instead of every round -- repeating 470 tokens of rules in front of
+  thirty uncached rounds is 15,000 tokens spent saying what was already said.
+- **The cached share is logged** where the provider reports it
+  (`cache_read_input_tokens`, `cacheReadInputTokens`, `cached_tokens`), on every
+  ask and once more at the end of a run. Not reported is logged as
+  "unreported", never as zero.
+- **AN AGENT'S OWN WINS ARE ITS SHELF** (Steven, 2026-09-09). Before writing an
+  outline the loop reads this agent's own accepted plans (one bench call a run,
+  behind the client's ETag rail) and picks the nearest by TOOL FAMILY overlap
+  with what the want needs, scored off the bench's own tools index and the two
+  wants' words -- three points a shared family, one a shared word, no model call
+  and no bench shelf. A win that overlaps seeds the outline with its own shape
+  (ask, title, tool, service per step) and the model is asked one small
+  question: adjust this for the new want. Nothing overlaps, nothing seeds, and
+  the outline is written as before. The log always says which plan seeded it.
+
+### Changed
+
+- **A round carries one step, never the document.** The step budget is 3,000
+  characters (was 12,000), a fix round carries the plan's SHAPE as one line per
+  step instead of its content, and every ask logs its own size.
+- The outline call carries the want and what the person said. The rules, the
+  blocks and the tools are the prefix's job now.
+
+### Measured
+
+A thirty-step plan on a realistic draft (33 model calls, expanded steps with
+their account rows, setup notes and statements):
+
+| | before (db1d9cd) | after |
+|---|---|---|
+| input tokens, prefix counted once | 35,619 | **25,278** |
+| same, on a provider that caches nothing | 38,299 | **28,089** |
+| biggest single round | 5,299 chars | **4,058 chars** |
+
+A six-step plan: 9,240 -> **7,030**. And those "counted once" numbers are the
+pessimistic reading: where the prefix really caches, the provider bills the
+repeats at a tenth.
+
 ## [0.35.3] - 2026-09-09
 
 **A fix the bench names twice gets a better prompt, and every patch body is in

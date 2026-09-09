@@ -33,3 +33,13 @@ class ModelAdapter(ABC):
         tools: Sequence[ToolDefinition],
     ) -> ModelResponse:
         raise NotImplementedError
+
+    def caches_a_stable_prefix(self) -> bool:
+        """Does repeating one block in front of every call cost less here?
+
+        FALSE IS THE HONEST DEFAULT and it is what every adapter that does not
+        answer gets: an unknown provider is charged full price for every byte,
+        so a caller that would move something into a repeated prefix must keep
+        sending it once instead. Adapters that know better say so.
+        """
+        return False

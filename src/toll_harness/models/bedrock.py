@@ -13,6 +13,19 @@ from toll_harness.core.types import (
 )
 from toll_harness.models.base import ModelAdapter, ModelInvocationError
 
+# PROMPT CACHING on Converse is a `cachePoint` block after the thing to cache.
+# Only some families take one, and a model that does not answers the whole call
+# with a ValidationException -- so this is switched on by the MODEL ID and not
+# by hope. DeepSeek and everything else keep the request they always sent.
+CACHE_MIN_CHARS = 4_000
+_CACHE_FAMILIES = ("anthropic.", "amazon.nova")
+
+
+def _takes_a_cache_point(model_id: str) -> bool:
+    name = str(model_id or "").lower()
+    # Cross-region inference prefixes the family with a region (us., eu., apac.)
+    return any(family in name for family in _CACHE_FAMILIES)
+
 
 class BedrockModelAdapter(ModelAdapter):
     """Amazon Bedrock Converse adapter with no model-specific runtime behavior."""
@@ -26,11 +39,13 @@ class BedrockModelAdapter(ModelAdapter):
         max_tokens: int = 2048,
         temperature: float = 0,
         client: Any | None = None,
+        prompt_caching: bool = True,
     ):
         self._model_id = model_id
         self.region = region
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.prompt_caching = prompt_caching
         if client is None:
             try:
                 import boto3
@@ -81,6 +96,22 @@ class BedrockModelAdapter(ModelAdapter):
                 raise ValueError(f"Unsupported normalized content type: {block_type}")
         return {"role": message.role, "content": content}
 
+    def caches_a_stable_prefix(self) -> bool:
+        # A model that takes no cachePoint pays full price for every repeat, so
+        # the honest answer for it is no -- and the caller then keeps its
+        # prompts small the other way, by sending the big thing once.
+        return bool(self.prompt_caching) and _takes_a_cache_point(self.model_id)
+
+    def _system_blocks(self, system: str) -> list[JsonObject]:
+        blocks: list[JsonObject] = [{"text": str(system or "")}]
+        if (
+            self.prompt_caching
+            and len(str(system or "")) >= CACHE_MIN_CHARS
+            and _takes_a_cache_point(self.model_id)
+        ):
+            blocks.append({"cachePoint": {"type": "default"}})
+        return blocks
+
     def invoke(
         self,
         *,
@@ -90,7 +121,7 @@ class BedrockModelAdapter(ModelAdapter):
     ) -> ModelResponse:
         request: JsonObject = {
             "modelId": self.model_id,
-            "system": [{"text": system}],
+            "system": self._system_blocks(system),
             "messages": [self._message_to_bedrock(message) for message in messages],
             "inferenceConfig": {
                 "maxTokens": self.max_tokens,

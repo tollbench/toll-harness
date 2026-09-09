@@ -24,6 +24,7 @@ from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.toll_bench.draft import (
     DraftLoop,
     group_blanks,
+    outline_summary,
     read_json_object,
     read_patches,
     tools_index,
@@ -33,6 +34,22 @@ from toll_harness.toll_bench.draft import (
 def _says(text: str) -> ModelResponse:
     return ModelResponse(
         message=ModelMessage.text("assistant", text), text=text, tool_calls=[]
+    )
+
+
+class CachingModel(ScriptedModelAdapter):
+    """A provider whose adapter says a repeated prefix costs less. The default
+    ScriptedModelAdapter says it does not, which is the honest default for an
+    unknown provider -- and the two roads are different, so both are tested."""
+
+    def caches_a_stable_prefix(self) -> bool:
+        return True
+
+
+def _caching_model(*answers: object) -> CachingModel:
+    return CachingModel(
+        [_says(json.dumps(answer) if not isinstance(answer, str) else answer)
+         for answer in answers]
     )
 
 
@@ -649,11 +666,15 @@ def test_the_outline_never_reads_a_worked_program():
         idempotency_key="k",
     )
 
-    outline_prompt = model.invocations[0]["messages"][0].content[0]["text"]
-    assert "gmail.message.send" in outline_prompt
-    assert "COPY ME" not in outline_prompt
-    assert "nearest_program" not in outline_prompt
-    assert "plan_examples" not in outline_prompt
+    call = model.invocations[0]
+    outline_prompt = call["messages"][0].content[0]["text"]
+    # The tools ride the stable prefix where a cache can hold them, and the
+    # outline call itself where nothing can (this model caches nothing). Either
+    # way they are the BENCH's index and never a worked program.
+    assert "gmail.message.send" in call["system"] + outline_prompt
+    assert "COPY ME" not in call["system"] + outline_prompt
+    assert "nearest_program" not in call["system"] + outline_prompt
+    assert "plan_examples" not in call["system"] + outline_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -999,3 +1020,144 @@ def test_the_repeat_finds_the_patch_that_touched_the_path_not_only_its_address()
     # A descendant counts too: the agent answered one field of the thing named.
     loop._sent.append(("steps.0.acts.0.title", "Send it"))
     assert loop._last_sent_for("steps.0.acts")["path"] == "steps.0.acts.0.title"
+
+
+# ---------------------------------------------------------------------------
+# COST: A STABLE PREFIX, AND A SMALL TAIL
+# ---------------------------------------------------------------------------
+_BIG_BRIEF = {
+    "want": "Book a table for four",
+    "tools": [
+        {"provider": f"svc-{n}", "tool": f"svc.tool.{n}",
+         "one_line": "Does a thing worth one line of description."}
+        for n in range(30)
+    ],
+    "block_templates": {"research": [], "meeting": [], "email": []},
+}
+
+
+def _thirty_step_outline():
+    return {"steps": [{"ask": "APPROVE", "title": f"Step number {n}"} for n in range(30)]}
+
+
+def test_the_prefix_is_byte_identical_on_every_call_of_a_run():
+    """That is the whole cache: a provider that has seen this block already
+    charges a fraction for it. One byte of drift and every round pays full
+    price again."""
+    bench = FakeDraftBench(
+        fixes=[{"path": "steps.1.title", "current": "x", "code": "REJ-34",
+                "fix": "Say how.", "detail": None}]
+    )
+    model = CachingModel(_happy_path_model().responses)
+
+    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+
+    systems = {call["system"] for call in model.invocations}
+    assert len(model.invocations) >= 4
+    assert len(systems) == 1
+    prefix = model.invocations[0]["system"]
+    # It is the front door plus the two indexes, and nothing per-round.
+    assert "ANSWER WITH JSON" in prefix
+    assert "svc.tool.7" in prefix
+    assert "research" in prefix
+    assert "Book a table for four" not in prefix
+
+
+def test_a_provider_that_caches_nothing_gets_the_tools_once_not_every_round():
+    """Repeating a 5KB index in front of thirty rounds at full price is not a
+    saving, it is the bill doubled. Measured on a thirty-step plan: 35,600
+    input tokens the old way, 25,300 with the prefix cached, 71,200 with it
+    repeated and never cached."""
+    bench = FakeDraftBench()
+    model = _happy_path_model()   # the honest default: caches nothing
+
+    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+
+    prefix = model.invocations[0]["system"]
+    outline_tail = model.invocations[0]["messages"][0].content[0]["text"]
+    later_tail = model.invocations[2]["messages"][0].content[0]["text"]
+    assert "svc.tool.7" not in prefix
+    assert "svc.tool.7" in outline_tail
+    assert "svc.tool.7" not in later_tail
+    # And the prefix is still one block, byte for byte.
+    assert len({call["system"] for call in model.invocations}) == 1
+
+
+def test_a_fix_round_on_a_thirty_step_draft_stays_under_four_thousand_tokens():
+    bench = FakeDraftBench(cap=200)
+    bench.pending_fixes = [
+        {"path": "steps.17.title", "current": "Step number 17", "code": "REJ-34",
+         "fix": "Say how this step does what it promises.", "detail": "step 18"}
+    ]
+    model = _model(
+        _thirty_step_outline(),
+        *[
+            {"patches": [{"path": f"steps.{n}.outcome_promise", "value": f"Piece {n}."}]}
+            for n in range(30)
+        ],
+        {"patches": [{"path": "pitch_title", "value": "Thirty pieces"}]},
+        {"patches": [{"path": "steps.17.title", "value": "Book the table by email"}]},
+    )
+
+    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+
+    fix_call = model.invocations[-1]
+    tail = fix_call["messages"][0].content[0]["text"]
+    whole = fix_call["system"] + tail
+    # Four characters to a token, deliberately pessimistic.
+    assert len(whole) // 4 < 4_000
+    # It carries the plan's SHAPE and the one step, never the document.
+    assert "30 APPROVE Step number 29" in tail
+    assert "Piece 29." not in tail
+    assert "steps.17.title" in tail
+    assert "REJ-34" in tail
+
+
+def test_a_blanks_round_carries_one_step_and_no_document():
+    bench = FakeDraftBench(cap=200)
+    model = _model(
+        _thirty_step_outline(),
+        *[
+            {"patches": [{"path": f"steps.{n}.outcome_promise", "value": f"Piece {n}."}]}
+            for n in range(30)
+        ],
+        {"patches": [{"path": "pitch_title", "value": "Thirty pieces"}]},
+    )
+
+    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+
+    # The tenth step's round: its own blank, and not its neighbours'.
+    tenth = model.invocations[10]["messages"][0].content[0]["text"]
+    assert "steps.9.outcome_promise" in tenth
+    assert "steps.8.outcome_promise" not in tenth
+    assert "steps.10.outcome_promise" not in tenth
+    assert len(tenth) // 4 < 4_000
+
+
+def test_the_plan_shape_is_one_line_per_step():
+    lines = outline_summary(
+        {"steps": [{"ask": "approve", "title": "Find three cafes"},
+                   {"ask": "PROVIDE", "title": "x" * 200}]}
+    )
+
+    assert lines[0] == "1 APPROVE Find three cafes"
+    assert len(lines[1]) < 100
+    assert lines[1].endswith("\u2026")
+
+
+def test_the_cached_share_is_read_from_whatever_the_provider_called_it():
+    from types import SimpleNamespace
+
+    from toll_harness.toll_bench.draft import cached_input_tokens
+
+    assert cached_input_tokens(
+        SimpleNamespace(raw={"cache_read_input_tokens": 4_100})
+    ) == 4_100
+    assert cached_input_tokens(SimpleNamespace(raw={"cacheReadInputTokens": 9})) == 9
+    assert cached_input_tokens(SimpleNamespace(raw={"cached_tokens": 12})) == 12
+    assert cached_input_tokens(
+        SimpleNamespace(raw={"prompt_tokens_details": {"cached_tokens": 7}})
+    ) == 7
+    # Not reported is not zero, and must never read as zero.
+    assert cached_input_tokens(SimpleNamespace(raw={"input_tokens": 5})) is None
+    assert cached_input_tokens(None) is None
