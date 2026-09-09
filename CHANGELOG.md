@@ -8,6 +8,50 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.1] - 2026-09-09
+
+**The loop reads a standing draft first; a PUT goes out only when no draft
+stands; `put_proposal_draft` is no longer a model tool.**
+
+### What forced this release
+
+0.35.0 shipped a loop that OPENED with a PUT, and a PUT is not a read: it
+replaces whatever draft the bench is holding and sets the rounds back to zero.
+The watch loop returns to the same want every scan interval and a
+`file_informed_plan` obligation stands in the attention queue until the plan
+files, so every cycle opened a NEW draft over a live one and no draft ever
+finished. Within hours of the fleet taking it: dozens of PUTs on the same
+targets in two minutes, the same opening problem count every time, almost no
+PATCH between them -- and three other units threw away their OWN drafts the
+same way, one at 10 rounds with 9 problems left and one at 18 rounds with 3,
+both a few answers from ready.
+
+### Fixed
+
+A `PUT` is not a read: it REPLACES the draft the bench is holding and sets the rounds back to zero.
+The watch loop returns to the same want every scan interval and a `file_informed_plan` obligation
+stands in the queue until the plan files, so a loop that OPENS with a PUT opens a new draft every
+cycle and never finishes one. Live on 2026-09-09: dozens of PUTs on the same targets in two
+minutes, the same opening problem count every time, almost no PATCH between them -- and three other
+units threw away their OWN drafts the same way, one at 10 rounds with 9 problems left and one at 18
+rounds with 3, both a few answers from ready.
+
+**The first step of every cycle is now a read**: `GET .../proposals/draft` (with `?kind=plan` for a
+plan), which costs no round. A draft that stands and is not closed is resumed from its own `blanks`
+and `next_fix`; a PUT goes out ONLY on `404 no_draft`, and never more than one in a run. A CLOSED
+draft is never PUT over, in this run or a later one -- the bench counts a repeated PUT as a round
+and holds a used-up draft closed until it expires, so starting over costs the want a day; the loop
+leaves it alone until it expires. A read that will not answer is not a licence to PUT either.
+And `toll_bench.put_proposal_draft` is no longer a tool: the loop owns the outline, and a model
+holding that door answers a hard plan by starting over. `patch` and `get` stay.
+
+### Compatibility
+
+No contract change and no configuration change beyond the reference agent
+configs, which drop `toll_bench.put_proposal_draft` from their tool lists
+because that tool no longer exists. An operator config that still lists it will
+fail the conformance check with an unknown capability; remove the line.
+
 ## [0.35.0] - 2026-09-09
 
 **The plan is written a piece at a time, at the bench's own door, instead of

@@ -61,6 +61,7 @@ class FakeDraftBench:
         self.rounds = 0
         self.cap = cap
         self.pending_fixes = list(fixes or [])
+        self.reads = 0
         self.owned_steps = owned_steps or [{"title": "The step already filed"}]
         self.briefs = 0
 
@@ -99,6 +100,12 @@ class FakeDraftBench:
         return self.answer()
 
     def read_draft(self, target_id, *, kind="bid"):
+        self.reads += 1
+        if not self.document:
+            return {"ok": False, "error": "no_draft", "status": 404,
+                    "message": "there is no draft on this target."}
+        if self.rounds >= self.cap:
+            return self.answer(closed="this draft used its rounds.")
         return self.answer()
 
     def submit_proposal(self, target_id, proposal, idempotency_key):
@@ -312,12 +319,12 @@ def test_a_fix_call_carries_one_problem_and_the_step_around_it():
     assert "steps.0" not in fix_call
 
 
-def test_a_closed_draft_gets_one_fresh_outline_and_then_the_want_is_left():
-    # A bench that closes the draft on the first patch: the loop opens ONE
-    # fresh outline and then leaves the want for this cycle. No loop.
+def test_a_closed_draft_ends_the_run_and_never_puts_twice():
+    # A PUT replaces the draft and zeroes the rounds, so a run never sends a
+    # second one. The next cycle reads the closed draft and opens one fresh
+    # outline -- at most one PUT per want per cycle.
     bench = FakeDraftBench(cap=1)
-    model = _model(_OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]},
-                   _OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]})
+    model = _model(_OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]})
 
     outcome = DraftLoop(model, bench).run(
         "t-1", brief={"want": "Book a table"}, idempotency_key="k"
@@ -326,8 +333,98 @@ def test_a_closed_draft_gets_one_fresh_outline_and_then_the_want_is_left():
     assert outcome["ok"] is False
     assert outcome["error"] == "draft_closed"
     assert outcome["filed"] is False
-    assert len(bench.puts) == 2
+    assert len(bench.puts) == 1
     assert bench.filed is None
+
+
+def test_a_standing_draft_is_resumed_not_replaced():
+    """WHAT FORCED IT: the watch loop comes back to the same want every scan
+    and the plan obligation stands until it files, so a loop that opened with a
+    PUT opened a NEW draft every cycle -- dozens on one want in two minutes,
+    every answer thrown away. A run reads first."""
+    bench = FakeDraftBench()
+    # Cycle one: the outline goes in and one piece comes back.
+    DraftLoop(
+        _model(_OUTLINE,
+               {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}]},
+               {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
+               {"patches": [{"path": "pitch_title", "value": "C"}]}),
+        bench,
+    ).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    puts_after_one = len(bench.puts)
+
+    # Cycle two, same want: nothing is re-outlined, and no round is spent
+    # re-asking for what is already answered.
+    second = DraftLoop(_model(), bench).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+    )
+
+    assert puts_after_one == 1
+    assert len(bench.puts) == 1
+    assert bench.reads >= 1
+    assert second["ok"] is True
+    assert second["filed"] is True
+
+
+def test_a_closed_standing_draft_is_never_put_over():
+    """Since the bench counts a repeated PUT as a round and holds a used-up
+    draft closed until it expires, a fresh outline over a closed draft burns
+    the cap and costs the want a day. The next cycle reads it and leaves."""
+    bench = FakeDraftBench(cap=1)
+    DraftLoop(
+        _model(_OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]}),
+        bench,
+    ).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    assert len(bench.puts) == 1
+
+    # A model with nothing scripted: if the loop asked for an outline here it
+    # would raise, and if it PUT one the count would move.
+    second = DraftLoop(_model(), bench).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+    )
+
+    assert len(bench.puts) == 1
+    assert second["ok"] is False
+    assert second["error"] == "draft_closed"
+    assert bench.filed is None
+
+
+def test_the_plan_kind_reads_its_own_draft_before_opening_one():
+    reads = []
+
+    class Watching(FakeDraftBench):
+        def read_draft(self, target_id, *, kind="bid"):
+            reads.append(kind)
+            return super().read_draft(target_id, kind=kind)
+
+    bench = Watching(owned_steps=[{"title": "Deliver the list"}])
+    model = _model(
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "The list."}]},
+        {"patches": [{"path": "pitch_title", "value": "The list"}]},
+    )
+
+    DraftLoop(model, bench).run(
+        "t-1", kind="plan", proposal_id="p-9", idempotency_key="k"
+    )
+
+    # The read carries the kind, so a plan draft is never mistaken for a bid.
+    assert reads == ["plan"]
+    assert len(bench.puts) == 1
+
+
+def test_a_draft_that_will_not_read_is_never_put_over():
+    class Unreadable(FakeDraftBench):
+        def read_draft(self, target_id, *, kind="bid"):
+            raise RuntimeError("the door did not answer")
+
+    bench = Unreadable()
+
+    outcome = DraftLoop(_model(), bench).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+    )
+
+    assert outcome["ok"] is False
+    assert bench.puts == []
 
 
 def test_the_plan_kind_opens_empty_and_files_at_the_plan_door():
@@ -369,9 +466,6 @@ def test_there_is_no_strike_count_only_the_bench_s_own_bound():
         # Six answers that never touch the path the bench named. The old three
         # strike rule stopped here; now the bench's rounds do.
         *[{"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]}
-          for _ in range(6)],
-        _OUTLINE,
-        *[{"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]}
           for _ in range(20)],
     )
 
@@ -381,9 +475,10 @@ def test_there_is_no_strike_count_only_the_bench_s_own_bound():
 
     assert outcome["ok"] is False
     assert outcome["error"] == "draft_closed"
-    # The bench's own cap, not a harness number: nine rounds spent on the
-    # second outline, and more than three of them on the one fix.
+    # The bench's own cap, not a harness number: nine rounds, and more than
+    # three of them spent on the one fix the model keeps missing.
     assert len(bench.patch_calls) > 3 + 3
+    assert len(bench.puts) == 1
     assert bench.filed is None
 
 
@@ -697,3 +792,18 @@ def test_an_informed_plan_that_never_files_trips_the_breaker():
     assert result["ok"] is False
     assert result["breaker"]["consecutive_failures"] >= 1
     assert bench.plan_filed is None
+
+
+def test_the_put_door_is_not_a_tool_the_model_can_call():
+    """A PUT replaces the draft and zeroes the rounds. The loop owns it; a
+    model that can call it answers a hard plan by starting over."""
+    from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
+
+    names = {
+        definition.name
+        for definition in add_toll_bench_tools(build_standard_registry()).definitions()
+    }
+
+    assert "toll_bench.put_proposal_draft" not in names
+    assert "toll_bench.patch_proposal_draft" in names
+    assert "toll_bench.get_proposal_draft" in names

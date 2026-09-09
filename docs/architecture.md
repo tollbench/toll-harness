@@ -57,6 +57,12 @@ the thing to shrink is what the tools hand back.
 A plan is not written in one call. The bench holds it while it is built, and the runtime asks the
 intelligence for one piece at a time (rule 241, bench contract 3.11):
 
+0. **Read what is standing** -- the first step of every cycle. `GET .../proposals/draft` (with
+   `?kind=plan` for a plan) costs no round. A draft that stands and is not closed is resumed from
+   its own blanks and `next_fix`; an outline goes out ONLY when there is no draft (`404 no_draft`),
+   and never more than one `PUT` in a run. A closed draft is never PUT over: the bench counts a
+   repeated PUT as a round and holds a used-up draft closed until it expires. A PUT replaces the
+   standing draft and zeroes the rounds, which is why the model is never handed that door.
 1. **The outline.** Steps in order, each an `ask` and a `title`, and for a step that touches the
    world the `tool` and the service it runs `on`. The prompt carries the want, what the person
    said, a one-paragraph block grammar and the tools index -- not the whole brief, and no worked

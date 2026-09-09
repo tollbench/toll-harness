@@ -58,9 +58,17 @@ _LOGGER = logging.getLogger("toll_harness.draft")
 # `ready` or says `closed`. A draft is over when the bench says it is over --
 # the rounds cap is its arithmetic, three per opening problem, so a thirty-step
 # plan gets a thirty-step plan's worth of rounds and a three-step plan does
-# not. The one number left here is the restart: a closed draft gets ONE fresh
-# outline, which is Steven's own ruling and not a lever on the loop.
-MAX_OUTLINES = 2
+# not.
+#
+# ONE PUT PER RUN, AND A RUN RESUMES WHAT IS STANDING. A PUT is not a read: it
+# REPLACES whatever draft the bench is holding and sets the rounds back to
+# zero, so every answer already given is thrown away. The watch loop comes back
+# to the same want every scan interval and a `file_informed_plan` obligation
+# stands in the queue until the plan files -- so a loop that opens with a PUT
+# opens a NEW draft every cycle and never finishes one. Live on 2026-09-09:
+# dozens of PUTs on the same targets in two minutes, red the same number every
+# time, almost no PATCH between them. A run now READS first (a GET costs no
+# round) and PUTs only when there is nothing standing to carry on with.
 # A loop prompt is SMALL BY DESIGN -- one step, or one problem. The 90k context
 # budget in core/budget.py still guards a runtime run; this is the guard for a
 # prompt this module builds itself, and it should never fire.
@@ -471,6 +479,89 @@ class DraftLoop:
         self._record(target_id, kind, answer, what)
         return answer
 
+    # What the first read of a cycle can find. Only ONE of these ends in a PUT.
+    NOTHING_STANDING = "nothing_standing"   # 404 no_draft: open one
+    STANDING = "standing"                   # carry it on, never PUT over it
+    OVER = "over"                           # closed, or a door that will not
+                                            # answer: leave the want this cycle
+
+    def _read_first(self, target_id: str, kind: str) -> tuple[str, dict[str, Any]]:
+        """THE FIRST STEP OF EVERY CYCLE. `GET .../proposals/draft` (and
+        `?kind=plan` for a plan), which costs no round.
+
+        A PUT over a standing draft is not a retry, it is a demolition: it
+        replaces the document and sets the rounds back to zero. Live on
+        2026-09-09, three units did exactly that on their own drafts -- one at
+        10 rounds with 9 problems left and one at 18 rounds with 3, both a few
+        answers from ready, both thrown away by the next cycle's outline. And
+        since ebea60922 the bench COUNTS a repeated PUT as a round and keeps a
+        used-up draft closed until it expires, so starting over now costs the
+        want for a day. So: resume what stands, open only what is not there,
+        and when the bench says the draft is over, leave the want alone until
+        it expires.
+        """
+        try:
+            answer = self.provider.read_draft(target_id, kind=kind)
+        except Exception:  # noqa: BLE001 - a read that will not answer is not a licence to PUT
+            self.log.warning(
+                "draft loop %s target=%s: the draft could not be read; PUTting "
+                "nothing this cycle",
+                kind,
+                target_id,
+                exc_info=True,
+            )
+            return self.OVER, {}
+        if not isinstance(answer, dict):
+            return self.OVER, {}
+        if answer.get("closed"):
+            self.log.info(
+                "draft loop %s target=%s: the standing draft is closed (%s); "
+                "no PUT until it expires",
+                kind,
+                target_id,
+                answer.get("closed"),
+            )
+            return self.OVER, answer
+        error = str(answer.get("error") or "")
+        if error == "no_draft" or int(answer.get("status") or 0) == 404:
+            return self.NOTHING_STANDING, answer
+        if not answer.get("ok"):
+            return self.OVER, answer
+        document = answer.get("draft")
+        if not isinstance(document, dict) or not document:
+            # An answer with no document is not a draft to carry on with, and
+            # not a refusal either. Treat it as nothing standing.
+            return self.NOTHING_STANDING, answer
+        self.rounds = int((answer.get("rounds") or {}).get("used") or 0)
+        self._record(target_id, kind, answer, "resume")
+        return self.STANDING, answer
+
+    def _open(
+        self, target_id: str, kind: str, want: Any, strategy: Any, brief: Any, act_kinds: Any
+    ) -> dict[str, Any] | None:
+        """THE ONE PUT. None when the model was asked for an outline and gave
+        none."""
+        if kind == "plan":
+            # THE PLAN STARTS FROM THE STEPS ALREADY FILED (rule 113). An
+            # outline here would replace the bid the person picked, so the
+            # draft is opened empty and the bench hands back the owned plan
+            # with the selection answers beside it.
+            return self._put(target_id, kind, {})
+        outline = read_outline(
+            self._ask(
+                OUTLINE_INSTRUCTION,
+                {
+                    "want": want,
+                    "what_the_person_said": strategy,
+                    "block_grammar": block_grammar_summary(brief, act_kinds),
+                    "tools": tools_index(brief),
+                },
+            )
+        )
+        if not outline.get("steps"):
+            return None
+        return self._put(target_id, kind, outline)
+
     # -- the pieces --------------------------------------------------------
     def _fill_the_blanks(
         self, target_id: str, kind: str, answer: dict[str, Any], want: Any
@@ -582,49 +673,44 @@ class DraftLoop:
         """
         want = (brief or {}).get("want") if isinstance(brief, dict) else None
         strategy = person_strategy(brief)
-        outlines = 0
-        answer: dict[str, Any] = {}
-        while outlines < MAX_OUTLINES:
-            outlines += 1
-            if kind == "plan":
-                # THE PLAN STARTS FROM THE STEPS ALREADY FILED (rule 113). An
-                # outline here would replace the bid the person picked, so the
-                # draft is opened empty and the bench hands back the owned
-                # plan with the selection answers beside it.
-                answer = self._put(target_id, kind, {})
-            else:
-                outline = read_outline(
-                    self._ask(
-                        OUTLINE_INSTRUCTION,
-                        {
-                            "want": want,
-                            "what_the_person_said": strategy,
-                            "block_grammar": block_grammar_summary(brief, act_kinds),
-                            "tools": tools_index(brief),
-                        },
-                    )
-                )
-                if not outline.get("steps"):
-                    return self._gave_up(
-                        target_id, kind, "no_outline",
-                        "The model was asked for an outline and answered with no steps.",
-                    )
-                answer = self._put(target_id, kind, outline)
-            if not answer.get("ok") and not answer.get("closed"):
+        # READ FIRST, EVERY CYCLE. This is the loop's first step and the only
+        # thing that decides whether an outline goes out at all.
+        state, answer = self._read_first(target_id, kind)
+        if state == self.OVER:
+            return self._gave_up(
+                target_id, kind,
+                "draft_closed" if answer.get("closed") else
+                str(answer.get("error") or "draft_unreadable"),
+                str(
+                    answer.get("closed")
+                    or answer.get("message")
+                    or "The draft on this want could not be read, so nothing was sent."
+                ),
+                answer,
+            )
+        if state == self.NOTHING_STANDING:
+            opened = self._open(target_id, kind, want, strategy, brief, act_kinds)
+            if opened is None:
                 return self._gave_up(
-                    target_id, kind,
-                    str(answer.get("error") or "draft_door_refused"),
-                    str(answer.get("message") or answer.get("error") or ""),
-                    answer,
+                    target_id, kind, "no_outline",
+                    "The model was asked for an outline and answered with no steps.",
                 )
-            if not answer.get("closed"):
-                answer = self._fill_the_blanks(target_id, kind, answer, want)
-            if not answer.get("closed"):
-                answer = self._answer_the_fixes(target_id, kind, answer, want)
-            if not answer.get("closed"):
-                break
-            # A CLOSED DRAFT IS NOT A WALL: one fresh outline, then this want
-            # is done for this cycle (Steven: no knobs, and no loop either).
+            answer = opened
+        if not answer.get("ok") and not answer.get("closed"):
+            return self._gave_up(
+                target_id, kind,
+                str(answer.get("error") or "draft_door_refused"),
+                str(answer.get("message") or answer.get("error") or ""),
+                answer,
+            )
+        if not answer.get("closed"):
+            answer = self._fill_the_blanks(target_id, kind, answer, want)
+        if not answer.get("closed"):
+            answer = self._answer_the_fixes(target_id, kind, answer, want)
+        if answer.get("closed"):
+            # A closed draft is never re-PUT, in this run or the next: the
+            # bench counts a repeated PUT as a round and holds a used-up draft
+            # closed until it expires, so starting over costs the want a day.
             self.log.warning(
                 "draft loop %s target=%s closed: %s",
                 kind,

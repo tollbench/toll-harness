@@ -58,8 +58,11 @@ for ONE STEP's blanks at a time, and after that for the ONE `next_fix` each answ
 path, its current value, a code and one sentence -- until `ready`, at which point
 `POST .../proposals {"from_draft": true}` files the document the bench has been holding. The
 informed plan walks the same loop with `kind: "plan"`, which opens empty and starts from the steps
-already filed. `toll_bench.put_proposal_draft`, `toll_bench.patch_proposal_draft` and
-`toll_bench.get_proposal_draft` are the same three doors as tools, named for the bench's MCP twins.
+already filed. A run READS the draft the bench is already holding before it opens one, and sends at
+most ONE `PUT` -- a PUT replaces the standing draft and zeroes the rounds, so opening with one
+throws away every answer already given. For the same reason the PUT is not a tool: only the loop
+sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named
+for the bench's MCP twins.
 WHAT FORCED IT: handing a model every problem at once made it rewrite the whole document and break
 something new on each pass, and on 2026-09-09 a raw frontier model spent four whole-document passes
 on one want and never filed. The single-shot road below is kept only for a bench that publishes no

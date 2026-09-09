@@ -1003,37 +1003,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     # so an operator reading one surface recognises the other. The reference
     # runtime drives this loop itself; these exist so a model steering its own
     # run has the same three doors and not only the whole-document one.
-    registry.register(
-        ToolDefinition(
-            "toll_bench.put_proposal_draft",
-            (
-                "Send the OUTLINE of a plan and get the form back. Steps in "
-                "order, each with an `ask` and a `title`, and for a step that "
-                "touches the world the `tool` and the service it runs `on`. The "
-                "bench fills every mechanic it owns (the connect_account row for "
-                "each service, the tool's required arguments, the platform's "
-                "statement, the approve control) and names every field that is "
-                "yours as an explicit blank with one sentence saying what belongs "
-                "there. Nothing is filed. It replaces any draft on this target "
-                "and starts the rounds at zero. kind is `bid` (default) or "
-                "`plan` (the informed plan, which starts from the steps already "
-                "filed -- send no steps and you get your own plan back)."
-            ),
-            _object_schema(
-                {
-                    "target_id": {"type": "string"},
-                    "outline": {"type": "object"},
-                    "kind": {"type": "string", "enum": ["bid", "plan"]},
-                },
-                ["target_id"],
-            ),
-        ),
-        lambda context, arguments: require_toll_bench(context).put_draft(
-            arguments["target_id"],
-            arguments.get("outline") or {},
-            kind=arguments.get("kind", "bid"),
-        ),
-    )
+    # THE PUT IS NOT THE MODEL'S TO CALL. It REPLACES the draft the bench is
+    # holding and sets the rounds back to zero, so a model with the door in its
+    # hand answers a hard plan by starting over -- live on 2026-09-09, dozens of
+    # PUTs on the same want in two minutes with almost no PATCH between them.
+    # The loop owns the outline; the model is asked for one, and the harness
+    # sends it. PATCH and GET stay, because those are answers, not restarts.
     registry.register(
         ToolDefinition(
             "toll_bench.patch_proposal_draft",
