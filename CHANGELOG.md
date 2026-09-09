@@ -8,6 +8,103 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.32.0] - 2026-09-09
+
+**Who is it going to. The brief was holding a question for the agent, this
+package did not know the word for it, and its own repair created the refusal.**
+
+Rules 237 and 238 landed on the bench on 2026-09-08/09. A person is contacted
+through their own private Contacts and never through a loose address, so when
+a target's brief hands out anything that can reach a person,
+`bid_template.finalist_questions[0]` now ships FOUR questions with a
+`contact_picker` as the third -- `{"id": "who", "format": "contact_picker",
+"title": "", "config": {"count": 1}}` -- in place of the second of the two
+identical yes/no questions, because four is the whole cap. `count` is how many
+people the plan reaches (2 for an introduction, 80 for a guest list) and is the
+only thing a picker may carry; a second picker is refused, and an act on the
+person's own account that names nobody with no picker anywhere in the bid is
+refused `REJ-40` (`contact_route`).
+
+**What forced this release, in two halves.**
+
+1. `HAR_FORMAT_SLUGS` did not carry `contact_picker`. The local REJ-15 mirror
+   therefore answered "`contact_picker` is not a HAR format slug" about the
+   very question the bench hands out -- and where the free validate door is
+   unreachable that is `local_validation_failed`: a legal plan buried at home,
+   the round spent, nothing filed and no refusal to learn from.
+2. Nothing in this package ever copied the brief's questions.
+   `merge_required_blocks` inserted the email/meeting step out of
+   `block_templates` and left `finalist_questions` alone, so the harness's OWN
+   repair created the REJ-40 condition it was then refused for: a plan that
+   reaches a person, filed beside four questions that ask nobody who. The walk
+   that forced rule 238 ended with the person saying "I never got a chance to
+   give the emails so the address book didn't work".
+
+### Added
+
+- **`contact_picker` is a HAR format slug**, and rule 237's shape is mirrored
+  where the bid door holds it: `config` may hold `count` and nothing else,
+  `count` is a whole number from 1 to 500 (the person's own book), the block
+  carries no contact or address of its own, its ask is `PROVIDE`, and there is
+  at most ONE per group. A picker is a tap, not a text box, so it never counts
+  against the two-text cap -- the brief's own four (single choice, yes/no,
+  picker, short answer) pass the mirror unchanged.
+- **The brief's own picker goes onto a bid that reaches a person.**
+  `blocks.merge_contact_picker()`, wired into `merge_required_blocks(...,
+  bid_template=, bid_template_notes=)` and run on the plan the step repair
+  produced. Two gates, and both are somebody else's judgement: the BRIEF
+  decides whether this want can reach anybody (it publishes the picker only
+  when something it hands out can), and the PLAN decides whether this bid does
+  -- an act carrying `contact_ref`/`with`/`with_name`, or declared
+  `runs_on: "person"`, read off the declaration exactly as the bench reads it
+  and never off a list of kind names. The block copied in is the PLATFORM's,
+  whole: the id, the `required` flag and `config.count` are not the harness's
+  to write, and only a blank title is filled, from the `example` beside it in
+  `bid_template_notes` ("Who should these go to?"). At the cap of four it
+  REPLACES the second yes/no -- the brief's own choice, and the one shape the
+  form was offering twice -- and otherwise the seat the brief keeps for it.
+  A picker the model wrote itself is never touched: one picker is the law and
+  the model's words beat the form's.
+- **`REJ-40` off the door is repaired once.** The refusal is logged verbatim,
+  the brief's picker goes on and the bid is re-filed ONCE with a `-rej40`
+  idempotency suffix; the door is taken as the authority that this plan
+  reaches a person, because the lane table lives on the server. Nothing to
+  add -- an older brief, or a raw address in the plan, which the picker
+  cannot fix -- and the door's own sentence comes back non-terminal
+  (`error: "contact_route"`) with `CONTACT_PICKER_SENTENCE` as the fix. At the
+  plan-revision door the picker is deliberately NOT the answer and nothing is
+  re-filed: the revision payload the bench validates carries steps and not
+  `finalist_questions`, and the four are frozen at bid time, so what a revision
+  must carry is the `contact_ref` the person's own pick filled in.
+
+### Changed
+
+- **A provider key may carry a LANE PREFIX, and the harness judges none of
+  them.** `composio:<toolkit slug>` (the generic Composio lane) and
+  `key:<service slug>` (a paste-a-key service, `key:twilio`) are read off a
+  `connect_account` row or a GRANT step and carried through unchanged, matched
+  exactly where the act registry's `requires_grants` names them exactly. Two
+  refusals this package used to be able to manufacture are now impossible:
+  `blocks.grant_floor()` holds a lane key to NO minimum action, because its
+  actions are the vendor's own tool slugs and there is no verb of ours there
+  to be missing; and `grant_problems()` says nothing at all about a step that
+  opens a lane key, because the bench accepts a row by FAMILY -- a
+  `composio:outlook` row satisfies a `google-gmail` requirement -- and that
+  table lives on the server. Silence costs a refusal the door will make
+  anyway; a guess costs the round. `provider_words()` and `connector_words()`
+  read the lane off the name, so a person and a model read "Twilio" and
+  "Outlook", never "Key:Twilio".
+- `merge_required_blocks` keeps its exact step behaviour; the body moved into
+  `blocks._merge_step_form()` so the question repair can run whether or not
+  the steps changed. `book_of_houses.FINALIST_QUESTIONS_REQUIRED` now reads
+  `blocks.FINALIST_QUESTIONS_CAP`, so there is one four.
+
+378 tests pass (was 350), ruff clean. Verified against the live bench's own
+form code on staging: `want_blocks._finalist_form(contacts=True)` ships
+`[single_choice, yes_no, contact_picker, short_answer]`, the mirror passes it,
+and `template_contact_picker` reads the picker off it with the title filled
+from the published note.
+
 ## [0.31.0] - 2026-09-08
 
 **A connection is not a step. It is part of the action that needs it, and this

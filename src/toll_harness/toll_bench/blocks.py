@@ -104,6 +104,11 @@ REJ_BLOCK_GRANT = "REJ-35"
 # ``access`` mold and is not refused.
 REJ_GRANT_STEP_REMOVED = "REJ-38"
 
+# RULE 238: an act on the person's own account that names nobody to send to,
+# or a raw address typed into the plan. What it hands back is the QUESTION,
+# published on the brief's own `bid_template.finalist_questions`.
+REJ_CONTACT_ROUTE = "REJ-40"
+
 # RULE 236: RETIRED, AND DELIBERATELY EMPTY. This used to say a meeting block
 # needs google-calendar opened by a step of its own, and that one hardcoded
 # fact refused the one-step template the bench now publishes. Which kinds run
@@ -119,6 +124,20 @@ PROVIDER_WORDS: dict[str, str] = {
     "google-calendar": "Google Calendar",
     "google-gmail": "Gmail",
 }
+
+# THE LANE PREFIXES ON A PROVIDER KEY (2026-09-09). A provider is not always a
+# hand-written connector any more. `composio:<toolkit slug>` is the generic
+# Composio lane -- one row, any toolkit that vendor carries -- and
+# `key:<service slug>` is a paste-a-key service (`key:twilio`), whose actions
+# are that service's own. WHICH LANE A KEY IS ON IS THE PLATFORM'S BUSINESS.
+# The harness carries the whole string through untouched, matches it exactly
+# where the registry named it exactly, and says NOTHING about a lane key it
+# was not told about: the bench matches a row by FAMILY (a `composio:outlook`
+# row satisfies a `google-gmail` requirement, because the person may re-point
+# the row at any same-family service), and that table lives on the server. A
+# mirror that guessed at it would manufacture a REJ-35 the door never emits --
+# which is the exact failure 0.31.0 was released to end.
+PROVIDER_LANES: frozenset[str] = frozenset({"composio", "key"})
 
 GRANT_ASK = "GRANT"
 
@@ -324,6 +343,47 @@ def step_kinds(step: Any) -> list[str]:
     return kinds
 
 
+def split_provider(provider: Any) -> tuple[str, str]:
+    """``(lane, slug)`` for a provider key; the lane is "" for a plain one.
+
+    ``composio:outlook`` -> ``("composio", "outlook")``, ``key:twilio`` ->
+    ``("key", "twilio")``, ``google-gmail`` -> ``("", "google-gmail")``. A
+    colon in front of something that is not one of the lanes this package was
+    told about is not a lane at all, and the whole string stays the key.
+    """
+    key = str(provider or "").strip().lower()
+    lane, sep, slug = key.partition(":")
+    if sep and lane in PROVIDER_LANES and slug.strip():
+        return lane, slug.strip()
+    return "", key
+
+
+def on_a_lane(provider: Any) -> bool:
+    """True for a provider key the PLATFORM resolves and this package does not.
+
+    Used in exactly one way: to keep the local mirror quiet. A row on a lane
+    key may satisfy a requirement by family at the door, and the family table
+    is the server's, so a mirror that has one of these in front of it defers.
+    """
+    return bool(split_provider(provider)[0])
+
+
+def grant_floor(provider: Any) -> tuple[str, ...]:
+    """The actions a row must name before it counts as the access (REJ-35).
+
+    The floor is written in OUR verbs, so it applies to the connectors we
+    wrote. A lane key names its actions in the vendor's own vocabulary --
+    Twilio's tool slugs, Composio's tool slugs -- and there is no verb there
+    to be missing: holding it to a floor written in ours would refuse a row
+    for a word it never used. The bench holds the same line by family; the
+    harness has no family table and so holds none at all.
+    """
+    key = str(provider or "").strip().lower()
+    if on_a_lane(key):
+        return ()
+    return GRANT_MIN_ACTIONS.get(key, ())
+
+
 def grant_provider(step: Any) -> str | None:
     """The provider a GRANT step opens, EXACTLY as the bid door counts it.
 
@@ -349,7 +409,7 @@ def grant_provider(step: Any) -> str | None:
         for action in (connector.get("actions") or [])
         if isinstance(action, str)
     }
-    if not all(action in actions for action in GRANT_MIN_ACTIONS.get(provider, ())):
+    if not all(action in actions for action in grant_floor(provider)):
         return None
     return provider
 
@@ -420,7 +480,7 @@ def connect_row_providers(step: Any) -> set[str]:
             for action in (connector.get("actions") or [])
             if isinstance(action, str)
         }
-        if not all(action in actions for action in GRANT_MIN_ACTIONS.get(provider, ())):
+        if not all(action in actions for action in grant_floor(provider)):
             continue
         open_here.add(provider)
     return open_here
@@ -629,7 +689,11 @@ def retire_grant_steps(
 
 
 def provider_words(provider: str) -> str:
-    return PROVIDER_WORDS.get(provider, provider)
+    if provider in PROVIDER_WORDS:
+        return PROVIDER_WORDS[provider]
+    lane, slug = split_provider(provider)
+    # A lane key is plumbing. The person and the model both read the service.
+    return connector_words(slug) if lane else provider
 
 
 def grant_problems(steps: Any, needs: Any = None) -> list[dict[str, str]]:
@@ -645,6 +709,15 @@ def grant_problems(steps: Any, needs: Any = None) -> list[dict[str, str]]:
     this returns nothing at all, and the bench's free validate door is the
     judge. That is deliberate -- the last hardcoded copy of this fact refused
     the correct plan for a day.
+
+    A LANE KEY ON THE STEP ENDS THE QUESTION (2026-09-09). The provider the
+    registry names is the plan's DEFAULT, not the only answer: the bench
+    accepts any row in the same FAMILY, so `composio:outlook` opens what
+    `google-gmail` was asked for. The family table is the server's. When a
+    step carries a row on a lane key -- `composio:<slug>`, `key:<slug>` --
+    this mirror cannot tell whether it satisfies the requirement, so it says
+    nothing about that step and the door decides. Silence costs a refusal the
+    door will make anyway; a guess costs the round.
     """
     table = BLOCK_GRANTS if needs is None else needs
     problems: list[dict[str, str]] = []
@@ -654,9 +727,12 @@ def grant_problems(steps: Any, needs: Any = None) -> list[dict[str, str]]:
         if not isinstance(step, dict):
             continue
         here = step_opens(step)
+        defer = any(on_a_lane(provider) for provider in (here | granted))
         for kind in step_kinds(step):
             for provider in _needed_providers(kind, table):
                 if provider in here or provider in granted:
+                    continue
+                if defer:
                     continue
                 if (kind, provider) in flagged:
                     continue
@@ -1063,7 +1139,217 @@ def _align_grant_steps(
     return aligned, fixed
 
 
-def merge_required_blocks(
+# --------------------------------------------------------------------------
+# RULES 237 + 238 (Steven, 2026-09-08/09) -- WHO IS IT GOING TO.
+#
+# A person is contacted through their own Contacts and never through a loose
+# address. The brief hands out the question already: when anything it
+# publishes can reach a person, `bid_template.finalist_questions[0]` ships a
+# `contact_picker` -- {"id": "who", "format": "contact_picker", "title": "",
+# "config": {"count": 1}} -- as the THIRD of the four, in place of the second
+# of the two identical yes/no questions. Four is the whole cap, so the picker
+# is a replacement and never an addition. A bid whose act runs on the person's
+# own account, names nobody, and carries no picker anywhere is refused REJ-40.
+#
+# WHAT FORCED THIS. Nothing in this package ever copied the brief's questions:
+# `merge_required_blocks` inserted the email/meeting step out of
+# `block_templates` and left `finalist_questions` alone, so the model's own
+# four stood -- and the model does not know about a question the form was
+# holding for it. The harness's own repair therefore CREATED the REJ-40
+# condition it then got refused for, on a live thank-you-emails walk that
+# ended with the person saying "I never got a chance to give the emails so the
+# address book did not work".
+# --------------------------------------------------------------------------
+
+CONTACT_PICKER_FORMAT = "contact_picker"
+# The whole cap on finalist questions -- `book_of_houses` reads this one so
+# there is a single four -- and where the brief puts the picker inside it.
+FINALIST_QUESTIONS_CAP = 4
+CONTACT_PICKER_INDEX = 2
+# The words when the brief published its picker blank and its notes carried no
+# example either. Plain, and about the person's own people.
+CONTACT_PICKER_TITLE = "Who should these go to?"
+# The act fields that name a human being. Read off the DECLARATION, exactly as
+# the bench reads it, and never off a list of kind names: a kind that grows
+# either shape tomorrow is covered the day it ships.
+CONTACT_ACT_FIELDS = ("contact_ref", "with", "with_name")
+# Rule 235's own word for "the person's own account".
+PERSON_LANE = "person"
+
+CONTACT_PICKER_SENTENCE = (
+    "WHO IS IT GOING TO. An act that runs on the person's own account is a "
+    "message to the person's own people, so the recipient comes out of their "
+    "private Contacts and never out of an address in the plan. The question is "
+    "ALREADY ON YOUR FORM: `bid_template.finalist_questions` ships one "
+    "`contact_picker` -- {\"id\": \"who\", \"format\": \"contact_picker\", "
+    "\"title\": \"<your words>\", \"config\": {\"count\": 1}}. Write its title "
+    "out of the want, set `config.count` to how many people this plan reaches "
+    "(2 for an introduction, 80 for a guest list), leave the act's "
+    "`contact_ref` blank, and the person's picks arrive as the references that "
+    "fill it. ONE picker however many that is; a second is refused, `count` is "
+    "the only thing it may carry, and an act on the person's own lane with no "
+    "picker anywhere in the bid is refused REJ-40."
+)
+
+
+def _question_format(question: Any) -> str:
+    if not isinstance(question, dict):
+        return ""
+    return str(question.get("format") or "").strip().lower()
+
+
+def act_reaches_a_person(act: Any) -> bool:
+    """True when this act declaration addresses a human being.
+
+    The bench's own read (``want_blocks._act_reaches_a_person``): a named
+    contact field, or an act declared on the PERSON's lane. Nothing here knows
+    a kind by name -- `runs_on: "person"` IS the answer to whose account it
+    runs on (rule 235), whichever kind declared it.
+    """
+    if not isinstance(act, dict):
+        return False
+    if any(field in act for field in CONTACT_ACT_FIELDS):
+        return True
+    return str(act.get("runs_on") or "").strip().lower() == PERSON_LANE
+
+
+def steps_reach_a_person(steps: Any) -> bool:
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
+            continue
+        for act in step.get("acts") or []:
+            if act_reaches_a_person(act):
+                return True
+    return False
+
+
+def picker_position(questions: Any) -> tuple[int, int] | None:
+    """``(group, index)`` of the one contact_picker on a bid, or None."""
+    for gi, group in enumerate(questions if isinstance(questions, list) else []):
+        entries = group if isinstance(group, list) else [group]
+        for qi, question in enumerate(entries):
+            if _question_format(question) == CONTACT_PICKER_FORMAT:
+                return gi, qi
+    return None
+
+
+def _note_example(notes: Any, path: str) -> str:
+    """The `example` ``bid_template_notes`` published for one blank."""
+    for note in notes if isinstance(notes, list) else []:
+        if not isinstance(note, dict) or str(note.get("path") or "") != path:
+            continue
+        example = note.get("example")
+        if isinstance(example, str) and example.strip():
+            return example.strip()
+    return ""
+
+
+def template_contact_picker(bid_template: Any, notes: Any = None) -> dict[str, Any] | None:
+    """The picker the BRIEF published, with words in the title.
+
+    The block is the platform's, copied whole -- the id, the `required` flag
+    and `config.count` are not the harness's to write. Only the title is
+    filled, and only when the brief left it blank: `bid_template_notes`
+    publishes the example beside it ("Who should these go to?"), which is the
+    words the model was going to be shown anyway.
+    """
+    if not isinstance(bid_template, dict):
+        return None
+    at = picker_position(bid_template.get("finalist_questions"))
+    if at is None:
+        return None
+    gi, qi = at
+    group = bid_template["finalist_questions"][gi]
+    entries = group if isinstance(group, list) else [group]
+    picker = copy.deepcopy(entries[qi])
+    title = picker.get("title")
+    if not (isinstance(title, str) and title.strip()):
+        picker["title"] = (
+            _note_example(notes, f"finalist_questions[{gi}][{qi}].title")
+            or CONTACT_PICKER_TITLE
+        )
+    return picker
+
+
+def _picker_slot(group: list[Any]) -> int:
+    """Which of the four the picker replaces.
+
+    The brief's own choice, and for the brief's own reason: the second of the
+    two identical yes/no questions is the only shape the form was offering
+    twice. When the model wrote no pair, the picker takes the seat the brief
+    keeps for it. A picker is not a text box, so the two-text cap cannot be
+    broken by either answer.
+    """
+    yes_nos = [i for i, q in enumerate(group) if _question_format(q) == "yes_no"]
+    if len(yes_nos) > 1:
+        return yes_nos[1]
+    if len(group) > CONTACT_PICKER_INDEX:
+        return CONTACT_PICKER_INDEX
+    return len(group) - 1
+
+
+def merge_contact_picker(
+    proposal: dict[str, Any],
+    steps: Any,
+    bid_template: Any,
+    notes: Any = None,
+    *,
+    reaches_a_person: bool | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Put the brief's own picker on a bid whose plan reaches a person.
+
+    Two gates, and both must be open. The BRIEF decides whether this want can
+    reach anybody at all -- it publishes the picker only when something it
+    hands out can -- and the PLAN decides whether this bid does. Neither is
+    the harness's opinion. Nothing happens when the model already asked the
+    question: one picker is the law, and the model's words beat the form's.
+
+    ``reaches_a_person`` overrides the second gate for the one caller that
+    does not need to ask: the DOOR, which has just refused this plan REJ-40
+    and is the authority on a lane table that lives on the server.
+    """
+    if not (
+        steps_reach_a_person(steps)
+        if reaches_a_person is None
+        else reaches_a_person
+    ):
+        return proposal, None
+    questions = proposal.get("finalist_questions")
+    if (
+        not isinstance(questions, list)
+        or len(questions) != 1
+        or not isinstance(questions[0], list)
+    ):
+        # A shape the bid door refuses on its own terms. Filling in a question
+        # would only hide the sentence that says so.
+        return proposal, None
+    if picker_position(questions) is not None:
+        return proposal, None
+    picker = template_contact_picker(bid_template, notes)
+    if picker is None:
+        return proposal, None
+    group = list(questions[0])
+    if len(group) < FINALIST_QUESTIONS_CAP:
+        group.append(picker)
+        note = (
+            f"contact_picker:{picker.get('id') or 'who'} (added; this plan "
+            "reaches a person and asked nobody who)"
+        )
+    else:
+        slot = _picker_slot(group)
+        replaced = _question_format(group[slot]) or "question"
+        group[slot] = picker
+        note = (
+            f"contact_picker:{picker.get('id') or 'who'} (replaced question "
+            f"{slot + 1}, a {replaced}; this plan reaches a person and asked "
+            "nobody who)"
+        )
+    merged = dict(proposal)
+    merged["finalist_questions"] = [group]
+    return merged, note
+
+
+def _merge_step_form(
     proposal: dict[str, Any],
     required_blocks: Any,
     plan_template: Any,
@@ -1071,22 +1357,8 @@ def merge_required_blocks(
     want: str | None = None,
     needs: Any = None,
     block_templates: Any = None,
-) -> tuple[dict[str, Any], list[str]]:
-    """Fill in the brief's form: every template step the plan is missing.
-
-    Returns the (possibly unchanged) proposal and the steps inserted. Filing a
-    plan the door will refuse costs the agent its one bid on the want, so a
-    missing block, and a block whose account nothing opens, are both repaired
-    here rather than discovered at the door.
-
-    RULE 236. The template is a group and it is copied in the template's own
-    order, whatever that order is: ONE step carrying the account rows and the
-    block on this bench, a GRANT step and then the block on an older one. The
-    group goes in FRONT of the model's own work. When the model wrote the block
-    itself and left its connection out, what goes in is the published `connect
-    _account` ROW, onto the step that uses it -- never a GRANT step of the
-    harness's own making, which is exactly what REJ-38 refuses.
-    """
+) -> tuple[list[Any] | None, list[str]]:
+    """The STEP half of the repair: the rebuilt steps, or None for no change."""
     original = proposal.get("steps")
     steps: list[Any] = list(original) if isinstance(original, list) else []
     templates = [
@@ -1095,14 +1367,14 @@ def merge_required_blocks(
         if isinstance(step, dict)
     ]
     if not missing_blocks(steps, required_blocks) and not grant_problems(steps, needs):
-        return proposal, []
+        return None, []
     published = published_template_steps(templates, block_templates)
     if not templates and not published:
         # No form to fill: the door's refusal is then the honest answer, and
         # it carries the template with it. RULE 236: the CATALOG counts as a
         # form, because on contract 3.0 `plan_template` is a blank skeleton
         # and the connect rows live in `block_templates` alone.
-        return proposal, []
+        return None, []
 
     steps, inserted = _align_grant_steps(
         steps, templates, proposal=proposal, want=want
@@ -1147,9 +1419,61 @@ def merge_required_blocks(
         opened.add(provider)
         inserted.append(f"grant:{provider}")
     if not inserted:
+        return None, []
+    return steps, inserted
+
+
+def merge_required_blocks(
+    proposal: dict[str, Any],
+    required_blocks: Any,
+    plan_template: Any,
+    *,
+    want: str | None = None,
+    needs: Any = None,
+    block_templates: Any = None,
+    bid_template: Any = None,
+    bid_template_notes: Any = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Fill in the brief's form: every template step the plan is missing.
+
+    Returns the (possibly unchanged) proposal and what was filled in. Filing a
+    plan the door will refuse costs the agent its one bid on the want, so a
+    missing block, and a block whose account nothing opens, are both repaired
+    here rather than discovered at the door.
+
+    RULE 236. The template is a group and it is copied in the template's own
+    order, whatever that order is: ONE step carrying the account rows and the
+    block on this bench, a GRANT step and then the block on an older one. The
+    group goes in FRONT of the model's own work. When the model wrote the block
+    itself and left its connection out, what goes in is the published `connect
+    _account` ROW, onto the step that uses it -- never a GRANT step of the
+    harness's own making, which is exactly what REJ-38 refuses.
+
+    RULES 237/238. The form is not only steps. When the plan that comes out of
+    the step repair reaches a PERSON and the four questions ask nobody who,
+    the brief's own `contact_picker` goes on the bid -- because a step this
+    method inserted is exactly how a plan comes to reach a person that the
+    model's questions never expected to. Passing no ``bid_template`` leaves
+    the questions alone, so an older brief and every other caller are
+    unchanged.
+    """
+    steps, inserted = _merge_step_form(
+        proposal,
+        required_blocks,
+        plan_template,
+        want=want,
+        needs=needs,
+        block_templates=block_templates,
+    )
+    merged = proposal if steps is None else {**proposal, "steps": steps}
+    final = steps if steps is not None else proposal.get("steps")
+    merged, question = merge_contact_picker(
+        merged, final, bid_template, bid_template_notes
+    )
+    if question:
+        inserted.append(question)
+    if not inserted:
         return proposal, []
-    merged = dict(proposal)
-    merged["steps"] = steps
     return merged, inserted
 
 
@@ -1805,6 +2129,13 @@ def connector_words(provider: Any) -> str:
         return ""
     if key in CONNECTOR_WORDS:
         return CONNECTOR_WORDS[key]
+    # `composio:outlook` is Outlook and `key:twilio` is Twilio: the lane is how
+    # the platform reaches the service, never part of its name.
+    lane, slug = split_provider(key)
+    if lane:
+        key = slug
+        if key in CONNECTOR_WORDS:
+            return CONNECTOR_WORDS[key]
     return key.replace("google-", "").replace("-", " ").replace("_", " ").title()
 
 
