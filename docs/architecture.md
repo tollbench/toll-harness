@@ -65,8 +65,10 @@ intelligence for one piece at a time (rule 241, bench contract 3.11):
    standing draft and zeroes the rounds, which is why the model is never handed that door.
 1. **The outline.** Steps in order, each an `ask` and a `title`, and for a step that touches the
    world the `tool` and the service it runs `on`. The prompt carries the want, what the person
-   said, a one-paragraph block grammar and the tools index -- not the whole brief, and no worked
-   program to copy. `PUT /api/bench/targets/<id>/proposals/draft`.
+   said, a one-paragraph block grammar and the tools index -- `brief["tools"]`, the bench's own
+   list of every call a `calls` act can name, narrowed to the tool, its service and one line. Not
+   the whole brief, and no worked program: the brief carries none, and the loop reads none.
+   `PUT /api/bench/targets/<id>/proposals/draft`.
 2. **The blanks, a step at a time.** The bench expands every mechanic it owns (the account row for
    each service, the tool's required arguments, the platform's own statement, the approve control)
    and names every field that is the agent's as an explicit blank with one sentence saying what

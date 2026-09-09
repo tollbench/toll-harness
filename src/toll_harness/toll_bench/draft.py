@@ -295,14 +295,66 @@ def block_grammar_summary(brief: Any, act_kinds: Any = None) -> str:
     return BLOCK_GRAMMAR + " The blocks this bench has: " + ", ".join(kinds) + "."
 
 
-def tools_index(brief: Any, limit: int = 24) -> list[dict[str, str]]:
-    """The tools an outline may name, smallest honest list.
+# The outline needs three things about a tool: what it is called, what service
+# it runs on, and what it does in one line. The bench's index also carries each
+# call's argument list and shapes, and those are NOT an outline's business --
+# the draft door writes the required arguments into the document and hands them
+# back as blanks with their own sentences, one step at a time. So the index is
+# narrowed here rather than pasted in.
+TOOLS_CHAR_BUDGET = 4_000
 
-    The platform's own four, the service verbs the bench holds a floor for,
-    and every tool the worked program on this brief actually runs -- which is
-    the only list that is guaranteed to exist on THIS bench. Nothing here is
-    invented: a tool that appears in no published place does not appear.
+
+def _tool_row(row: Any) -> dict[str, str] | None:
+    if not isinstance(row, dict):
+        return None
+    tool = str(row.get("tool") or "").strip()
+    if not tool:
+        return None
+    out = {"tool": tool, "on": str(row.get("provider") or row.get("on") or "")}
+    line = str(row.get("one_line") or row.get("does") or "").strip()
+    if line:
+        out["does"] = line
+    return out
+
+
+def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, str]]:
+    """The tools an outline may name.
+
+    THE BENCH PUBLISHES THIS NOW (bench 965e61c5a): `tools` on the brief is
+    every call a `calls` act can name -- {family, provider, tool, required,
+    fields, one_line, shapes} -- built by the same `tool_arguments` the draft
+    door fills a run's arguments with, so the index and the form cannot
+    disagree. It is ALWAYS A LIST, including empty, and it replaces reading a
+    worked program to find out what calls exist: since Steven's ruling on
+    2026-09-09 the brief carries no `nearest_program` and no `plan_examples`
+    at all (the programs stay public at GET /api/bench/plan-examples and are
+    never pushed), and nothing in this loop reads them.
+
+    The last row of the bench's index is the wildcard -- composio:<service>/
+    <TOOL>, the door to ~1,500 other services -- so it is kept whatever the
+    budget does to the rows above it: an index that silently ends at the
+    budget would read as "these are all the tools there are".
     """
+    published = (brief or {}).get("tools") if isinstance(brief, dict) else None
+    if isinstance(published, list) and published:
+        rows = [row for row in (_tool_row(entry) for entry in published) if row]
+        if not rows:
+            return []
+        wildcard = rows[-1] if "<" in rows[-1]["tool"] else None
+        body = rows[:-1] if wildcard else rows
+        kept: list[dict[str, str]] = []
+        spent = len(json.dumps(wildcard, default=str)) if wildcard else 0
+        for row in body:
+            spent += len(json.dumps(row, default=str))
+            if spent > budget and kept:
+                break
+            kept.append(row)
+        if wildcard:
+            kept.append(wildcard)
+        return kept
+    # A bench that publishes no index: the platform's own four, and the verbs
+    # this package holds a connection floor for. Nothing is invented, and no
+    # program is read to find one.
     found: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -316,16 +368,9 @@ def tools_index(brief: Any, limit: int = 24) -> list[dict[str, str]]:
     for provider_key, actions in blocks.GRANT_MIN_ACTIONS.items():
         for action in actions:
             add(action, provider_key)
-    program = (brief or {}).get("nearest_program") if isinstance(brief, dict) else None
-    proposal = program.get("proposal") if isinstance(program, dict) else None
-    for step in (proposal or {}).get("steps", []) if isinstance(proposal, dict) else []:
-        for act in (step.get("acts") or []) if isinstance(step, dict) else []:
-            for run in (act.get("runs") or []) if isinstance(act, dict) else []:
-                if isinstance(run, dict) and run.get("tool"):
-                    add(run.get("tool"), run.get("on") or run.get("service") or "")
     for tool in blocks.PLATFORM_TOOLS:
         add(tool, "")
-    return found[:limit]
+    return found
 
 
 # What the person said, in the order it matters to an outline. The list is

@@ -8,6 +8,37 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.2] - 2026-09-09
+
+**The outline reads the bench's own tools index, and never a worked program.**
+
+### What forced this release
+
+Steven, 2026-09-09: the brief STOPS carrying `nearest_program` and
+`plan_examples`. The draft loop replaces them -- an agent no longer needs a
+finished plan to copy, because the bench hands it the mechanics and asks for its
+words one at a time -- and the programs stay public documentation at
+`GET /api/bench/plan-examples`, never pushed onto a brief. Until now this
+package built its outline's tools list partly out of the runs of the worked
+program riding the brief, which on a want with no nearest program meant the
+outline could not see that the calls existed at all.
+
+### Changed
+
+- **`tools_index` reads `brief["tools"]`** (bench 965e61c5a): every call a
+  `calls` act can name, built by the same `tool_arguments` the draft door fills
+  a run's arguments with, so the index and the form cannot disagree. The outline
+  is handed three things per row -- the tool, the service it runs on, and one
+  line -- and never the argument list or shapes, which the draft door writes
+  into the document and hands back as blanks with their own sentences. The
+  bench's wildcard row (`composio:<service>/<TOOL>`, the door to ~1,500 other
+  services) is kept whatever the budget does to the rows above it, so the index
+  can never read as "these are all the tools there are".
+- **Nothing in the loop reads `nearest_program` or `plan_examples`.** The
+  fallback, for a bench that publishes no index, is the platform's own four
+  verbs and the service verbs this package holds a connection floor for --
+  nothing invented, and no program read to find one.
+
 ## [0.35.1] - 2026-09-09
 
 **The loop reads a standing draft first; a PUT goes out only when no draft

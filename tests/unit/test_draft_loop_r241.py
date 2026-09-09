@@ -577,24 +577,83 @@ def test_the_blanks_are_grouped_a_step_at_a_time_in_document_order():
     assert len(groups[0][1]) == 2
 
 
-def test_the_tools_index_names_only_tools_a_published_place_names():
+def test_the_tools_index_is_the_one_the_bench_publishes():
+    """The brief carries `tools` (bench 965e61c5a) and that is the index. The
+    outline needs the name, the service and one line -- never the argument
+    list, which the draft door writes and hands back as blanks."""
     index = tools_index(
         {
-            "nearest_program": {
-                "proposal": {
-                    "steps": [
-                        {"acts": [{"runs": [{"tool": "calendar.events.create",
-                                             "on": "google-calendar"}]}]}
-                    ]
-                }
-            }
+            "tools": [
+                {"family": "platform", "provider": "", "tool": "platform.research",
+                 "required": ["brief"], "fields": ["depth"],
+                 "one_line": "Find something out.", "shapes": {"brief": "text"}},
+                {"family": "calendar", "provider": "google-calendar",
+                 "tool": "calendar.events.create", "required": ["summary"],
+                 "fields": [], "one_line": "Put an event on their calendar."},
+            ]
         }
     )
 
+    assert index == [
+        {"tool": "platform.research", "on": "", "does": "Find something out."},
+        {"tool": "calendar.events.create", "on": "google-calendar",
+         "does": "Put an event on their calendar."},
+    ]
+
+
+def test_the_wildcard_row_survives_the_budget():
+    # The last row is the door to every other service. An index that silently
+    # ended at the budget would read as "these are all the tools there are".
+    published = [
+        {"provider": f"svc-{n}", "tool": f"svc.tool.{n}",
+         "one_line": "x" * 120}
+        for n in range(80)
+    ]
+    published.append(
+        {"provider": "composio:<service>", "tool": "composio:<service>/<TOOL>",
+         "one_line": "Any of ~1,500 other services."}
+    )
+
+    index = tools_index({"tools": published}, budget=1_000)
+
+    assert len(index) < len(published)
+    assert index[-1]["tool"] == "composio:<service>/<TOOL>"
+
+
+def test_a_bench_with_no_tools_index_still_names_the_platform_verbs():
+    index = tools_index({})
+
     names = [row["tool"] for row in index]
-    assert "calendar.events.create" in names
     assert "platform.research" in names
-    assert all(row["tool"] for row in index)
+    assert "gmail.message.send" in names
+
+
+def test_the_outline_never_reads_a_worked_program():
+    """Steven, 2026-09-09: the brief stops carrying `nearest_program` and
+    `plan_examples` -- the draft loop replaces them and the programs stay
+    public docs. Nothing here reads one, even from a bench that still sends
+    them."""
+    bench = FakeDraftBench()
+    model = _happy_path_model()
+
+    DraftLoop(model, bench).run(
+        "t-1",
+        brief={
+            "want": "Book a table for four",
+            "tools": [{"provider": "google-gmail", "tool": "gmail.message.send",
+                       "one_line": "Send an email from their mailbox."}],
+            "nearest_program": {"key": "book-a-table",
+                                "proposal": {"steps": [{"title": "COPY ME"}]}},
+            "plan_examples": [{"key": "book-a-table"}],
+        },
+        idempotency_key="k",
+    )
+
+    outline_prompt = model.invocations[0]["messages"][0].content[0]["text"]
+    assert "gmail.message.send" in outline_prompt
+    assert "COPY ME" not in outline_prompt
+    assert "nearest_program" not in outline_prompt
+    assert "plan_examples" not in outline_prompt
 
 
 # ---------------------------------------------------------------------------
