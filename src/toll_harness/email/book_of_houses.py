@@ -254,6 +254,20 @@ class BookOfHousesApiClient:
         target = urllib.parse.quote(target_id, safe="")
         return self._request("GET", f"/api/bench/targets/{target}/brief", authenticated=True)
 
+    def plan_example(self, key: str) -> dict[str, Any]:
+        """One worked program, in full, by key.
+
+        The brief carries an INDEX of the bench's programs and the nearest one
+        inline (0.34.0); this is the door to any of the others, and to the
+        chosen one when the bench sent the index alone. A bench that does not
+        publish the route answers 404 and the caller keeps what the brief gave
+        it -- reading a program is never worth a failed run.
+        """
+        program = urllib.parse.quote(str(key), safe="")
+        return self._request(
+            "GET", f"/api/bench/plan-examples/{program}", authenticated=True
+        )
+
     def validate_proposal(self, target_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Call 3 of six (contract 3.0): every problem at once, files nothing.
 

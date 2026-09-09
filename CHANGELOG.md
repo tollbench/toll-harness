@@ -8,6 +8,136 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.34.0] - 2026-09-09
+
+**A run stops itself before the provider stops it, and a tool hands back what
+the model needs and not a copy of what it already has.**
+
+### What forced this release
+
+The production fleet runs on a model with a 131,072-token context. On
+2026-09-09 Peter's run on "find a researcher's email and reach out" reached
+129,025 input tokens on a single call and died inside Bedrock:
+
+```
+bedrock ValidationException ... This model's maximum context length is 131072
+tokens. However, you requested 2048 output tokens and your prompt contains at
+least 129025 input tokens
+```
+
+Greg hit the same wall twelve times that day, Marcia ten, Bobby six. The run's
+checkpoint showed 1,279,880 input tokens across the run. Three things fed it,
+and nothing in the harness was watching any of them: the brief carried twelve
+worked programs (~19,000 tokens) where the run needed one; the free validate
+door echoed the whole submitted plan back on every answer and the model called
+it fourteen times in three minutes; and `proposals/mine` -- over 100KB of the
+agent's own filed plans, by its own route's admission -- came back whole every
+cycle. A fourth thing made it un-gradeable: the only record of a door refusal
+was the tool result that went to the model, so the foreman reading `market.log`
+could not see why any bid had failed.
+
+### Added
+
+- **A per-run CONTEXT BUDGET, measured from the provider's own usage fields**
+  (`core/budget.py`). After every model call the input-token count is read back
+  -- that number IS the conversation's size -- and before the next call the
+  runtime asks whether the last prompt plus everything appended since (four
+  characters to a token, deliberately pessimistic) would cross the budget. When
+  it would, the run ends FAILED with `context_budget_exceeded`, carrying the
+  budget, the last call's input tokens, the estimate for the next one, the
+  cumulative input and output, the model-call count, the last tool called and
+  whatever target, deal or step the run was holding. The provider is never
+  asked: a 400 records nothing, and a run that stops itself leaves a record.
+  Default 90,000; `runtime.context_budget_tokens` per agent,
+  `TOLL_HARNESS_CONTEXT_BUDGET_TOKENS` across a fleet, 0 to turn it off. One
+  log line per model call carries the cumulative input, so a run's growth reads
+  off the log: `model call 7: prompt 41,220 input tokens, cumulative input
+  180,340, budget 90000`.
+- **Logging is configured** (`cli._configure_logging`). `market.log` is the
+  worker's stdout and stderr and nothing had ever configured a handler, so
+  Python's last-resort handler printed WARNING and above and silently dropped
+  the rest -- including 0.33.0's program diff. Only the `toll_harness` logger is
+  touched; `TOLL_HARNESS_LOG_LEVEL` overrides.
+- **Every door refusal is written to the run log verbatim**, one JSON line
+  prefixed `REFUSAL validate door` or `REFUSAL filing door`, with its codes and
+  the door's own words. Both doors, whatever the harness does with the refusal
+  next.
+- **`programs.program_index()` / `index_row()` / `approx_tokens()`**: the shelf.
+  One row per program -- `{key, title, wants_like, steps, approx_tokens}`, plus
+  the bench's `url` where it publishes one -- and idempotent, so a bench that
+  already publishes the slim shape passes through untouched.
+- **`plan_example(key)` on the API client**
+  (`GET /api/bench/plan-examples/<key>`, contract 3.8): one worked program in
+  full, fetched once per process and remembered. A bench without the route
+  answers 404 and the pick keeps whatever the brief gave it -- reading a
+  program is never worth a failed run.
+- **A large tool result is named in the run log.** Nothing is truncated in the
+  registry (a tool owns its own answer), but any result over 20,000 characters
+  says so, with its token estimate, because it stays in the conversation for
+  the rest of the run.
+
+### Changed
+
+- **`read_brief` carries ONE program and an index of the rest.**
+  `nearest_program` is the chosen program in full; `plan_examples` is the
+  index. The BENCH's own pick wins where it publishes one (contract 3.8, whose
+  `why` is an object carrying its `sentence`) and this package picks only when
+  it does not -- 0.33.0's scorer would otherwise overwrite the server's pick
+  with `None`, because it skipped index rows with no `proposal`. A pick scored
+  over an index alone is fetched by key. Never more than one program inline.
+- **`read_brief` sheds the brief's own copies of itself when it still does not
+  fit** (60,000 characters, about 15,000 tokens -- a real brief off the live
+  bench runs to about 48,000 and passes whole): `bid_template` first -- it is
+  `plan_template` inside the whole bid payload and `bid_template_notes` already
+  names every blank in it -- then `block_templates` down to
+  `{kind: step count}`. Both come back as a plain sentence saying what is gone
+  and where the same shape is (inside the program that rides the brief). The
+  harness still reads the WHOLE brief when it files, so a plan is repaired from
+  the real form either way.
+- **`validate_proposal` returns the problems, not the plan.** `problems`
+  (capped at 25, every string bounded), the true `problem_count`, a one-line
+  `summary`, `corrected_ok`, `corrections`, the attempt counters and the
+  source. `corrected_plan` is GONE from the tool result: the model wrote the
+  plan and does not need it back, and where the door can fix the mechanics
+  itself `submit_proposal` calls the same door and files the corrected plan.
+  The whole answer, corrected plan included, is in the run log.
+- **The door answers a want three times.** Three answers is a compile, four is
+  a loop. The fourth call returns `validate_attempts_exhausted` with the door's
+  own last problems and the instruction to file nothing on that want -- the
+  same shape as the `REJ-40`/`REJ-41` repair returns -- and never touches the
+  bench. Each attempt logs `validate attempt n/3 on target <id>: <codes>`. The
+  cap is per want, and `enforce_cap=False` is the seam for the dry-run path,
+  which validates on the harness's behalf rather than the model's.
+- **`submit_proposal` returns ids and status**, never an echoed plan: a bench
+  that returns the proposal with the receipt has it dropped into the run log
+  and `echo_omitted` names what went.
+- **`current_step` caps the lists that only ever grow**: the newest 20 thread
+  messages, 12 acts / declared acts / sent-back drafts, 20 released materials,
+  each with its TRUE COUNT beside it (`messages_total`, `acts_total`, ...) and
+  the thread's own note. `owed_replies` is never capped -- it is the list of
+  things the bench will refuse the next filing over.
+- **`list_proposals` hands back the plan only where the plan is the work.** A
+  bid with a move on it (`your_move`, or a deal) keeps everything; a settled or
+  open bid keeps its row, its money, its status, its deal block and the
+  person's answers, and says `steps_count` instead of carrying the plan it
+  filed. The duplicate `finalist_answers` / `finalist_health` (emitted twice
+  under both vocabularies since contract 2.23) are dropped; the newer word
+  stays. `submit_informed_plan` reads the WHOLE record through
+  `_owned_proposals`, because a revision inherits from the sealed steps.
+- **Local schema problems are bounded at 600 characters.** `jsonschema` prints
+  the offending instance in its message, so one problem could be an entire
+  plan.
+
+### The rule this generalizes
+
+What a tool hands back is spent out of the model's window and it never comes
+back: a tool result stays in the conversation for the rest of the run. So a
+result carries what the model must ACT on, the full payload goes to the run log
+where the operator reads it, and anything the model already has -- above all,
+the plan it just wrote -- is never handed back to it.
+
+474 tests pass (was 452), ruff clean.
+
 ## [0.33.0] - 2026-09-09
 
 **Find the nearest program, then change what differs. Twelve worked programs

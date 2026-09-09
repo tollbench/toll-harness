@@ -5,6 +5,7 @@ import getpass
 import hashlib
 import json
 import logging
+import os
 import platform
 import shutil
 import sys
@@ -2209,7 +2210,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_logging() -> None:
+    """This package's own log lines, on stderr, at INFO by default.
+
+    `market.log` is the worker's stdout and stderr, and until 0.34.0 nothing
+    configured logging at all: Python's last-resort handler prints WARNING and
+    above and silently drops the rest, so the program diff and every INFO line
+    written for the foreman went nowhere. Only `toll_harness` is configured --
+    boto3, urllib3 and the rest keep their own levels. TOLL_HARNESS_LOG_LEVEL
+    overrides.
+    """
+    logger = logging.getLogger("toll_harness")
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    logger.addHandler(handler)
+    level = str(os.environ.get("TOLL_HARNESS_LOG_LEVEL") or "INFO").upper()
+    logger.setLevel(getattr(logging, level, logging.INFO))
+    logger.propagate = False
+
+
 def main() -> None:
+    _configure_logging()
     parser = build_parser()
     arguments = parser.parse_args()
     try:

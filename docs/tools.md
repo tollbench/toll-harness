@@ -57,18 +57,35 @@ problems go back to the model for ONE repair pass; a `corrected_ok` plan is file
 A bench below contract 3.0 is never asked for the route, and the local schema mirror is the whole
 pre-check there.
 
+The door answers a want THREE times (0.34.0). Three answers is a compile, four is a loop: on
+2026-09-09 a run called it fourteen times in three minutes, filed nothing, and died in the
+provider. The fourth call returns the door's own last problems, `validate_attempts_exhausted`, and
+the instruction to file nothing on that want. AND THE ANSWER NEVER CARRIES THE PLAN: `problems`,
+`problem_count`, a one-line `summary`, `corrected_ok` and the attempt counters, but no
+`corrected_plan` -- the model wrote the plan and does not need it back, and where the door can fix
+the mechanics itself `toll_bench.submit_proposal` files the corrected plan for it. The whole door
+answer, corrected plan included, goes verbatim to the run log, prefixed `REFUSAL validate door`;
+every filing-door refusal is written the same way. A refusal the operator cannot read is a run
+nobody can grade.
+
 Find the nearest program, then change what differs (Steven, 2026-09-09: "the test is can the AI
-use strategy to build the correct plan that can execute"). The brief carries `plan_examples`:
-worked programs, each `{key, title, wants_like, proposal}`, and each proposal a COMPLETE bid that
-already passes the validate door. The move is not to compose a plan out of the kit of parts. It is
-to pick the program nearest this want, copy its `proposal` whole, change only what the want makes
-different -- the words, the recipient, the numbers -- keep its shape, compile it at the validate
-door and file once. The pick is made deterministically before the model ever sees the brief:
+use strategy to build the correct plan that can execute"). ONE PROGRAM RIDES THE BRIEF AND THE
+REST ARE AN INDEX (0.34.0): `nearest_program` is the chosen program in full -- a COMPLETE bid that
+already passes the validate door -- and `plan_examples` is the shelf, one row per program
+(`{key, title, wants_like, steps, approx_tokens}`, plus the bench's `url` where it publishes one).
+Twelve worked programs inline is about 19,000 tokens of a 131,072-token window spent before the
+model has read the want, and a program the run will not copy is a program it does not need to
+read. The move is not to compose a plan out of the kit of parts. It is to copy
+`nearest_program.proposal` whole, change only what the want makes different -- the words, the
+recipient, the numbers -- keep its shape, compile it at the validate door and file once. The pick
+is made before the model ever sees the brief: the BENCH's own `nearest_program` wins where it
+publishes one (contract 3.8, `why` an object carrying its `sentence`), and otherwise
 `programs.nearest_program(brief)` scores token overlap of the want against each program's
 `wants_like` (two points a word) and `title` (one point a word), breaks a tie toward the SHORTER
-program and then by key, and rides the brief inline as `nearest_program` with one sentence in
-`program_to_copy`. Both keys are always present; `nearest_program` is null when the bench
-publishes no examples or nothing overlaps. What the model then did with it is logged once per
+program and then by key. A pick scored over an index alone is fetched whole by key from
+`GET /api/bench/plan-examples/<key>`; a bench with no such route leaves the pick without its
+proposal rather than failing the read. Both keys are always present; `nearest_program` is null
+when the bench publishes no examples or nothing overlaps. What the model then did with it is logged once per
 filing by `programs.diff_from_program`: `program 12: copied; kept 41/48 fields, changed 6, added
 1, removed 1; off-shape 0`. Words the plan is supposed to rewrite (pitch, titles, promises,
 messages, odds, money) are excluded from `off-shape`, so the verdict reads `copied` or `composed`

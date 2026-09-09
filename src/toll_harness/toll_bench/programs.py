@@ -90,11 +90,22 @@ def _tokens(value: Any) -> set[str]:
 
 
 def program_steps(example: Any) -> int:
-    """How many steps this program's proposal carries. The tie-breaker."""
+    """How many steps this program carries. The tie-breaker.
+
+    Read off the proposal when the whole program is in hand, and off the
+    index row's own `steps` count when it is not: since 0.34.0 a brief may
+    carry twelve INDEX ROWS and one program, and the pick has to be made the
+    same way over either.
+    """
     if not isinstance(example, dict):
         return 0
     steps = (example.get("proposal") or {}).get("steps")
-    return len(steps) if isinstance(steps, list) else 0
+    if isinstance(steps, list):
+        return len(steps)
+    count = example.get("steps")
+    if isinstance(count, int) and not isinstance(count, bool):
+        return count
+    return 0
 
 
 def score_program(want: Any, example: Any) -> int:
@@ -137,7 +148,10 @@ def nearest_program(brief: Any) -> dict[str, Any] | None:
     want = brief.get("want")
     ranked: list[tuple[int, int, str, dict[str, Any]]] = []
     for example in examples:
-        if not isinstance(example, dict) or not isinstance(example.get("proposal"), dict):
+        # An entry with no proposal is an INDEX ROW, and it is scored exactly
+        # like a whole program: `wants_like` and `title` are what the pick has
+        # ever read. The caller fetches the winner's proposal by key.
+        if not isinstance(example, dict) or not example.get("key"):
             continue
         score = score_program(want, example)
         if score <= 0:
@@ -190,14 +204,99 @@ def program_why(
     )
 
 
+# --------------------------------------------------------------------------
+# THE SHELF: TWELVE INDEX ROWS AND ONE PROGRAM.
+#
+# WHAT FORCED IT (production fleet, 2026-09-09). 0.33.0 put the chosen program
+# on the brief inline -- and left the other eleven there too, whole. Twelve
+# worked proposals is about 19,000 tokens of a 131,072-token window spent
+# before the model has read the want, and four agents died that day inside the
+# provider with prompts over 129,000 tokens. A program the run will not copy
+# is a program it does not need to read. So the brief carries an INDEX -- key,
+# title, wants_like, how many steps, roughly how many tokens -- and exactly
+# one program in full: the nearest one.
+# --------------------------------------------------------------------------
+
+INDEX_KEYS = ("key", "title", "wants_like", "steps", "approx_tokens", "url")
+
+SHELF_SENTENCE = (
+    "`plan_examples` is an INDEX of the worked programs on this bench, not the "
+    "programs themselves: key, title, the wants each is for, its step count and "
+    "roughly what it costs to read. The one program you need rides this brief "
+    "in full as `nearest_program.proposal`. Copy that one; the index is there "
+    "so you can see what else exists, not so you can read it all."
+)
+
+
+def approx_tokens(value: Any) -> int:
+    """Roughly what this costs a model to read. Four characters a token."""
+    try:
+        return len(json.dumps(value, separators=(",", ":"), default=str)) // 4
+    except (TypeError, ValueError):
+        return len(str(value)) // 4
+
+
+def index_row(example: Any) -> dict[str, Any]:
+    """One program, as a line in the index."""
+    if not isinstance(example, dict):
+        return {}
+    proposal = example.get("proposal")
+    row = {
+        "key": example.get("key"),
+        "title": example.get("title"),
+        "wants_like": example.get("wants_like"),
+        "steps": program_steps(example),
+        "approx_tokens": (
+            approx_tokens(proposal)
+            if isinstance(proposal, dict)
+            else example.get("approx_tokens")
+        ),
+    }
+    # The bench's index rows carry the door to the whole program. Kept when it
+    # is there: a raw agent reading this index needs somewhere to go.
+    if example.get("url"):
+        row["url"] = example.get("url")
+    return row
+
+
+def program_index(examples: Any) -> list[dict[str, Any]]:
+    """The shelf: one line per program, in the order the bench published them.
+
+    Idempotent -- an index handed back in is the same index -- so a bench that
+    already publishes the slim shape passes through untouched.
+    """
+    if not isinstance(examples, list):
+        return []
+    return [row for row in (index_row(example) for example in examples) if row.get("key")]
+
+
 def program_sentence(pick: Any) -> str:
-    """The plain line handed over on the brief beside the pick itself."""
+    """The plain line handed over on the brief beside the pick itself.
+
+    A pick the BENCH made carries its own `why` and that is what is printed.
+    A pick with none still gets a sentence: "no program is near this want" and
+    "a program was picked and nobody said why" must be tellable apart.
+    """
     if not isinstance(pick, dict):
         return (
             "No worked program on this brief is near this want. Build the plan "
             "from the form and validate it before filing."
         )
-    return str(pick.get("why") or "")
+    why = pick.get("why")
+    # The bench's own pick (contract 3.8) publishes `why` as an object --
+    # {score, shared_words, sentence} -- and this package's pick publishes it
+    # as the sentence itself. Read either; never print a dict at a model.
+    if isinstance(why, dict):
+        why = why.get("sentence") or why.get("why") or ""
+    why = str(why or "").strip()
+    if why:
+        return why
+    return (
+        f"Program {pick.get('key')} ({pick.get('title')}) is the nearest worked "
+        "program to this want. Copy its proposal WHOLE and change only what this "
+        "want makes different: the words, the recipient, the numbers. Keep its "
+        "steps, its acts and its account rows."
+    )
 
 
 # --------------------------------------------------------------------------

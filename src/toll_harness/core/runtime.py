@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
 
 from toll_harness.browser.base import BrowserProvider
+from toll_harness.core.budget import ContextBudget, measure, resolve_context_budget
 from toll_harness.core.types import (
     AgentIdentity,
     AutonomyMode,
@@ -20,6 +22,8 @@ from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, St
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools.registry import ToolContext, ToolRegistry
 from toll_harness.tools.web import WebProvider
+
+_LOGGER = logging.getLogger("toll_harness.runtime")
 
 BASE_SYSTEM_INSTRUCTION = """You are the intelligence operating through Toll Harness.
 You decide how to pursue the user's goal. The harness only preserves state and executes tools.
@@ -44,13 +48,15 @@ informed plan - yours is the only plan the person is waiting on; each answer car
 answer_value and format beside the person's words, so read the structured value and not only
 the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
 block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
-FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS. The brief carries `plan_examples`: worked
-programs, each one a COMPLETE proposal that already passes the validate door, with `wants_like`
-naming the wants it is for. Do not compose a plan out of parts. Pick the program nearest this want
--- `nearest_program` on the brief is the harness's own pick and rides it inline, with one sentence
-in `program_to_copy` -- copy its `proposal` WHOLE, change only what THIS want makes different (the
-words, the recipient, the numbers), keep its shape (its steps, its acts, its `connect_account`
-rows, its question formats), then compile it at the validate door and file once. A plan that shares
+FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS. The brief carries ONE worked program in full
+and an INDEX of the others: `nearest_program` is the pick, a COMPLETE proposal that already passes
+the validate door, with one sentence in `program_to_copy`, and `plan_examples` is the index (key,
+title, wants_like, steps, approx_tokens) of everything else on the shelf. Do not compose a plan
+out of parts and do not go looking for another program: copy `nearest_program.proposal` WHOLE,
+change only what THIS want makes different (the words, the recipient, the numbers), keep its shape
+(its steps, its acts, its `connect_account` rows, its question formats), then compile it at the
+validate door and file once. The door answers at most THREE times on one want; if it still refuses
+after that, file nothing on this want. A plan that shares
 no shape with any of the programs is a plan nobody has ever run.
 A program's work is a `calls` act: {"kind": "calls", "title": ..., "drafts": {name: your words},
 "runs": [...]}. A RUN IS EITHER A CALL OR A WAIT, never both. A call names a `tool` (a registry
@@ -188,6 +194,7 @@ class HarnessRuntime:
         operator_instructions: str | None = None,
         knowledge_namespace: str | None = None,
         max_iterations: int = 20,
+        context_budget_tokens: int | None = None,
         system_instruction: str = BASE_SYSTEM_INSTRUCTION,
     ):
         self.model = model
@@ -209,6 +216,10 @@ class HarnessRuntime:
         self.operator_instructions = operator_instructions
         self.knowledge_namespace = knowledge_namespace
         self.max_iterations = max_iterations
+        # INPUT tokens this run may spend before it stops itself. Measured
+        # from the provider's own usage numbers after every call; 0 turns the
+        # guard off. See core/budget.py for what forced it.
+        self.context_budget_tokens = resolve_context_budget(context_budget_tokens)
         self.system_instruction = system_instruction
 
     def start(self, goal: str, mode: AutonomyMode = AutonomyMode.AUTONOMOUS) -> RunResult:
@@ -381,9 +392,29 @@ class HarnessRuntime:
         definitions = self.tools.definitions(self.enabled_tools)
         usage = ModelUsage()
         failed_protected_writes: dict[str, int] = {}
+        budget = ContextBudget(limit=self.context_budget_tokens)
 
         for iteration in range(1, self.max_iterations + 1):
             event_cursor = self._inject_live_inputs(run_id, messages, event_cursor)
+            # THE RUN STOPS BEFORE THE PROVIDER DOES. The last call's input
+            # token count is this conversation's size; the next call is that
+            # plus everything appended since. Crossing the budget ends the run
+            # here, with the step it was on and the last tool it called, rather
+            # than in a provider 400 that says only that the prompt was long.
+            conversation_chars = self._conversation_chars(messages)
+            if budget.would_exceed(conversation_chars):
+                report = budget.report(conversation_chars)
+                _LOGGER.warning(
+                    "Run %s stopped on the context budget: next prompt ~%d input "
+                    "tokens over a budget of %d, on %s, last tool %s",
+                    run_id,
+                    report["estimated_next_input_tokens"],
+                    budget.limit,
+                    report.get("step_title") or report.get("step_id") or "no named step",
+                    report.get("last_tool") or "none",
+                )
+                self.event_store.append_event(run_id, "run.context_budget", "harness", report)
+                return self._finish(run_id, RunStatus.FAILED, report, usage, iteration)
             try:
                 response = self.model.invoke(
                     system=self.system_instruction,
@@ -406,6 +437,8 @@ class HarnessRuntime:
                 )
 
             usage = self._add_usage(usage, response.usage)
+            budget.record(response.usage, conversation_chars)
+            _LOGGER.info("%s", budget.line())
             self.event_store.append_event(
                 run_id,
                 "model.response",
@@ -450,6 +483,7 @@ class HarnessRuntime:
             )
             result_blocks: list[JsonObject] = []
             for call in response.tool_calls:
+                self._note_place(budget.place, call.name, call.arguments)
                 self.event_store.append_event(
                     run_id,
                     "tool.called",
@@ -468,6 +502,7 @@ class HarnessRuntime:
                     )
                 else:
                     tool_result = self.tools.execute(context, call.id, call.name, call.arguments)
+                self._note_place(budget.place, call.name, call.arguments, tool_result.output)
                 if call.name in PROTECTED_WRITE_TOOLS:
                     failed = tool_result.is_error or tool_result.output.get("ok") is False
                     if failed:
@@ -523,6 +558,38 @@ class HarnessRuntime:
             usage,
             self.max_iterations,
         )
+
+    @staticmethod
+    def _conversation_chars(messages: list[ModelMessage]) -> int:
+        """How big the prompt for the next call would be, in characters."""
+        return sum(measure(message.content) for message in messages)
+
+    @staticmethod
+    def _note_place(
+        place: JsonObject, name: str, arguments: Any, output: Any = None
+    ) -> None:
+        """Where the run was when it stopped.
+
+        A budget failure that says only "too many tokens" tells the foreman
+        nothing. These are the handles that name the work: the last tool
+        called, and whatever target, deal or step the run was holding. Read
+        off the calls the run already makes, never a call of its own.
+        """
+        place["last_tool"] = name
+        if isinstance(arguments, dict):
+            for key in ("target_id", "deal_id", "step_id", "proposal_id"):
+                value = arguments.get(key)
+                if value:
+                    place[key] = str(value)
+        if isinstance(output, dict):
+            step = output.get("current_step")
+            if isinstance(step, dict):
+                if step.get("id"):
+                    place["step_id"] = str(step["id"])
+                if step.get("number") is not None:
+                    place["step_number"] = step["number"]
+                if step.get("title"):
+                    place["step_title"] = str(step["title"])
 
     @classmethod
     def _audit_arguments(cls, name: str, arguments: Any) -> Any:

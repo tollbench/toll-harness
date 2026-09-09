@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 from typing import Any
 
+from toll_harness.core.budget import measure
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, programs
@@ -118,6 +120,38 @@ FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
 # the usual case is that it never delivered anything -- and any second attempt
 # goes to the bench, whose `deliverable_missing` is the authoritative refusal.
 MAX_DELIVERABLE_WARNINGS = 1
+
+# --------------------------------------------------------------------------
+# WHAT A TOOL HANDS BACK IS SPENT OUT OF THE MODEL'S WINDOW.
+#
+# WHAT FORCED THESE LIMITS (production fleet, 2026-09-09). Four agents died
+# inside the provider on prompts over 129,000 tokens against a 131,072-token
+# context. The brief was carrying twelve worked programs (~19k tokens); the
+# validate door was echoing the whole submitted plan back on every answer and
+# the model called it fourteen times in three minutes; proposals/mine is over
+# 100KB of the agent's own filed plans. None of that was ever read twice, and
+# all of it stayed in the conversation forever. Every number below is a
+# ceiling on what a tool RETURNS, never on what the harness knows: the full
+# payload goes to the run log, which is where the foreman reads it.
+# --------------------------------------------------------------------------
+
+# The brief, after the programs are shelved. Roughly 15,000 tokens -- a real
+# brief off the live bench runs to about 48,000 characters and passes whole;
+# this is the backstop for the outlier, not a diet for every want.
+BRIEF_CHAR_BUDGET = 60_000
+# THE DOOR LOOP. Three answers is a compile, four is a loop: on 2026-09-09 a
+# run called the validate door fourteen times in three minutes, never filed,
+# and each answer re-entered the conversation whole.
+MAX_VALIDATE_ATTEMPTS = 3
+# The newest N of an unbounded list. A step thread, a step's acts and the
+# materials released to a deal all grow for the life of the deal.
+STEP_THREAD_MESSAGE_LIMIT = 20
+STEP_ACT_LIMIT = 12
+RELEASED_MATERIAL_LIMIT = 20
+# A door answer names every problem at once; past this many the plan is not
+# nearly right and the rest is noise. The count is always the true count.
+PROBLEM_LIMIT = 25
+PROBLEM_TEXT_MAX = 600
 
 # RULES 168 AND 170, APPLIED TO THE FOUR QUESTIONS (contract 2.37, 2026-09-04).
 # The finalist questions were the last person-facing ask outside HAR: four plain
@@ -577,6 +611,13 @@ class BookOfHousesTollBenchProvider:
         # set of cards (an earlier receipt on the step may already carry
         # them), and every time on a blank box in the document in hand.
         self._shape_warnings: dict[str, int] = {}
+        # 0.34.0. The shelf: programs fetched by key and remembered, the
+        # validate door's attempt count per want, and the last problems it
+        # named there -- so the fourth call answers honestly instead of
+        # spending another round trip on the same refusal.
+        self._plan_example_cache: dict[str, dict[str, Any]] = {}
+        self._validate_attempts: dict[str, int] = {}
+        self._last_door_problems: dict[str, dict[str, Any]] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -668,14 +709,14 @@ class BookOfHousesTollBenchProvider:
             brief["person_already_connected"] = blocks.connected_sentence(
                 brief.get("person_connected")
             )
-            # PROGRAM FIRST (Steven, 2026-09-09). Twelve worked programs on a
-            # brief are twelve things to read and nothing to do. The pick is
-            # made here, deterministically, and rides the brief inline in
-            # front of the other eleven -- always present, None when this
-            # bench publishes no examples or nothing overlaps this want.
-            pick = programs.nearest_program(brief)
-            brief["nearest_program"] = pick
-            brief["program_to_copy"] = programs.program_sentence(pick)
+            # PROGRAM FIRST (Steven, 2026-09-09), ONE PROGRAM (2026-09-09,
+            # the evening). Twelve worked programs on a brief are twelve
+            # things to read and nothing to do -- and about 19,000 tokens of
+            # a 131,072-token window, which is how four agents died inside
+            # the provider the same day. The pick is made here or taken from
+            # the bench, it rides the brief in full, and the other eleven are
+            # an INDEX. Always present, None when nothing overlaps this want.
+            self._shelve_the_programs(brief)
             # ...and when the person answered the contact question with "find
             # them for me", the recipient is not on the form and never will be.
             brief["contact_research_note"] = (
@@ -683,7 +724,136 @@ class BookOfHousesTollBenchProvider:
                 if blocks.contact_research_of(brief)
                 else ""
             )
+            self._fit_the_brief(target_id, brief)
         return response
+
+    def _plan_example(self, key: Any) -> dict[str, Any] | None:
+        """One worked program, by key, or None.
+
+        The route is contract 3.8 (`GET /api/bench/plan-examples/<key>`). An
+        older bench, an older client or a bad key all answer None and the
+        caller keeps whatever the brief already gave it: reading a program is
+        never worth a failed run. Fetched once per process and remembered.
+        """
+        key = str(key or "")
+        if not key:
+            return None
+        if key in self._plan_example_cache:
+            return self._plan_example_cache[key]
+        fetch = getattr(self.api, "plan_example", None)
+        program: dict[str, Any] | None = None
+        if callable(fetch):
+            try:
+                response = fetch(key)
+            except Exception as error:  # noqa: BLE001 - a missing shelf is not a failure
+                _LOGGER.warning("Plan example %s could not be read (%s)", key, error)
+                response = None
+            if isinstance(response, dict):
+                candidate: Any = response
+                for holder in ("plan_example", "program", "example"):
+                    if isinstance(response.get(holder), dict):
+                        candidate = response[holder]
+                        break
+                if isinstance(candidate, dict) and isinstance(candidate.get("proposal"), dict):
+                    program = candidate
+        if program is not None:
+            self._plan_example_cache[key] = program
+        return program
+
+    def _shelve_the_programs(self, brief: dict[str, Any]) -> None:
+        """One program in full, the rest as an index. Both always present.
+
+        The bench's own `nearest_program` wins when it publishes one -- it
+        reads the want with more than token overlap -- and this package picks
+        only when it does not. Either way exactly ONE program is inlined; a
+        pick whose proposal has to be fetched is fetched by key.
+        """
+        examples = brief.get("plan_examples")
+        pick = brief.get("nearest_program")
+        if not isinstance(pick, dict) or not pick.get("key"):
+            pick = programs.nearest_program(brief)
+        if isinstance(pick, dict) and not isinstance(pick.get("proposal"), dict):
+            fetched = self._plan_example(pick.get("key"))
+            if fetched is not None:
+                pick = {
+                    **pick,
+                    "title": pick.get("title") or fetched.get("title"),
+                    "wants_like": pick.get("wants_like") or fetched.get("wants_like"),
+                    "proposal": fetched.get("proposal"),
+                }
+            else:
+                _LOGGER.warning(
+                    "Program %s is the nearest to this want and its proposal "
+                    "could not be read; the brief carries the pick without it",
+                    pick.get("key"),
+                )
+        brief["nearest_program"] = pick if isinstance(pick, dict) else None
+        brief["program_to_copy"] = programs.program_sentence(brief["nearest_program"])
+        index = programs.program_index(examples)
+        if not index:
+            return
+        before = programs.approx_tokens(examples)
+        brief["plan_examples"] = index
+        brief["program_shelf"] = programs.SHELF_SENTENCE
+        after = programs.approx_tokens(index) + programs.approx_tokens(
+            brief["nearest_program"]
+        )
+        _LOGGER.info(
+            "Brief shelf: %d programs indexed, %s inline; ~%d tokens instead of ~%d",
+            len(index),
+            (brief["nearest_program"] or {}).get("key") or "none",
+            after,
+            before,
+        )
+
+    def _fit_the_brief(self, target_id: str, brief: dict[str, Any]) -> None:
+        """Shed the brief's duplicates until it fits, loudest thing last.
+
+        Nothing here is a judgement about what a plan needs: it is the order
+        in which a brief's own copies of itself come off. `bid_template` is
+        `plan_template` inside the whole bid payload and `bid_template_notes`
+        already names every blank in it; `block_templates` is the catalog, and
+        the one block this want needs is in the program that rides the brief
+        in full. Both are still whole on the brief the harness reads at filing
+        time, so a plan is still repaired from the real form.
+        """
+        if measure(brief) <= BRIEF_CHAR_BUDGET:
+            return
+        shed: list[str] = []
+        if isinstance(brief.get("bid_template"), (dict, list)):
+            brief["bid_template"] = None
+            brief["bid_template_note"] = (
+                "The whole-bid template was left off this brief to keep it "
+                "readable. `bid_template_notes` names every blank it carries, "
+                "and `nearest_program.proposal` is a filled bid of the same "
+                "shape -- copy that."
+            )
+            shed.append("bid_template")
+        catalog = brief.get("block_templates")
+        if measure(brief) > BRIEF_CHAR_BUDGET and isinstance(catalog, dict) and catalog:
+            brief["block_templates"] = {
+                str(kind): (len(steps) if isinstance(steps, list) else 1)
+                for kind, steps in catalog.items()
+            }
+            brief["block_templates_note"] = (
+                "The block catalog was too big to hand over whole, so this is "
+                "the kinds it holds and how many steps each block is. The "
+                "block this want needs is already written out inside "
+                "`nearest_program.proposal`: pull it from there, in full and "
+                "in its order (rule 236). The harness still reads the real "
+                "catalog when it files, so a block you get wrong is repaired "
+                "rather than refused."
+            )
+            shed.append("block_templates")
+        if shed:
+            _LOGGER.warning(
+                "Brief for target %s ran to %d characters; shed %s to fit the "
+                "window (budget %d)",
+                target_id,
+                measure(brief),
+                ", ".join(shed),
+                BRIEF_CHAR_BUDGET,
+            )
 
     def list_act_kinds(self) -> dict[str, Any]:
         """The act registry (contract 2.44). Each kind publishes `wanted_when`
@@ -1154,39 +1324,257 @@ class BookOfHousesTollBenchProvider:
         entry = self._platform_blocks.get(str(step_id or ""))
         return entry if entry and entry.get("kinds") else None
 
+    # THE AGENT'S OWN FILED PLANS, WHICH IT WROTE AND DOES NOT NEED BACK.
+    # /proposals/mine carries every bid this agent ever filed, each with its
+    # whole plan: the route's own comment says the body can exceed 100KB, and
+    # it is re-read into the conversation on every cycle. The bid the agent
+    # must ACT on keeps its plan; the rest come back as the row -- ids, money,
+    # status, the deal block, the person's answers and the move.
+    PROPOSAL_PLAN_KEYS = (
+        "steps",
+        "steps_original",
+        "pitch_body",
+        "strategy",
+        "skill_research",
+        "research_links",
+        "smart_goals",
+        "finalist_questions",
+        "wins",
+        "capabilities",
+        "campaign",
+        "allocation",
+    )
+    # Emitted twice by the bench under both vocabularies (contract 2.23). One
+    # copy is enough; the newer word is the one kept.
+    PROPOSAL_DUPLICATE_KEYS = ("finalist_answers", "finalist_health")
+
     def list_proposals(self) -> dict[str, Any]:
-        return {"ok": True, "proposals": self.api.proposals()}
+        rows = self.api.proposals()
+        return {"ok": True, "proposals": [self._proposal_row(row) for row in rows]}
+
+    def _owned_proposals(self) -> list[dict[str, Any]]:
+        """Every filed bid, WHOLE. `list_proposals` is the MODEL's view.
+
+        The informed plan inherits from the SEALED steps of the bid it
+        revises, so this path needs the plan the tool keeps off the wire. It
+        reads the API where there is one and falls through to the tool
+        otherwise, which is how a provider whose bids are stubbed still works.
+        """
+        fetch = getattr(self.api, "proposals", None)
+        if callable(fetch):
+            rows = fetch()
+            if isinstance(rows, list):
+                return rows
+        return self.list_proposals().get("proposals") or []
+
+    def _proposal_row(self, proposal: Any) -> Any:
+        """One filed bid, with its plan only where the plan is the work.
+
+        A proposal with a move on it -- a plan to file, a deal to sign, a
+        person's answers to read -- keeps everything: that plan is what the
+        next filing is written from. A settled or open bid keeps its row and
+        says how many steps it had.
+        """
+        if not isinstance(proposal, dict):
+            return proposal
+        row = {
+            key: value
+            for key, value in proposal.items()
+            if key not in self.PROPOSAL_DUPLICATE_KEYS
+        }
+        deal = proposal.get("deal") or {}
+        acting = bool(proposal.get("your_move")) or bool(
+            isinstance(deal, dict) and deal.get("deal_id")
+        )
+        if acting:
+            row.pop("steps_original", None)
+            return row
+        steps = proposal.get("steps")
+        for key in self.PROPOSAL_PLAN_KEYS:
+            row.pop(key, None)
+        row["steps_count"] = len(steps) if isinstance(steps, list) else 0
+        row["plan_omitted"] = (
+            "This bid has no move on it, so its plan is not handed back. It is "
+            "the plan you filed; the bench still holds it."
+        )
+        return row
 
     def validate_proposal(
-        self, proposal: dict[str, Any], target_id: str | None = None
+        self,
+        proposal: dict[str, Any],
+        target_id: str | None = None,
+        *,
+        enforce_cap: bool = True,
     ) -> dict[str, Any]:
-        """Check a plan before filing it.
+        """Check a plan before filing it. THE PROBLEMS COME BACK, NOT THE PLAN.
 
         With a `target_id` on a contract 3.0 bench this is the BENCH'S OWN
         answer (call 3 of six): every problem at once, each with a plain-words
-        `fix`, plus `corrected_plan`/`corrected_ok` when the mechanics alone
-        could be fixed. It files nothing and counts against nothing. Without a
+        `fix`. It files nothing and counts against nothing. Without a
         target_id, or against an older bench, it is the offline mirror below:
         faster, always available, and never authoritative.
+
+        WHAT CHANGED IN 0.34.0. The answer used to carry `corrected_plan` --
+        the whole submitted proposal, echoed back -- and a run on 2026-09-09
+        called this door fourteen times in three minutes, so fourteen copies
+        of the plan sat in the conversation and the fifteenth model call was
+        refused by the provider at 129,025 input tokens. The model never
+        needed it: where the door can fix the mechanics on its own,
+        `submit_proposal` calls the same door and files the corrected plan for
+        it. So what comes back is the problems, a one-line summary and the
+        counters. The whole door answer, corrected plan included, is written
+        verbatim to the run log.
+
+        AND THREE ANSWERS IS A COMPILE, FOUR IS A LOOP. Each want gets
+        `MAX_VALIDATE_ATTEMPTS` trips to the door; the fourth returns the
+        door's own last problems and the instruction to file nothing.
         """
         local = self._local_validation(proposal)
         if not target_id:
             return local
+        key = str(target_id)
+        attempts = self._validate_attempts.get(key, 0)
+        if enforce_cap and attempts >= MAX_VALIDATE_ATTEMPTS:
+            return self._door_loop_is_over(key)
         door = self.validate_at_the_door(target_id, proposal)
         if door is None:
             return {**local, "source": "local_mirror"}
-        payload = self._door_problem_payload(door, local)
+        if enforce_cap:
+            attempts += 1
+            self._validate_attempts[key] = attempts
+        problems = self._door_problem_payload(door, local)["problems"]
+        summary = self._problem_summary(problems, ok=bool(door.get("ok")))
+        _LOGGER.info(
+            "validate attempt %d/%d on target %s: %s",
+            attempts,
+            MAX_VALIDATE_ATTEMPTS,
+            key,
+            summary,
+        )
+        if not door.get("ok"):
+            self._last_door_problems[key] = {"problems": problems, "summary": summary}
+            self._log_refusal("validate", key, door)
         return {
             "ok": bool(door.get("ok")),
-            **payload,
-            "corrected_plan": door.get("corrected_plan"),
+            "problems": self._trim_problems(problems),
+            "problem_count": len(problems),
+            "summary": summary,
             "corrected_ok": bool(door.get("corrected_ok")),
+            "corrections": [
+                str(line)[:PROBLEM_TEXT_MAX] for line in (door.get("corrections") or [])
+            ][:PROBLEM_LIMIT],
+            "attempt": attempts,
+            "attempts_left": max(0, MAX_VALIDATE_ATTEMPTS - attempts),
             "source": "bench_validate_door",
-            "note": str(
-                door.get("note")
-                or "Nothing was filed. This call never writes a row."
+            "note": (
+                "Nothing was filed. This call never writes a row. Your plan is "
+                "NOT echoed back here -- you have it; the whole door answer is "
+                "in the run log. When `corrected_ok` is true the door could fix "
+                "the mechanics itself and submit_proposal will file that "
+                "corrected plan for you, so submit rather than asking for it. "
+                f"You have {max(0, MAX_VALIDATE_ATTEMPTS - attempts)} more trips "
+                "to this door on this want."
             ),
         }
+
+    def _door_loop_is_over(self, target_id: str) -> dict[str, Any]:
+        """The fourth trip to the door. The honest refusal, and nothing filed.
+
+        WHAT FORCED IT: on 2026-09-09 a run called the validate door fourteen
+        times in three minutes, filed nothing, and died in the provider. A
+        door that keeps answering teaches a stuck model to keep asking.
+        """
+        last = self._last_door_problems.get(target_id) or {}
+        problems = last.get("problems") or []
+        _LOGGER.warning(
+            "validate door: target %s has spent all %d attempts; filing nothing (%s)",
+            target_id,
+            MAX_VALIDATE_ATTEMPTS,
+            last.get("summary") or "no problems recorded",
+        )
+        return {
+            "ok": False,
+            "error": "validate_attempts_exhausted",
+            "detail": last.get("summary") or "",
+            "terminal": True,
+            "attempts": MAX_VALIDATE_ATTEMPTS,
+            "attempts_left": 0,
+            "problems": self._trim_problems(problems),
+            "problem_count": len(problems),
+            "summary": last.get("summary") or "",
+            "fix": (
+                "File nothing on this want. Fix nothing else: the door has "
+                "already said the same thing three times."
+            ),
+            "message": (
+                "The validate door has answered this plan "
+                f"{MAX_VALIDATE_ATTEMPTS} times and it still has problems. "
+                "Nothing was filed and nothing was counted against you. Stop "
+                "compiling: do not call the door again on this want and do not "
+                "file. The door's own last words are here and verbatim in the "
+                "run log."
+            ),
+        }
+
+    @staticmethod
+    def _problem_summary(problems: list[dict[str, Any]], *, ok: bool = False) -> str:
+        """One line: how many problems, and which codes.
+
+        Codes are counted, not listed one by one: a real answer off the live
+        door carried thirty of the offline mirror's `LOCAL` problems, and a
+        line reading "LOCAL, LOCAL, LOCAL" seventeen times says less than
+        "LOCAL x30". A code seen once names the step it is on.
+        """
+        if not problems:
+            return "no problems" if ok else "the door named no problems"
+        counted: dict[str, list[Any]] = {}
+        for problem in problems:
+            code = str(problem.get("code") or "?")
+            counted.setdefault(code, []).append(problem.get("step_index"))
+        parts: list[str] = []
+        for code, steps in counted.items():
+            if len(steps) == 1:
+                parts.append(f"{code} (step {steps[0]})" if steps[0] else code)
+            else:
+                parts.append(f"{code} x{len(steps)}")
+        return f"{len(problems)} problem(s): " + ", ".join(parts)
+
+    @staticmethod
+    def _trim_problems(problems: Any) -> list[dict[str, Any]]:
+        """The door's problems, capped and with every string bounded.
+
+        A problem is a code, where it is, what is wrong and how to fix it. The
+        detail is the door's own words and is kept; it is only stopped from
+        quoting an entire plan back into the conversation.
+        """
+        if not isinstance(problems, list):
+            return []
+        trimmed: list[dict[str, Any]] = []
+        for problem in problems[:PROBLEM_LIMIT]:
+            if not isinstance(problem, dict):
+                continue
+            row = {
+                key: (value[:PROBLEM_TEXT_MAX] if isinstance(value, str) else value)
+                for key, value in problem.items()
+            }
+            trimmed.append(row)
+        return trimmed
+
+    @staticmethod
+    def _log_refusal(door: str, target_id: str, payload: Any) -> None:
+        """A door refusal, verbatim, in the run log.
+
+        RULE OF THE NIGHT (2026-09-09): the foreman could not read why a bid
+        failed, because the only record of a refusal was the tool result that
+        went to the model and nowhere else. Every refusal -- the free validate
+        door and the filing door both -- is written here in full, as one JSON
+        line, with its codes.
+        """
+        try:
+            body = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            body = str(payload)
+        _LOGGER.warning("REFUSAL %s door target=%s %s", door, target_id, body)
 
     def _local_validation(self, proposal: dict[str, Any]) -> dict[str, Any]:
         schema = self.proposal_schema()
@@ -1201,7 +1589,10 @@ class BookOfHousesTollBenchProvider:
         problems = [
             {
                 "path": ".".join(str(part) for part in error.absolute_path) or "$",
-                "message": error.message,
+                # jsonschema prints the offending INSTANCE in its message, so a
+                # whole plan can arrive as one "problem". The door's words are
+                # kept; only their length is bounded.
+                "message": str(error.message)[:PROBLEM_TEXT_MAX],
             }
             for error in errors
             # finalist_questions has its own gate below, which knows the block
@@ -1504,11 +1895,16 @@ class BookOfHousesTollBenchProvider:
                 passes = self._door_repairs.get(target_id, 0)
                 if passes < MAX_DOOR_REPAIR_PASSES:
                     self._door_repairs[target_id] = passes + 1
+                    payload = self._door_problem_payload(door, local)
+                    self._log_refusal("filing", target_id, door)
                     return {
                         "ok": False,
                         "error": "plan_has_problems",
                         "terminal": False,
-                        **self._door_problem_payload(door, local),
+                        "problems": self._trim_problems(payload["problems"]),
+                        "problem_count": payload["problem_count"],
+                        "summary": self._problem_summary(payload["problems"]),
+                        "corrections": payload["corrections"],
                         "message": (
                             "Nothing was filed and nothing was counted against you. "
                             "The bench listed EVERY problem with this plan at once; "
@@ -1695,6 +2091,20 @@ class BookOfHousesTollBenchProvider:
                         f"{idempotency_key}-{_retry_tag(first.rej)}",
                     )
         except BookOfHousesApiError as error:
+            # RULE OF THE NIGHT (2026-09-09): a refusal the foreman cannot read
+            # is a run nobody can grade. Every filing-door refusal is written
+            # to the run log in full, whatever the harness does with it next.
+            self._log_refusal(
+                "filing",
+                target_id,
+                {
+                    "status": error.status,
+                    "code": error.code,
+                    "rej": error.rej,
+                    "detail": error.message,
+                    "body": getattr(error, "body", None),
+                },
+            )
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
                 if fleet_engaged and reservation is not None:
                     self.fleet.release_reservation(
@@ -1775,7 +2185,42 @@ class BookOfHousesTollBenchProvider:
                     target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
-        return result
+        return self._filing_receipt(result)
+
+    # A filing answer is ids and status. Some benches echo the plan back with
+    # it, and the model already has the plan -- it just wrote it. Echoing it
+    # into the conversation is a second copy of the largest thing in the run.
+    FILING_ECHO_KEYS = (
+        "proposal",
+        "plan",
+        "steps",
+        "steps_original",
+        "pitch_body",
+        "smart_goals",
+        "finalist_questions",
+        "brief",
+        "plan_template",
+        "block_templates",
+        "bid_template",
+        "plan_examples",
+    )
+
+    def _filing_receipt(self, result: Any) -> Any:
+        """What came back from filing: the ids and the status, never the plan."""
+        if not isinstance(result, dict):
+            return result
+        dropped = [key for key in result if key in self.FILING_ECHO_KEYS]
+        if not dropped:
+            return result
+        _LOGGER.info(
+            "Filing receipt: dropped the echoed %s from the tool result "
+            "(it is in the run log)",
+            ", ".join(dropped),
+        )
+        _LOGGER.debug("Filing answer in full: %s", json.dumps(result, default=str))
+        receipt = {key: value for key, value in result.items() if key not in dropped}
+        receipt["echo_omitted"] = dropped
+        return receipt
 
     WITHDRAW_CAUSES = ("cannot_deliver", "other")
     WITHDRAW_REASON_LIMIT = 1000
@@ -1837,7 +2282,7 @@ class BookOfHousesTollBenchProvider:
                 "error": "rules_acceptance_required",
                 "message": "accept_rules must be true when first filing an informed plan",
             }
-        proposals = self.list_proposals().get("proposals") or []
+        proposals = self._owned_proposals()
         original = next((item for item in proposals if item.get("id") == proposal_id), None)
         if original is None or original.get("target_goal_id") != target_id:
             return {"ok": False, "error": "owned_proposal_not_found"}
@@ -2182,7 +2627,49 @@ class BookOfHousesTollBenchProvider:
             payload["current_step"]["deliverable"] = result.get("deliverable")
         self._remember_platform_blocks(step.get("id"), payload)
         self._remember_deliverable(step.get("id"), payload)
+        self._fit_the_step(payload)
         return payload
+
+    def _fit_the_step(self, payload: dict[str, Any]) -> None:
+        """Cap the lists on a step that grow for the life of the deal.
+
+        A step thread, the acts filed on a step and the materials released to
+        a deal all get longer and never shorter, and every one of them is
+        re-read into the conversation on every cycle. The newest rows are kept
+        -- the server sends them oldest first -- and the TRUE COUNT is always
+        published beside them, because "nothing there" and "not shown" must be
+        tellable apart. `owed_replies` is never capped: it is the list of
+        things the bench will refuse the next filing over.
+        """
+        thread = payload.get("step_thread")
+        if isinstance(thread, dict):
+            messages = thread.get("messages")
+            if isinstance(messages, list):
+                thread["messages_total"] = len(messages)
+                thread["messages_omitted"] = max(
+                    0, len(messages) - STEP_THREAD_MESSAGE_LIMIT
+                )
+                if thread["messages_omitted"]:
+                    thread["messages"] = messages[-STEP_THREAD_MESSAGE_LIMIT:]
+                    thread["messages_note"] = (
+                        f"The newest {STEP_THREAD_MESSAGE_LIMIT} messages on this "
+                        f"step; {thread['messages_omitted']} older ones are not "
+                        "shown. Nothing is owed an answer that is not in "
+                        "`unread_from_person` or `unanswered_elsewhere`."
+                    )
+        for key, cap in (
+            ("acts", STEP_ACT_LIMIT),
+            ("declared_acts", STEP_ACT_LIMIT),
+            ("drafts_sent_back", STEP_ACT_LIMIT),
+            ("released_materials", RELEASED_MATERIAL_LIMIT),
+        ):
+            rows = payload.get(key)
+            if isinstance(rows, list) and len(rows) > cap:
+                payload[f"{key}_total"] = len(rows)
+                payload[key] = rows[-cap:]
+                _LOGGER.info(
+                    "current_step: %d of %d %s rows handed over", cap, len(rows), key
+                )
 
     def _remember_deliverable(self, step_id: Any, payload: dict[str, Any]) -> None:
         """Record this step's signed promise and the files already on it.

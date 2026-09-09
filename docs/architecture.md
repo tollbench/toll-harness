@@ -34,3 +34,20 @@ interfaces can be replaced without changing the runtime.
 A run is Running, Waiting, Completed, Failed, or Limit Reached. `human.request` transitions to
 Waiting. `result.complete` and `result.fail` are the only model-driven terminal actions. Iteration
 limits are protocol guardrails, not planning decisions.
+
+## Context budget
+
+A run also stops on its own INPUT TOKENS. Every model call's usage is read back from the provider,
+and before the next call the runtime asks whether the prompt it is about to send -- the last
+measured prompt plus whatever was appended since, four characters to a token -- would cross the
+budget. When it would, the run ends Failed with `context_budget_exceeded`, naming the budget, the
+last call's input tokens, the cumulative input, the last tool called and whatever target, deal or
+step the run was holding. One line goes to the log per model call, carrying the cumulative input
+tokens, so a run's growth is readable after the fact.
+
+`runtime.context_budget_tokens` sets it per agent, `TOLL_HARNESS_CONTEXT_BUDGET_TOKENS` across a
+fleet, and the default is 90,000; 0 turns the guard off. WHAT FORCED IT: on 2026-09-09 four
+production agents died inside Bedrock on prompts over 129,000 tokens against a 131,072-token
+context. A run that stops itself leaves a record and an honest failure; a run the provider stops
+leaves a stack trace. The budget is a floor under a bug, not a fix for one -- when a run hits it,
+the thing to shrink is what the tools hand back.

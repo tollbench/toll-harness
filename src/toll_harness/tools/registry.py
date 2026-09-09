@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import re
 import secrets
 import time
@@ -23,7 +24,18 @@ from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools import sniff as sniffer
 from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
 
+_LOGGER = logging.getLogger("toll_harness.tools")
+
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject]
+
+# WHAT A TOOL HANDS BACK IS SPENT OUT OF THE MODEL'S WINDOW, AND IT NEVER
+# COMES BACK: a tool result stays in the conversation for the rest of the
+# run. Four production agents died inside the provider on 2026-09-09 with
+# prompts over 129,000 tokens against a 131,072-token context, and nothing
+# in the harness had ever said how big a result was. Nothing is truncated
+# here -- a tool owns its own answer -- but every large one is named in the
+# run log, so the next one is found before it is filed against.
+LARGE_RESULT_CHARS = 20_000
 
 # Reserved knowledge namespace where wake.set_timer parks per-run wake times.
 # The market worker reads it every cycle and resumes runs whose time has come.
@@ -116,9 +128,26 @@ class ToolRegistry:
             output = self._tools[name].handler(context, arguments)
             if not isinstance(output, dict):
                 raise TypeError("Tool handler output must be an object")
+            _warn_on_a_large_result(name, output)
             return ToolResult(call_id, name, output)
         except Exception as error:
             return ToolResult(call_id, name, {"error": str(error)}, True)
+
+
+def _warn_on_a_large_result(name: str, output: JsonObject) -> None:
+    """Say so when a tool hands back more than a page of the window."""
+    try:
+        size = len(json.dumps(output, separators=(",", ":"), default=str))
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return
+    if size >= LARGE_RESULT_CHARS:
+        _LOGGER.warning(
+            "%s returned %d characters (~%d tokens), which stays in the "
+            "conversation for the rest of the run",
+            name,
+            size,
+            size // 4,
+        )
 
 
 def _validate(value: Any, schema: JsonObject, path: str = "arguments") -> None:
@@ -907,7 +936,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.read_brief",
             (
                 "Read the current full brief and this agent's bid state for one open "
-                "target. "
+                "target. ONE PROGRAM, AND AN INDEX OF THE REST: `nearest_program` "
+                "carries the nearest worked program IN FULL and `plan_examples` is "
+                "the index of the others (key, title, wants_like, steps, "
+                "approx_tokens). Copy the one that rides the brief; a program the "
+                "run will not copy is a program it does not need to read. "
                 + programs.PROGRAM_FIRST_SENTENCE
                 + " "
                 + blocks.ARGUMENT_PROVENANCE_SENTENCE
@@ -974,13 +1007,18 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "returns EVERY problem at once as problems[{code, detail, step_index, "
                 "field, fix}], where fix is one sentence in plain words and step_index is "
                 "1-based. It writes no row, records no refusal and counts against no cap, "
-                "so call it as often as needed. corrected_plan is the same payload with "
-                "ONLY the mechanical fixes applied (a percentage divided to a fraction, a "
-                "missing default, arithmetic that did not add up) and corrected_ok true "
-                "means that plan passes the real door unchanged -- file it as it stands. "
-                "NO WORDS ARE EVER INVENTED: a blank title, promise, option or message "
-                "stays blank and comes back as its own problem. Without target_id, or "
-                "against an older bench, this is the offline mirror of the schema only."
+                "so call it as often as needed, up to THREE TIMES on one want -- "
+                "three answers is a compile, four is a loop, and the fourth call "
+                "returns the door's last problems and the instruction to file "
+                "nothing. YOUR PLAN IS NOT ECHOED BACK: you have it, and a copy of "
+                "it in every answer is what fills a context window. corrected_ok "
+                "true means the door could fix the mechanics itself (a percentage "
+                "divided to a fraction, a missing default, arithmetic that did not "
+                "add up) and toll_bench.submit_proposal files that corrected plan "
+                "for you -- so submit, do not ask for it back. NO WORDS ARE EVER "
+                "INVENTED: a blank title, promise, option or message stays blank "
+                "and comes back as its own problem. Without target_id, or against "
+                "an older bench, this is the offline mirror of the schema only."
             ),
             _object_schema(
                 {"proposal": {"type": "object"}, "target_id": {"type": "string"}},

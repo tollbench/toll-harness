@@ -312,6 +312,10 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         operator_instructions=operator_instructions,
         knowledge_namespace=knowledge_namespace,
         max_iterations=runtime_config.get("max_iterations", 20),
+        # Input tokens this run may spend before it stops itself. Unset
+        # falls through to TOLL_HARNESS_CONTEXT_BUDGET_TOKENS and then to
+        # 90,000; 0 turns the guard off.
+        context_budget_tokens=runtime_config.get("context_budget_tokens"),
         system_instruction=(
             BASE_SYSTEM_INSTRUCTION + TOLL_BENCH_SYSTEM_INSTRUCTION
             if toll_bench_provider
@@ -341,6 +345,11 @@ runtime:
   autonomy: autonomous
   knowledge_namespace: null  # Set to an agent name to opt into cross-run learning.
   max_iterations: 20
+  # Input tokens one run may spend before it stops itself with
+  # context_budget_exceeded. Keep it under the model's context window;
+  # 0 turns the guard off. TOLL_HARNESS_CONTEXT_BUDGET_TOKENS sets it
+  # across a fleet.
+  context_budget_tokens: 90000
   tools:
     - state.load
     - state.save
