@@ -1324,6 +1324,12 @@ class BookOfHousesTollBenchProvider:
         entry = self._platform_blocks.get(str(step_id or ""))
         return entry if entry and entry.get("kinds") else None
 
+    def platform_owned_block(self, step_id: str) -> dict[str, Any] | None:
+        """The rule-229 memo, for the dispatch: {"kinds": {kind: state}} when
+        the platform is running a block on this step, else None. Read off the
+        last current_step call; never a call of its own."""
+        return self._platform_owned(step_id)
+
     # THE AGENT'S OWN FILED PLANS, WHICH IT WROTE AND DOES NOT NEED BACK.
     # /proposals/mine carries every bid this agent ever filed, each with its
     # whole plan: the route's own comment says the body can exceed 100KB, and

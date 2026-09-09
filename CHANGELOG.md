@@ -8,6 +8,77 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.36.0] - 2026-09-09
+
+**Stepping through the plan costs what a step costs.**
+
+### What forced this release
+
+Steven, 2026-09-09, 19:55: "It's just stepping through the plan. why would
+that cost so much? ... fix that please." Measured on the fleet that morning
+(one fleet unit, its market log, 10:36 local): one deal-step dispatch handed the model a
+10,002-character goal and 32 tools, opened at 12,675 input tokens, and went
+round twenty times at about 13,000 each -- **261,749 input tokens on one
+step**, iteration cap reached, nothing filed. Between 10:39 and 10:43 a
+returned-bid run re-sent a 48,529-character brief and a 213,097-character
+proposals list on every one of its nine calls: 79,500 input tokens a call,
+532,529 for the run. A bid, by then, cost about 9,000 input tokens for a
+whole ten-call draft loop (0.35.4 to 0.35.6). The step was still the old
+road: the runtime's whole instruction sheet, every tool, and every tool
+result glued into the conversation and re-sent on every call.
+
+### Changed
+
+- **The platform's move starts no model run.** Every deal step is read once
+  (the read the dispatch already made) and judged before anything is
+  dispatched: a block the platform filed and will close (rule 229, off the
+  provider's memo), an act waiting on the person's Allow, an act the platform
+  is carrying out, a step the person holds, a standing wait on the outside
+  world (rule 216) -- none of those is the agent's to move. The dispatch logs
+  one line, `step N: the platform's move (<why>); no model call`, counts it in
+  `platform_steps`, and hands the cycle to the next obligation. A due pulse
+  does not wake it. The person's words always win: a message, an owed reply
+  or an act that came back is the agent's move whatever else is standing.
+- **The step ask is small** (`toll_bench.step`). A deal step is asked the way
+  a plan is written: `[stable prefix][tail]`. The prefix is `draft.stable_prefix`
+  byte for byte, so the provider cache is shared with the bid loop. The tail
+  is ONLY this step -- ids, title, ask, promise, deliverable, what changed
+  since the last look, the person's newest words, the acts and their notes,
+  the one thing to produce and the exact call. `the_move` reads which, in the
+  person's order: answer an owed reply (rule 220), answer the person, re-file
+  an act that came back, file a declared act, hand the step back. The model
+  answers with the payload for that one call and the runtime makes it
+  (`propose_act`, `dismiss_reply`, `reply_step_message`, `post_check_in`,
+  `wait_outside`, `file_outcome` -- the last after the 100% pulse unless one
+  stands). A refusal is asked once more with the bench's words verbatim.
+- **The old road is still there**, and the log says why each time it is
+  taken: a step that hands back bytes or a link (rule 230, the run folder
+  and the delivery doors), an approved `outside` act the agent goes and does
+  itself (evidence door), a message debt on a step whose words are not on
+  the current-step payload, and any step the model answers `need_tools` on
+  (a live search, a browser, a file). Two refused asks on one unchanged step
+  state also hand it to the old road next cycle -- a road choice, not a
+  strike rule; it is forgotten the moment the state changes.
+- **Tool results don't live forever** on the road that remains. Before each
+  call after the first, every tool result older than the last call is cut to
+  its first 400 characters plus `(older result, ask again if needed)`; the
+  step payload (`toll_bench.current_step`) is kept whole. The saving is
+  logged per call. The market scan and the bid road are untouched.
+
+### Measured
+
+The same file-outcome step, in `tests/unit/test_step_ask.py`:
+
+| | old road | step ask |
+|---|---|---|
+| opening prompt, before any tool result | ~6,467 tokens (25,871 chars) | **~1,131 tokens** (4,527 chars: 2,119 cacheable prefix + 2,408 tail) |
+| model calls to file the outcome | 1 to 20 | **1** |
+| tool results carried between calls | all of them | **none** |
+
+A platform-run step (a held meeting block, an email act waiting on Allow):
+one `current_step` read, **0 model calls**, where the old road opened at
+12,675 input tokens on the fleet and could go twenty rounds.
+
 ## [0.35.7] - 2026-09-09
 
 **A want the door closed is not asked again until it is posted again.**

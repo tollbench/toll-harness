@@ -165,6 +165,19 @@ approval law regardless of channel. Waiting on a reply does not count against yo
 the
 timeline you signed. Set a timer (wake.set_timer) when the right move is to follow up later."""
 
+# THE PAST IS A SUMMARY (0.36.0). A tool result the model has already read
+# once is not re-sent whole on every later call. What forced it: on the old
+# road every result stayed in the conversation for the rest of the run, so a
+# 48,529-character brief and a 213,097-character proposals list rode every
+# one of nine calls on one fleet unit (2026-09-09, 10:39-10:43) -- 79,500 input tokens
+# a call, 532,529 for the run. Before each call after the first, every tool
+# result older than the last call is cut to its first 400 characters and a
+# note saying so; the model asks again if it needs the rest. The one payload
+# kept whole is the step it is walking (toll_bench.current_step).
+FOLD_KEEP_CHARS = 400
+FOLD_NOTE = "(older result, ask again if needed)"
+KEEP_WHOLE_TOOLS = frozenset({"toll_bench.current_step"})
+
 PROTECTED_WRITE_TOOLS = {
     "email.send",
     "toll_bench.submit_proposal",
@@ -396,6 +409,18 @@ class HarnessRuntime:
 
         for iteration in range(1, self.max_iterations + 1):
             event_cursor = self._inject_live_inputs(run_id, messages, event_cursor)
+            if iteration > 1:
+                messages, folded, before, after = self._fold_older_tool_results(messages)
+                if folded:
+                    _LOGGER.info(
+                        "folded %d older tool result(s) before model call %d: "
+                        "%d -> %d chars (~%d tokens saved)",
+                        folded,
+                        iteration,
+                        before,
+                        after,
+                        max(0, before - after) // 4,
+                    )
             # THE RUN STOPS BEFORE THE PROVIDER DOES. The last call's input
             # token count is this conversation's size; the next call is that
             # plus everything appended since. Crossing the budget ends the run
@@ -558,6 +583,50 @@ class HarnessRuntime:
             usage,
             self.max_iterations,
         )
+
+    @staticmethod
+    def _fold_older_tool_results(
+        messages: list[ModelMessage],
+    ) -> tuple[list[ModelMessage], int, int, int]:
+        """Every tool result the model already read, cut to its first 400
+        characters plus a note. The LAST message is never touched: it holds
+        the results the model has not seen yet. Returns the new list, how
+        many were folded, and the characters before and after."""
+        import json
+
+        folded = 0
+        before = 0
+        after = 0
+        out: list[ModelMessage] = []
+        for message in messages[:-1]:
+            if message.role != "user":
+                out.append(message)
+                continue
+            changed = False
+            blocks: list[JsonObject] = []
+            for block in message.content:
+                output = block.get("output") if block.get("type") == "tool_result" else None
+                if (
+                    output is None
+                    or block.get("name") in KEEP_WHOLE_TOOLS
+                    or (isinstance(output, dict) and output.get("note") == FOLD_NOTE)
+                ):
+                    blocks.append(block)
+                    continue
+                text = json.dumps(output, separators=(",", ":"), default=str)
+                if len(text) <= FOLD_KEEP_CHARS:
+                    blocks.append(block)
+                    continue
+                summary = {"older_result": text[:FOLD_KEEP_CHARS], "note": FOLD_NOTE}
+                before += len(text)
+                after += len(json.dumps(summary, separators=(",", ":")))
+                blocks.append({**block, "output": summary})
+                folded += 1
+                changed = True
+            out.append(ModelMessage(message.role, blocks) if changed else message)
+        if messages:
+            out.append(messages[-1])
+        return out, folded, before, after
 
     @staticmethod
     def _conversation_chars(messages: list[ModelMessage]) -> int:

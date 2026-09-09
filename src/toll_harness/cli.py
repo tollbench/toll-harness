@@ -49,6 +49,12 @@ from toll_harness.operator.channel import OperatorChannel
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench.draft import DraftLoop
+from toll_harness.toll_bench.step import (
+    ROAD_AGENTIC,
+    StepAsk,
+    platform_move,
+    what_changed,
+)
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
 from toll_harness.worker import install_market_worker, market_worker_status
 
@@ -984,6 +990,20 @@ def _deal_step_is_idle(
     return _deal_step_fingerprint(step_payload) == memo
 
 
+def _platform_owned_block(resources: Any, step_id: str) -> dict[str, Any] | None:
+    """The provider's rule-229 memo for this step, fed by the current_step read
+    just made. A provider without the memo (a fake, an older bench) says None
+    and the act states on the payload decide alone."""
+    reader = getattr(getattr(resources, "toll_bench", None), "platform_owned_block", None)
+    if not callable(reader) or not step_id:
+        return None
+    try:
+        owned = reader(step_id)
+    except Exception:  # noqa: BLE001 - a memo read must never stop the cycle
+        return None
+    return owned if isinstance(owned, dict) else None
+
+
 def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the single highest-priority obligation to handle this cycle.
 
@@ -1290,33 +1310,56 @@ def _process_market_attention(
                         "retry_after_seconds": 300.0,
                         "run": None,
                     }
-    # Idle deal steps: skip without a model run any step whose payload is
-    # byte-identical to what the model already inspected and left untouched,
-    # unless a progress pulse is due (r100 cadence still gets its one run per
-    # window -- that run doubles as the retry chance for a model that misread
-    # its move). Skipped steps drop out of this cycle's contention so plan
-    # requests and message debts are not starved behind a person's silence.
+    # WHOSE MOVE IS IT, before any model run. Every deal step is read ONCE
+    # here (the same current_step read the dispatch makes anyway, H6) and
+    # judged twice:
+    #
+    # 1. THE PLATFORM'S MOVE (0.36.0). A block the platform filed and will
+    #    close (rule 229), an act waiting on the person's Allow, an act the
+    #    platform is carrying out, a step the person is reviewing, a declared
+    #    wait on the outside world (rule 216): nothing of the agent's moves
+    #    it, and no model run starts. Before this, the step ran the whole
+    #    agentic road to find that out -- one fleet unit spent 261,749 input tokens
+    #    over twenty calls on one such step on 2026-09-09 and filed nothing.
+    #    A pulse coming due does NOT wake it: the ball is not the agent's.
+    # 2. IDLE: byte-identical to what the model already inspected and left
+    #    untouched, unless a progress pulse is due (r100 cadence still gets
+    #    its one run per window -- that run doubles as the retry chance for a
+    #    model that misread its move).
+    #
+    # Skipped steps drop out of this cycle's contention so plan requests and
+    # message debts are not starved behind a person's silence.
     prefetched_steps: dict[str, dict[str, Any]] = {}
     _remaining: list[dict[str, Any]] = []
     _idle_step_ids: list[str] = []
+    _platform_step_ids: list[str] = []
+    _read_step = getattr(resources.toll_bench, "current_step", None)
     for item in obligations:
         step_id = str(item.get("step_id") or "")
         deal_id = str(item.get("deal_id") or "")
-        if (
-            item.get("kind") == "deal_step"
-            and deal_id
-            and step_id in _IDLE_STEP_MEMO
-        ):
-            try:
-                payload = resources.toll_bench.current_step(deal_id)
-            except Exception as error:  # noqa: BLE001 - a probe must not kill the cycle
-                _LOGGER.warning(
-                    "current_step idle probe failed for deal %s: %s", deal_id, error
-                )
-                payload = None
+        if item.get("kind") == "deal_step" and deal_id and callable(_read_step):
+            payload = prefetched_steps.get(deal_id)
+            if payload is None:
+                try:
+                    payload = _read_step(deal_id)
+                except Exception as error:  # noqa: BLE001 - a probe must not kill the cycle
+                    _LOGGER.warning(
+                        "current_step probe failed for deal %s: %s", deal_id, error
+                    )
+                    payload = None
             if payload is not None:
                 prefetched_steps[deal_id] = payload
-                if _deal_step_is_idle(step_id, payload):
+                why = platform_move(payload, _platform_owned_block(resources, step_id))
+                if why:
+                    _number = (payload.get("current_step") or {}).get("number")
+                    _LOGGER.info(
+                        "step %s: the platform's move (%s); no model call",
+                        _number if _number is not None else step_id,
+                        why,
+                    )
+                    _platform_step_ids.append(step_id)
+                    continue
+                if step_id in _IDLE_STEP_MEMO and _deal_step_is_idle(step_id, payload):
                     _idle_step_ids.append(step_id)
                     continue
         _remaining.append(item)
@@ -1331,7 +1374,7 @@ def _process_market_attention(
     # Forget steps that left the attention feed (ended, approved, reassigned).
     _live_step_ids = {
         str(item.get("step_id") or "") for item in obligations
-    } | set(_idle_step_ids)
+    } | set(_idle_step_ids) | set(_platform_step_ids)
     for _sid in [sid for sid in _IDLE_STEP_MEMO if sid not in _live_step_ids]:
         _IDLE_STEP_MEMO.pop(_sid, None)
     deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
@@ -1377,15 +1420,19 @@ def _process_market_attention(
     obligation = _select_obligation(obligations)
     if obligation is None:
         # Every obligation was deferred (e.g. a lone deal step blocked on a
-        # parked email send). Nothing to hand the model this cycle, so the
-        # loop has no reason to come back at machine speed.
-        return {
+        # parked email send) or is the platform's to move. Nothing to hand
+        # the model this cycle, so the loop has no reason to come back at
+        # machine speed.
+        _nothing: dict[str, Any] = {
             "ok": True,
             "reachability": reachability,
             "attention_count": len(obligations),
             "retry_after_seconds": 60.0,
             "run": None,
         }
+        if _platform_step_ids:
+            _nothing["platform_steps"] = len(_platform_step_ids)
+        return _nothing
     kind = str(obligation.get("kind") or "")
     # RULE 241: the informed plan is built up in pieces too, at the same door.
     if kind == "file_informed_plan" and _draft_door_available(resources):
@@ -1425,7 +1472,7 @@ def _process_market_attention(
     # skipping) fetching it. Best-effort: on failure the field is null and the
     # instruction tells the model to fetch it itself.
     step_state = None
-    if kind in ("deal_step", "unanswered_message"):
+    if kind in _STEP_ASK_KINDS:
         deal_id = str(obligation.get("deal_id") or "")
         step_state = prefetched_steps.get(deal_id)
         if deal_id and step_state is None:
@@ -1435,6 +1482,17 @@ def _process_market_attention(
                 _LOGGER.warning(
                     "current_step prefetch failed for deal %s: %s", deal_id, error
                 )
+    # THE STEP ASK (0.36.0): one small question and one call, on the step the
+    # dispatch just read. The old road below is the fallback, and the log
+    # says why whenever it is taken.
+    if isinstance(step_state, dict) and _step_ask_available(resources):
+        asked = _the_step_ask(
+            resources, obligation, step_state, reachability, len(obligations), threshold
+        )
+        if asked is not None:
+            if _platform_step_ids:
+                asked["platform_steps"] = len(_platform_step_ids)
+            return asked
     goal = (
         instruction
         + _GOAL_COMMON_TAIL
@@ -1479,6 +1537,8 @@ def _process_market_attention(
     }
     if _stalled:
         payload["stalled_obligations"] = _stalled
+    if _platform_step_ids:
+        payload["platform_steps"] = len(_platform_step_ids)
     postcondition_error = None
     if ok and kind == "file_informed_plan":
         ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
@@ -1759,6 +1819,126 @@ def _file_the_informed_plan_from_draft(
         resources,
         obligation,
         postcondition_error or str(outcome.get("error") or "draft_loop_failed"),
+        threshold=threshold,
+    )
+    payload["breaker"] = breaker
+    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+    return payload
+
+
+# THE STEP ASK (0.36.0). The obligation kinds that are one move on one step,
+# and so are asked the way a plan is written: a cacheable prefix, a small
+# tail carrying only this step, one JSON answer, one bench call. The old
+# agentic road stays for the moves the ask cannot shape; `_the_step_ask`
+# returns None for those and the dispatch below carries on as before.
+_STEP_ASK_KINDS: frozenset[str] = frozenset(
+    {"deal_step", "unanswered_message", "draft_sent_back"}
+)
+# step_id -> (fingerprint of the step state, consecutive step-ask failures on
+# it). Two refused asks on one unchanged state hand the step to the old road
+# next cycle: the ask is cheap, and a move it cannot shape must not stall the
+# step behind a refusal it will get again. Not a strike rule -- a road choice,
+# forgotten the moment the state changes or an ask lands.
+_STEP_ASK_FAILURES: dict[str, tuple[str, int]] = {}
+_STEP_ASK_TRIES = 2
+
+
+def _step_ask_available(resources: Any) -> bool:
+    provider = getattr(resources, "toll_bench", None)
+    model = getattr(getattr(resources, "runtime", None), "model", None)
+    return bool(
+        provider is not None
+        and model is not None
+        and callable(getattr(model, "invoke", None))
+        and callable(getattr(provider, "file_outcome", None))
+        and callable(getattr(provider, "reply_step_message", None))
+    )
+
+
+def _the_step_ask(
+    resources: Any,
+    obligation: dict[str, Any],
+    step_state: dict[str, Any],
+    reachability: dict[str, Any],
+    attention_count: int,
+    threshold: int,
+) -> dict[str, Any] | None:
+    """One step, one small ask, one call. None means: the old road."""
+    kind = str(obligation.get("kind") or "")
+    step_id = str(obligation.get("step_id") or "")
+    current = step_state.get("current_step") or {}
+    number = current.get("number") if current.get("number") is not None else step_id
+    if kind != "deal_step" and step_id and str(current.get("id") or "") != step_id:
+        _LOGGER.info(
+            "step %s: the %s is on another step than the one working; the old road",
+            number, kind,
+        )
+        return None
+    fingerprint = _deal_step_fingerprint(step_state)
+    tried = _STEP_ASK_FAILURES.get(step_id)
+    if tried and tried[0] == fingerprint and tried[1] >= _STEP_ASK_TRIES:
+        _LOGGER.info(
+            "step %s: the small ask was refused %d times on this state; the old road",
+            number, tried[1],
+        )
+        return None
+    previous = _IDLE_STEP_MEMO.get(step_id)
+    try:
+        changed = what_changed(
+            json.loads(previous) if previous else None, json.loads(fingerprint)
+        )
+    except ValueError:
+        changed = []
+    target_id = str(
+        obligation.get("target_id")
+        or (step_state.get("deal") or {}).get("target_goal_id")
+        or ""
+    )
+    brief = _brief_for_the_loop(resources, target_id) if target_id else {}
+    ask = StepAsk(resources.runtime.model, resources.toll_bench)
+    outcome = ask.run(
+        obligation,
+        step_state,
+        brief=brief,
+        act_kinds=_act_kinds_for_the_loop(resources),
+        changed=changed,
+        pulse_due=_deal_step_pulse_due(step_state),
+    )
+    if outcome.get("road") == ROAD_AGENTIC:
+        _LOGGER.info("step %s: %s; the old road", number, outcome.get("why"))
+        return None
+    ok = bool(outcome.get("ok"))
+    payload: dict[str, Any] = {
+        "ok": ok,
+        "reachability": reachability,
+        "attention_count": attention_count,
+        "dispatch": {
+            "kind": f"{kind}_step_ask",
+            "move": outcome.get("move"),
+            "call": outcome.get("call"),
+            "model_calls": outcome.get("model_calls"),
+            "prompt_chars": outcome.get("prompt_chars"),
+            "prefix_chars": outcome.get("prefix_chars"),
+            "tool_count": 0,
+        },
+        "step_ask": outcome,
+        "run": None,
+    }
+    if ok:
+        _STEP_ASK_FAILURES.pop(step_id, None)
+        if step_id:
+            # What the model was shown, same as the old road: an identical
+            # fetch next cycle is the step waiting, not new work.
+            _IDLE_STEP_MEMO[step_id] = fingerprint
+        _breaker_reset(obligation)
+        return payload
+    count = tried[1] + 1 if tried and tried[0] == fingerprint else 1
+    if step_id:
+        _STEP_ASK_FAILURES[step_id] = (fingerprint, count)
+    breaker = _breaker_record_failure(
+        resources,
+        obligation,
+        str(outcome.get("error") or "step_ask_refused"),
         threshold=threshold,
     )
     payload["breaker"] = breaker
