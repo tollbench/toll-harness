@@ -477,12 +477,12 @@ def test_there_is_no_strike_count_only_the_bench_s_own_bound():
     ]
     model = _model(
         _OUTLINE,
-        {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}]},
-        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
-        {"patches": [{"path": "pitch_title", "value": "C"}]},
-        # Six answers that never touch the path the bench named. The old three
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}, {"path": "pitch_body", "value": "and more"}]},
+        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}, {"path": "pitch_body", "value": "and more"}]},
+        {"patches": [{"path": "pitch_title", "value": "C"}, {"path": "pitch_body", "value": "and more"}]},
+        # Answers (two patches each, so none is re-aimed) that never touch the path the bench named. The old three
         # strike rule stopped here; now the bench's rounds do.
-        *[{"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]}
+        *[{"patches": [{"path": "steps.1.outcome_promise", "value": "B."}, {"path": "pitch_body", "value": "and more"}]}
           for _ in range(20)],
     )
 

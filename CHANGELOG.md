@@ -8,6 +8,19 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.6] - 2026-09-09
+
+**The asked path is the path, and an empty answer gets one more ask.**
+
+- In the fix loop, a single patch that comes back for a path other than the
+  one the bench named is filed at the named path. Cindy (Kimi) was asked for
+  `steps.1.outcome_promise` sixty rounds running on 2026-09-09 and answered
+  `steps.2.outcome_promise` every time, one step off, until the person picked
+  someone else. Two or more patches are left as they are.
+- An empty answer to a fix ask is asked once more, saying so, before the loop
+  gives the draft up. Two agents lost ten-round drafts to one empty reply the
+  same afternoon.
+
 ## [0.35.5] - 2026-09-09
 
 **The model's view of its own bids is small, and the brief comes with its

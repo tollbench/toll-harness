@@ -161,6 +161,11 @@ REPEATED_FIX_INSTRUCTION = (
     "value, or the same idea in the shape the code asks for. If the path is "
     "a list, send the whole list, not one entry of it.\n"
 )
+EMPTY_ANSWER_INSTRUCTION = (
+    "NOTHING CAME BACK LAST TIME. Answer with ONE patch for the path named in "
+    "`fix_this`, as JSON: {\"patches\": [{\"path\": <that path>, \"value\": ...}]}. "
+)
+
 
 FIX_INSTRUCTION = (
     "The bench read the plan and named ONE thing to change. Change exactly that "
@@ -1189,16 +1194,65 @@ class DraftLoop:
             last_named = (path, code)
             patches = read_patches(self._ask(instruction, payload, f"fix {path or '?'}"))
             if not patches:
+                # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
+                # fenced reply with nothing in it, a refusal, a timeout); twice
+                # is the model's answer. Live on 2026-09-09 two agents lost a
+                # whole draft, ten rounds in, to one empty reply.
+                self.log.info(
+                    "draft loop %s target=%s: nothing came back for %s; asking once more",
+                    kind,
+                    target_id,
+                    path,
+                )
+                patches = read_patches(
+                    self._ask(EMPTY_ANSWER_INSTRUCTION + instruction, payload,
+                              f"fix {path or '?'} (again)")
+                )
+            if not patches:
                 self.log.warning(
-                    "draft loop %s target=%s: no patch came back for %s; "
+                    "draft loop %s target=%s: no patch came back for %s twice; "
                     "stopping this draft",
                     kind,
                     target_id,
                     path,
                 )
                 break
+            patches = self._aim(patches, path, kind, target_id)
             answer = self._patch(target_id, kind, patches, f"fix {path or '?'}")
         return answer
+
+    def _aim(
+        self, patches: list[dict[str, Any]], path: str, kind: str, target_id: str
+    ) -> list[dict[str, Any]]:
+        """THE ASKED PATH IS THE PATH. The bench named one path; a single patch
+        that came back for a different one is the answer to the question that
+        was asked, filed where it was asked. Live on 2026-09-09 Cindy was asked
+        for `steps.1.outcome_promise` sixty rounds running and answered
+        `steps.2.outcome_promise` every time -- the same words, one step off,
+        until the person picked someone else. Only the same field at another
+        address moves; two or more patches, a parent path, or a different
+        field are left as they are.
+        """
+        if not path or len(patches) != 1:
+            return patches
+        sent = str(patches[0].get("path") or "")
+        if sent == path:
+            return patches
+        # Only the SAME FIELD at another address moves. A patch on a parent
+        # of the asked path (`finalist_questions` for
+        # `finalist_questions.0.0`) is the whole list coming back, which is
+        # right; a patch on some other field is another change, and the
+        # bench's next answer says whether it landed.
+        if path.startswith(sent + ".") or sent.rsplit(".", 1)[-1] != path.rsplit(".", 1)[-1]:
+            return patches
+        self.log.info(
+            "draft loop %s target=%s: the patch for %s is filed at the asked path %s",
+            kind,
+            target_id,
+            sent,
+            path,
+        )
+        return [{"path": path, "value": patches[0].get("value")}]
 
     # -- the whole thing ---------------------------------------------------
     def run(
