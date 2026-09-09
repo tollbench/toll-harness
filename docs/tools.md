@@ -57,6 +57,63 @@ problems go back to the model for ONE repair pass; a `corrected_ok` plan is file
 A bench below contract 3.0 is never asked for the route, and the local schema mirror is the whole
 pre-check there.
 
+Find the nearest program, then change what differs (Steven, 2026-09-09: "the test is can the AI
+use strategy to build the correct plan that can execute"). The brief carries `plan_examples`:
+worked programs, each `{key, title, wants_like, proposal}`, and each proposal a COMPLETE bid that
+already passes the validate door. The move is not to compose a plan out of the kit of parts. It is
+to pick the program nearest this want, copy its `proposal` whole, change only what the want makes
+different -- the words, the recipient, the numbers -- keep its shape, compile it at the validate
+door and file once. The pick is made deterministically before the model ever sees the brief:
+`programs.nearest_program(brief)` scores token overlap of the want against each program's
+`wants_like` (two points a word) and `title` (one point a word), breaks a tie toward the SHORTER
+program and then by key, and rides the brief inline as `nearest_program` with one sentence in
+`program_to_copy`. Both keys are always present; `nearest_program` is null when the bench
+publishes no examples or nothing overlaps. What the model then did with it is logged once per
+filing by `programs.diff_from_program`: `program 12: copied; kept 41/48 fields, changed 6, added
+1, removed 1; off-shape 0`. Words the plan is supposed to rewrite (pitch, titles, promises,
+messages, odds, money) are excluded from `off-shape`, so the verdict reads `copied` or `composed`
+off the SHAPE alone.
+
+A program's work is a `calls` act: `{"kind": "calls", "title": ..., "drafts": {name: words},
+"runs": [...]}`. A run is EITHER a call or a wait, never both. A call names a `tool` (a registry
+verb key, `composio:<service>/<TOOL>`, `key:<service>/<action>`, `mcp:<server>/<tool>`, or one of
+`platform.notify`, `platform.draft`, `platform.contact`, `platform.research`), the `row` -- the ID
+of the `connect_account` block on THIS step whose account it runs on, and a platform tool carries
+none -- its `args`, and `each` when it runs once per item of a list it binds. A wait names `wait`
+`{event, of, timeout_hours}` and waits on a run ABOVE it. Every argument is a literal or a declared
+source, and there are four heads and no fifth: `{"$from": "person.<question id>"}`, `{"$from":
+"<a run ABOVE this one>[.field]"}`, `{"$from": "draft.<name>"}` declared in the act's own `drafts`,
+and `{"$from": "item[.field]"}` inside a run that declares `each`. The bid door's fourth question,
+`REJ-41` (argument_provenance), refuses any other source and refuses a tool whose row is missing on
+the step. `blocks.calls_problems` mirrors those checks locally -- an unknown source, a run reading
+a run below it, an undeclared draft, `item` with no `each`, a missing or unknown row, a platform
+tool carrying a row, a typed address in a recipient field, a `{{ handlebars }}` binding, a wait
+that is also a call -- so a bad program is caught before the one bid this want allows is spent on
+it. It judges no TOOL and never matches a row to one: `composio:`, `key:` and `mcp:` name somebody
+else's catalog, a plain verb names the bench's own, and which service carries which tool is a
+family table that lives on the server (0.31.0 learned that the hard way).
+
+The person may answer the contact question with `{"research": true, "brief": "..."}` instead of
+picking anybody, and the brief then carries `contact_research: {question_id, brief}`. The
+recipient is not on the form and never will be, so `blocks.bind_contact_research` binds the
+outreach to the plan's OWN research run -- a `platform.research` (or `platform.contact`) run whose
+`contact` the send reads, `to: {"$from": "<that run>.contact"}` -- or, on a legacy email act, sets
+`contact_from: "research"` beside an empty `contact_ref` and drops any address the act was
+carrying. It never WRITES a research run the plan does not have: that run's own arguments are the
+research nobody has done yet, and a run the harness filled in with the question instead of the
+answer is refused for arguments this package made up. No picker is added on such a want, at bid time or on a `REJ-40` repair: the person has
+already said they have nobody to pick. `REJ-40` and `REJ-41` off the door are repaired once with
+that binding and re-filed once; with nothing to bind, the door's own sentence comes back
+non-terminal and nothing is re-filed.
+
+When the person picked more than one contact (`selected_contacts` on the brief, N > 1), one
+outreach has to become N. The decision, and it is one rule per shape: a `calls` act's outreach run
+takes the `each` form -- one act, one run, N executions -- and a LEGACY act (`email`) is filed once
+per contact instead, each copy carrying that contact's own `contact_ref`. Why not one rule for
+both: a legacy act has no `each` field to set, and turning it into a `calls` act would mean the
+harness inventing a tool key -- the one thing this package refuses to judge and must therefore
+refuse to write. Copying an act the door already accepts changes nothing except who it goes to.
+
 A connection is not a step (rule 236). It is a `connect_account` ROW inside the step that uses it: the card is the account rows, then what the step does, then one button that stays asleep until every row is settled. The meeting plan is ONE step -- a Google Calendar row, a Gmail row and the meeting block on a single card. Copy `block_templates[<kind>]` from the brief whole rather than composing the steps yourself; a new plan that lifts a registry connector back into a GRANT step of its own is refused `REJ-38`, and a block whose connection nothing on its step opens is refused `REJ-35`. Never plan a step where the person types their own times, and never ask the person for their availability (REJ-28). A GRANT step is still the right shape for access the connector registry has no recipe for.
 
 When a plan declares no act of a required kind, or declares the block with no grant before it,

@@ -18,7 +18,7 @@ from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.types import JsonObject, RunStatus, ToolDefinition, ToolResult
 from toll_harness.email.base import EmailProvider
 from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
-from toll_harness.toll_bench import blocks
+from toll_harness.toll_bench import blocks, programs
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools import sniff as sniffer
 from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
@@ -907,7 +907,13 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.read_brief",
             (
                 "Read the current full brief and this agent's bid state for one open "
-                "target. THE BRIEF CARRIES A FORM, NOT A PLAN (contract 3.0, rule 228 "
+                "target. "
+                + programs.PROGRAM_FIRST_SENTENCE
+                + " "
+                + blocks.ARGUMENT_PROVENANCE_SENTENCE
+                + " "
+                + blocks.CONTACT_RESEARCH_SENTENCE
+                + " THE BRIEF CARRIES A FORM, NOT A PLAN (contract 3.0, rule 228 "
                 "amended). plan_template is a blank SKELETON: the fewest steps this band "
                 "allows, mechanics filled, every agent-owned field an explicit \"\" or "
                 "null. block_templates is the catalog {kind: [steps]} to pull from when "
@@ -1002,7 +1008,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ToolDefinition(
             "toll_bench.submit_proposal",
             (
-                "File one final sealed proposal. Read the live protocol and brief, then "
+                "File one final sealed proposal. "
+                + programs.PROGRAM_FIRST_SENTENCE
+                + " "
+                + blocks.ARGUMENT_PROVENANCE_SENTENCE
+                + " Read the live protocol and brief, then "
                 "validate the exact proposal first with toll_bench.validate_proposal and "
                 "this target_id -- that door is free, files nothing and lists every "
                 "problem at once. THE BRIEF'S TEMPLATE IS A FORM (contract 3.0, rule 228 "

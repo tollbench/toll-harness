@@ -8,6 +8,135 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.33.0] - 2026-09-09
+
+**Find the nearest program, then change what differs. Twelve worked programs
+on a brief are twelve things to read and nothing to do, so the pick is made
+here and the diff is logged.**
+
+Steven, 2026-09-09: "the test is can the AI use strategy to build the correct
+plan that can execute", and agents should "use our kit of parts to code (it's
+just a JSON file)". The bench now publishes `plan_examples` on every brief --
+`[{key, title, wants_like, proposal}]`, each proposal a COMPLETE bid that
+already passes the validate door -- plus a `calls` act kind whose runs name a
+tool, the account row it runs on and where every argument came from, and a
+`contact_research` answer for the person who cannot pick a recipient because
+nobody has found them yet.
+
+**What forced this release.** A model handed twelve programs and told to use
+them reads them, absorbs the flavour and writes its own plan anyway -- and
+from the outside that run is indistinguishable from one that copied a program
+and changed the words. Both file a plan; both cite the examples. So the pick
+is made deterministically BEFORE the model sees the brief, and what the model
+did with it is logged as a diff against that program. One line, and the
+foreman knows which run happened.
+
+### Added
+
+- **`programs.nearest_program(brief)` picks the program and rides the brief.**
+  Token overlap of the want against each program's `wants_like` (two points a
+  word) and its `title` (one point a word); a TIE GOES TO THE SHORTER PROGRAM
+  -- fewer steps is less to get wrong -- and a tie still standing is broken by
+  the program key, so two identical briefs never pick differently. The chosen
+  program rides `read_brief` inline as `nearest_program`, in front of the
+  other eleven, with one sentence in `program_to_copy` saying which words it
+  matched and what to do with it. BOTH KEYS ARE ALWAYS PRESENT: `null` and a
+  fallback sentence when the bench publishes no examples or nothing overlaps,
+  because "no program is near this want" and "nobody looked" have to be
+  tellable apart. An invented pick would be worse than no pick.
+- **`programs.diff_from_program(proposal, example)` grades the filing.** One
+  log line per bid: `program 12: copied; kept 41/48 fields, changed 6, added
+  1, removed 1; off-shape 0`, plus the same as one JSON line for a machine.
+  Leaf-by-leaf against the PROGRAM's own fields; the words every plan is
+  supposed to rewrite (pitch, strategy, titles, promises, messages, odds,
+  money) are excluded from `off-shape`, so `copied` and `composed` read off
+  the SHAPE alone -- its steps, its acts, its rows, its question formats.
+- **The program-first move leads every planning surface**: the runtime's Toll
+  Bench instruction, both CLI standing instructions, `toll_bench.read_brief`
+  and `toll_bench.submit_proposal` in the tool registry, and `docs/tools.md`.
+  Four beats: pick the nearest program, copy its proposal WHOLE, change only
+  what this want makes different, compile at the validate door and file once.
+- **`blocks.calls_problems()` mirrors the bid door's fourth question
+  (`REJ-41`, argument_provenance)** so a bad program is caught before the one
+  bid this want allows is spent on it. A run is EITHER a call or a wait, never
+  both; a call names a `tool`, the `row` -- the ID of the `connect_account`
+  block on THIS step, and a platform tool carries none -- its `args`, and
+  `each` when it runs once per item of a list it binds; a wait names
+  `{event, of, timeout_hours}` and waits on a run ABOVE it. Every argument is
+  a literal or a declared source, and there are four heads and no fifth:
+  `person.<question id>` (checked against the bid's own question ids when they
+  are readable), `<a run ABOVE this one>[.field]`, `draft.<name>` declared in
+  the act's own `drafts`, and `item` inside a run that declares `each`.
+  `$from` is the whole argument or none of it, and a `{{ handlebars }}`
+  binding inside a string is read the same way. A typed address in a recipient
+  field is refused on any tool that is not a platform verb.
+- **No tool is ever judged, and no row is ever matched to one.** `composio:`,
+  `key:` and `mcp:` name somebody else's catalog and a plain verb names the
+  bench's own; which service can carry which tool is a FAMILY table that lives
+  on the server. The mirror reads shape, order and provenance -- a row's id is
+  on the step or it is not -- and nothing else. 0.31.0 is why: a local copy of
+  a fact the server owns refused the correct plan at home for a day.
+- **`contact_research` (rule 240): the person may hand the question back.**
+  They answer the contact question with `{"research": true, "brief": "..."}`
+  and pick nobody, and the brief carries `{question_id, brief}` -- always
+  present, null when they picked or said nothing. `blocks.bind_contact_research`
+  then binds the outreach to the plan's OWN research run
+  (`to: {"$from": "<a platform.research run above it>.contact"}`), or sets
+  `contact_from: "research"` on a legacy email act and drops any address it
+  was carrying -- on a want where nobody has been found yet, an address in the
+  plan can only be invented. No picker is added on such a want, at bid time or
+  on a `REJ-40` repair: they have already declined to pick. `read_brief` also
+  carries `contact_research_note`, always present and empty when they picked.
+- **`REJ-40` and `REJ-41` off the door are repaired once**, the same shape as
+  0.32.0's: the refusal is logged verbatim, the binding goes on, the bid is
+  re-filed ONCE with a `-rej40` / `-rej41` suffix. With nothing to bind -- a
+  want the person did not hand back, a plan whose recipient the harness cannot
+  find -- the door's own sentence comes back non-terminal
+  (`error: "argument_provenance"`, with `ARGUMENT_PROVENANCE_SENTENCE` as the
+  fix) and NOTHING is re-filed.
+- **`blocks.spread_over_contacts()`: N people, one outreach.** THE DECISION,
+  and it is one rule per shape. A `calls` act's outreach run takes the `each`
+  form -- one act, one run, N executions, bound to the picker question the
+  person answered (`{"$from": "person.<id>"}`, because `each` BINDS a list) --
+  and a LEGACY act (`email`) is filed once PER CONTACT instead, each copy
+  carrying that contact's own `contact_ref` and `with_name`. Why not one rule
+  for both: a legacy act has no `each` field to set, and turning it into a
+  `calls` act would mean the harness inventing tool keys and row ids, the two
+  things this package refuses to judge and must therefore refuse to write.
+  Copying an act the door already accepts changes nothing about it except who
+  it goes to. Runs at bid time and again on the informed plan, which is the
+  filing that knows how many people were actually picked.
+
+### Changed
+
+- `merge_required_blocks` takes `contact_research=` and closes both picker
+  gates when the person handed the question back.
+- `read_brief` carries three new always-present keys: `nearest_program`,
+  `program_to_copy`, `contact_research_note`.
+
+### What this package will not write
+
+A `platform.research` run the plan does not have. Its arguments ARE the
+research -- `summary`, `source_url`, `found_contact` -- and the research has
+not been done, so a run the harness filled in with the person's question
+instead of an answer would be refused at the door for arguments this package
+made up. Where a `calls` act carries no research run to bind to, the binding
+is left undone and the door's own words are the answer.
+
+### Known drift with the bench, 2026-09-09
+
+`contact_from: "research"` is published in the brief's own contact-picker note
+(`want_blocks._CONTACT_TITLE_NOTE`) as the legacy-act answer to rule 240, but
+no bench code reads that field yet. The harness writes it because the brief
+tells agents to; if the door lands on a different field name, this is the one
+line to change.
+
+452 tests pass (was 378), ruff clean. Verified against the bench's own
+`app/services/act_kinds/calls.py`, `app/services/plan_examples.py` and
+`bench/routes.py:_contact_research` on staging: the row is a block id, `each`
+binds a list, a wait is its own run, a draft must be declared, and
+`selected_contacts` entries are `{contact_ref, label}`.
+
 ## [0.32.0] - 2026-09-09
 
 **Who is it going to. The brief was holding a question for the agent, this

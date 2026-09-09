@@ -1295,6 +1295,7 @@ def merge_contact_picker(
     notes: Any = None,
     *,
     reaches_a_person: bool | None = None,
+    research_asked: bool = False,
 ) -> tuple[dict[str, Any], str | None]:
     """Put the brief's own picker on a bid whose plan reaches a person.
 
@@ -1307,7 +1308,15 @@ def merge_contact_picker(
     ``reaches_a_person`` overrides the second gate for the one caller that
     does not need to ask: the DOOR, which has just refused this plan REJ-40
     and is the authority on a lane table that lives on the server.
+
+    ``research_asked`` closes both gates: this person answered the contact
+    question with "find them for me" (``contact_research`` on the brief), so
+    putting a picker on the bid would ask them again for the one thing they
+    have already said they do not have. The recipient is bound to a research
+    run instead -- ``bind_contact_research`` below.
     """
+    if research_asked:
+        return proposal, None
     if not (
         steps_reach_a_person(steps)
         if reaches_a_person is None
@@ -1433,6 +1442,7 @@ def merge_required_blocks(
     block_templates: Any = None,
     bid_template: Any = None,
     bid_template_notes: Any = None,
+    contact_research: Any = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Fill in the brief's form: every template step the plan is missing.
 
@@ -1468,7 +1478,13 @@ def merge_required_blocks(
     merged = proposal if steps is None else {**proposal, "steps": steps}
     final = steps if steps is not None else proposal.get("steps")
     merged, question = merge_contact_picker(
-        merged, final, bid_template, bid_template_notes
+        merged,
+        final,
+        bid_template,
+        bid_template_notes,
+        # The person already answered this question with "find them for me".
+        research_asked=contact_research_of({"contact_research": contact_research})
+        is not None,
     )
     if question:
         inserted.append(question)
@@ -2156,3 +2172,777 @@ def connected_sentence(person_connected: Any) -> str:
     if not names:
         return "The person has connected nothing yet."
     return "The person already connected: " + ", ".join(names) + "."
+
+# --------------------------------------------------------------------------
+# STEVEN, 2026-09-09 -- THE `calls` KIND, AND WHERE AN ARGUMENT CAME FROM.
+#
+# "Use our kit of parts to code (it's just a JSON file)." A program's work is
+# a `calls` act: {"kind": "calls", "title": ..., "drafts": {name: words},
+# "runs": [...]}. A RUN IS EITHER A CALL OR A WAIT, never both: a call names a
+# `tool` (a registry verb, `composio:<slug>/<TOOL>`, `key:<slug>/<action>`,
+# `mcp:<server>/<tool>` or one of the four platform verbs), the `row` -- THE
+# ID OF THE connect_account BLOCK ON ITS OWN STEP -- whose account it runs on,
+# its `args`, and optionally `each`; a wait names only what it waits for.
+#
+# THE FOURTH QUESTION (REJ-41, argument_provenance). Every argument is a
+# literal or a declared source, and there are four heads and no fifth:
+# `person.<question id>`, `<a run ABOVE this one>[.field]`, `draft.<name>`
+# declared in this act's own `drafts`, and `item` inside a run that declares
+# `each`. `$from` is the whole argument or none of it, and `{{ handlebars }}`
+# inside a string is a binding too and is read the same way.
+#
+# WHAT THIS MIRROR IS FOR. A program that reads an argument out of thin air --
+# a run quoting a run below it, a draft nothing declared, an address typed
+# into a recipient, a tool with no row on its card -- is refused at the door,
+# and on a one-bid-per-want board that refusal is the whole round.
+#
+# WHAT IT IS NOT FOR. It never judges a TOOL, and it never judges whether a
+# ROW CARRIES one. `composio:`, `key:` and `mcp:` name somebody else's
+# catalog, a verb names the bench's own, and which service can carry which
+# tool is a family table that lives on the server (0.31.0 learned that the
+# hard way). Shape, order and provenance. Nothing else.
+# --------------------------------------------------------------------------
+
+REJ_ARGUMENT_PROVENANCE = "REJ-41"
+
+CALLS_KIND = "calls"
+
+# The four verbs the platform itself performs. They run on no connector, so
+# they carry no row.
+PLATFORM_NOTIFY = "platform.notify"
+PLATFORM_DRAFT = "platform.draft"
+PLATFORM_CONTACT = "platform.contact"
+PLATFORM_RESEARCH = "platform.research"
+PLATFORM_TOOLS: tuple[str, ...] = (
+    PLATFORM_NOTIFY,
+    PLATFORM_DRAFT,
+    PLATFORM_CONTACT,
+    PLATFORM_RESEARCH,
+)
+PLATFORM_PREFIX = "platform."
+RESEARCH_TOOL = PLATFORM_RESEARCH
+
+# The lanes a tool key may ride, each one somebody else's catalog.
+TOOL_LANES: tuple[str, ...] = ("composio", "key", "mcp")
+
+# The four heads of a binding path.
+SOURCE_PERSON = "person"
+SOURCE_DRAFT = "draft"
+SOURCE_ITEM = "item"
+FROM_KEY = "$from"
+
+# The events the world can answer a `wait` with, and the one of them that may
+# leave `of` out because it is the person answering the card itself.
+WAIT_EVENTS: tuple[str, ...] = ("email_reply", "call_answer", "webhook", "person_answer")
+WAIT_EVENT_NO_RUN = "person_answer"
+WAIT_MAX_HOURS = 24 * 14
+
+MAX_RUNS = 12
+
+# Arguments the PLATFORM fills out of the account a row settled. An agent
+# cannot see them and naming one is naming a resource it does not have.
+PLATFORM_FILLED: tuple[str, ...] = ("calendar_id", "mailbox_id")
+
+# The fields that reach a person.
+RECIPIENT_FIELDS: tuple[str, ...] = ("to", "recipient", "recipients", "email", "To")
+
+_RUN_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_BINDING_PATH = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-zA-Z0-9_-]+)*$")
+_HANDLEBARS = re.compile(r"\{\{\s*([a-z][a-z0-9_]*(?:\.[a-zA-Z0-9_]+)*)\s*\}\}")
+
+ARGUMENT_PROVENANCE_SENTENCE = (
+    "SAY WHERE EVERY ARGUMENT CAME FROM. On a `calls` act a run is EITHER a "
+    "call or a wait. A call names a `tool` (a registry verb, "
+    "composio:<service>/<TOOL>, key:<service>/<action>, mcp:<server>/<tool>, "
+    "or platform.notify | platform.draft | platform.contact | "
+    "platform.research), the `row` -- the id of the `connect_account` block on "
+    "THIS step whose account it runs on, and a platform tool carries none -- "
+    "its `args`, and `each` when it runs once per item of a list. A wait names "
+    "`wait` {event, of, timeout_hours} and no tool. Every argument is a "
+    "literal you wrote or a declared source, and there are four heads and no "
+    'fifth: {"$from": "person.<question id>"}, {"$from": "<a run ABOVE this '
+    'one>[.field]"}, {"$from": "draft.<name>"} declared in this act\'s own '
+    '`drafts`, and {"$from": "item[.field]"} inside a run that declares '
+    "`each`. `$from` is the whole argument or none of it. An argument from "
+    "anywhere else, a run reading a run below it, or a tool whose row is not "
+    "on its step is refused REJ-41 -- and a recipient is never a typed "
+    "address."
+)
+
+CONTACT_RESEARCH_SENTENCE = (
+    "THE PERSON MAY HAND THE QUESTION BACK (rule 240). Instead of picking "
+    "anybody out of their Contacts they may answer the contact question with "
+    '{"research": true, "brief": "..."}, and the brief carries it as '
+    "`contact_research` {question_id, brief} -- always present, null when they "
+    "picked or said nothing. Then the recipient is not on the form and never "
+    "will be: bind the send to your own research -- `to`: {\"$from\": "
+    '"<a platform.research run above it>.contact"} in a `calls` act, or '
+    '`contact_from`: "research" beside an empty `contact_ref` on an email act '
+    "-- and file the person you found as `found_contact` {name, email, "
+    "source_url} when you send. Do not add a contact_picker (they have already "
+    "declined to pick) and do not write an address of your own."
+)
+
+
+def question_ids(questions: Any) -> set[str]:
+    """Every question id on a bid, across its groups. Empty when unreadable."""
+    found: set[str] = set()
+    for group in questions if isinstance(questions, list) else []:
+        entries = group if isinstance(group, list) else [group]
+        for question in entries:
+            if isinstance(question, dict) and str(question.get("id") or "").strip():
+                found.add(str(question["id"]).strip())
+    return found
+
+
+def connect_row_ids(step: Any) -> set[str]:
+    """The ids of the `connect_account` blocks on ONE step.
+
+    A run's `row` names one of these -- the block id, not the provider -- so
+    this is the whole list a run may point at.
+    """
+    found: set[str] = set()
+    if not isinstance(step, dict):
+        return found
+    for block in step.get("har_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("format") or "").strip().lower() != CONNECT_FORMAT:
+            continue
+        identifier = str(block.get("id") or "").strip()
+        if identifier:
+            found.add(identifier)
+    return found
+
+
+def split_tool(tool: Any) -> tuple[str, str, str]:
+    """``(lane, service, action)``. Lane is "platform", "verb" or a tool lane."""
+    name = str(tool or "").strip()
+    if not name:
+        return "", "", ""
+    if name in PLATFORM_TOOLS:
+        return "platform", "", name
+    if name.startswith(PLATFORM_PREFIX):
+        return "platform", "", name
+    for lane in TOOL_LANES:
+        prefix = f"{lane}:"
+        if name.startswith(prefix):
+            service, _, action = name[len(prefix) :].partition("/")
+            return lane, service.strip(), action.strip()
+    return "verb", "", name
+
+
+def act_drafts(act: Any) -> set[str]:
+    """The draft names this act declares. A binding may name no other."""
+    drafts = act.get("drafts") if isinstance(act, dict) else None
+    if not isinstance(drafts, dict):
+        return set()
+    return {str(name).strip() for name in drafts if str(name or "").strip()}
+
+
+def _source_problem(
+    path: Any,
+    *,
+    earlier: list[str],
+    all_runs: list[str],
+    ids: set[str],
+    drafts: set[str],
+    has_each: bool,
+) -> str | None:
+    """Why this binding path is not a source, or None when it is one."""
+    if not isinstance(path, str) or not _BINDING_PATH.match(path.strip()):
+        return (
+            "`$from` must be a path like person.who, draft.offer, or the name "
+            "of a run above this one"
+        )
+    head, _, rest = path.strip().partition(".")
+    if head == SOURCE_PERSON:
+        if not rest:
+            return (
+                "`person` alone names no answer: bind person.<question id>, "
+                "the id of a question in this bid or of a block on this step"
+            )
+        if ids and rest.split(".")[0] not in ids:
+            return (
+                f"there is no question with id {rest.split('.')[0]!r} on this "
+                f"bid, so {path!r} reads an answer nobody was ever asked for"
+            )
+        return None
+    if head == SOURCE_DRAFT:
+        name = rest.split(".")[0]
+        if not name:
+            return "`draft` alone names no draft: bind draft.<name>"
+        if name not in drafts:
+            return (
+                f"draft.{name} is not a draft this act carries: declare it in "
+                "`drafts` (the words you wrote, which the person approves on "
+                "the card) before you bind it"
+            )
+        return None
+    if head == SOURCE_ITEM:
+        if not has_each:
+            return (
+                "`item` only exists inside a run that declares `each`; a run "
+                "without `each` runs once and has no item"
+            )
+        return None
+    if head in earlier:
+        return None
+    if head in all_runs:
+        return (
+            f"{path} names a run further down the card. A run may only read a "
+            "result from a run ABOVE it: the card is walked top to bottom and "
+            "nothing below it has happened yet"
+        )
+    return (
+        f"{head!r} names no run in this act. An argument comes from the "
+        "person, from a literal you wrote, from a draft, from a run ABOVE "
+        "this one, or from `item` -- nothing else (REJ-41)"
+    )
+
+
+def binding_paths(value: Any) -> tuple[list[str], list[str]]:
+    """``(paths, problems)`` -- every binding inside one argument value."""
+    paths: list[str] = []
+    problems: list[str] = []
+    if isinstance(value, dict):
+        if FROM_KEY in value:
+            extra = sorted(key for key in value if key != FROM_KEY)
+            if extra:
+                problems.append(
+                    "`$from` must be the ONLY key of an argument that binds; "
+                    f"this one carries {', '.join(extra)} beside it"
+                )
+            found = value.get(FROM_KEY)
+            paths.append(found if isinstance(found, str) else "")
+            return paths, problems
+        for item in value.values():
+            more_paths, more_problems = binding_paths(item)
+            paths.extend(more_paths)
+            problems.extend(more_problems)
+        return paths, problems
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            more_paths, more_problems = binding_paths(item)
+            paths.extend(more_paths)
+            problems.extend(more_problems)
+        return paths, problems
+    if isinstance(value, str):
+        paths.extend(_HANDLEBARS.findall(value))
+    return paths, problems
+
+
+def _literal_recipient(value: Any) -> bool:
+    """A typed address sitting where a person's reference belongs."""
+    if isinstance(value, str):
+        return bool(_EMAIL.search(value))
+    if isinstance(value, (list, tuple)):
+        return any(_literal_recipient(item) for item in value)
+    return False
+
+
+def _wait_problems(wait: Any, path: str, earlier: list[str]) -> list[str]:
+    if not isinstance(wait, dict):
+        return [f"{path}.wait must be an object {{event, of, timeout_hours}}"]
+    problems: list[str] = []
+    event = str(wait.get("event") or "").strip().lower()
+    if event not in WAIT_EVENTS:
+        problems.append(
+            f"{path}.wait.event must be one of {', '.join(WAIT_EVENTS)}"
+        )
+    of = str(wait.get("of") or "").strip()
+    if not of and event != WAIT_EVENT_NO_RUN:
+        problems.append(
+            f"{path}.wait.of must name the run whose answer you are waiting for"
+        )
+    if of and of not in earlier:
+        problems.append(
+            f"{path}.wait.of names {of!r}, which is not a run ABOVE this one"
+        )
+    hours = wait.get("timeout_hours")
+    if hours is not None:
+        if isinstance(hours, bool) or not isinstance(hours, int):
+            problems.append(
+                f"{path}.wait.timeout_hours must be a whole number of hours"
+            )
+        elif hours < 1 or hours > WAIT_MAX_HOURS:
+            problems.append(
+                f"{path}.wait.timeout_hours must be between 1 and {WAIT_MAX_HOURS}"
+            )
+    return problems
+
+
+def _run_problems(
+    run: Any,
+    path: str,
+    *,
+    rows: set[str],
+    earlier: list[str],
+    all_runs: list[str],
+    ids: set[str],
+    drafts: set[str],
+) -> list[str]:
+    if not isinstance(run, dict):
+        return [f"{path} must be an object"]
+    problems: list[str] = []
+    name = str(run.get("name") or "").strip()
+    if not _RUN_NAME.match(name):
+        problems.append(
+            f"{path}.name must be lower case letters, digits and underscores "
+            "-- it is what later runs bind their arguments to"
+        )
+    tool = str(run.get("tool") or "").strip()
+    waiting = run.get("wait") is not None
+    if waiting and tool:
+        problems.append(
+            f"{path} is both a call and a wait. A wait is its own run."
+        )
+    if waiting:
+        return problems + _wait_problems(run.get("wait"), path, earlier)
+    if not tool:
+        return problems + [f"{path} needs a `tool` (or a `wait`)"]
+    lane, service, action = split_tool(tool)
+    if lane == "platform" and tool not in PLATFORM_TOOLS:
+        problems.append(
+            f"{path}.tool {tool!r} is not a platform tool; they are "
+            + ", ".join(PLATFORM_TOOLS)
+        )
+    elif lane in TOOL_LANES and (not service or not action):
+        problems.append(
+            f"{path}.tool {tool!r} must read {lane}:<service>/<action>"
+        )
+    elif lane == "verb" and (":" in tool or "/" in tool):
+        problems.append(
+            f"{path}.tool {tool!r} is not a tool this platform knows: name a "
+            "registry verb, or composio:<service>/<TOOL>, key:<service>/"
+            "<action>, mcp:<server>/<tool>, or a platform tool"
+        )
+    # THE ROW IS A BLOCK ID ON THIS STEP, not a provider name. Which service
+    # can carry which tool is a FAMILY table that lives on the server and is
+    # never guessed here (0.31.0).
+    row = str(run.get("row") or "").strip()
+    if lane == "platform":
+        if row:
+            problems.append(
+                f"{path} runs on no account ({tool} is a platform tool); drop "
+                "`row`"
+            )
+    elif not row:
+        problems.append(
+            f"{path} runs on {tool}, so it must name the `row` -- the id of the "
+            "`connect_account` block on THIS step whose account it uses (rule "
+            "236: a connection is not a step, it is part of the action that "
+            "needs it)"
+        )
+    elif row not in rows:
+        problems.append(
+            f"{path}.row names {row!r} and this step carries no "
+            "`connect_account` block with that id. The rows on this step are: "
+            + (", ".join(sorted(rows)) or "none")
+        )
+    each = run.get("each")
+    has_each = each is not None
+    if has_each:
+        if not (isinstance(each, dict) and FROM_KEY in each):
+            problems.append(
+                f'{path}.each must bind a list -- {{"$from": "person.<question '
+                'id>"}} for the contacts the person picked, or an earlier '
+                "run's list result"
+            )
+        else:
+            paths, found = binding_paths(each)
+            problems.extend(f"{path}.each: {problem}" for problem in found)
+            for source in paths:
+                problem = _source_problem(
+                    source,
+                    earlier=earlier,
+                    all_runs=all_runs,
+                    ids=ids,
+                    drafts=drafts,
+                    has_each=False,
+                )
+                if problem:
+                    problems.append(f"{path}.each: {problem}")
+    args = run.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return problems + [f"{path}.args must be an object of named arguments"]
+    for key in args:
+        if key in PLATFORM_FILLED:
+            problems.append(
+                f"{path}.args names {key!r}. The platform fills that from the "
+                "account the person connected on the row -- you cannot see it "
+                "and must not name it"
+            )
+    for key, value in args.items():
+        paths, found = binding_paths(value)
+        problems.extend(f"{path}.args.{key}: {problem}" for problem in found)
+        for source in paths:
+            problem = _source_problem(
+                source,
+                earlier=earlier,
+                all_runs=all_runs,
+                ids=ids,
+                drafts=drafts,
+                has_each=has_each,
+            )
+            if problem:
+                problems.append(f"{path}.args.{key}: {problem}")
+        # A TYPED ADDRESS IS NEVER A RECIPIENT (rule 238). Only where the tool
+        # could reach the world: whether a tool sends is the registry's own
+        # `resource_kind`, and a platform verb never does.
+        if (
+            lane != "platform"
+            and str(key) in RECIPIENT_FIELDS
+            and _literal_recipient(value)
+        ):
+            problems.append(
+                f"{path}.args.{key} carries a raw address. A plan field cannot "
+                "hold an endpoint: bind the person's own answer "
+                "(person.<contact question id>), or a platform.research run "
+                "above this one that found the contact and its source"
+            )
+    return problems
+
+
+def calls_problems(steps: Any, questions: Any = None) -> list[dict[str, str]]:
+    """Every `calls` act the bid door's fourth question would refuse (REJ-41).
+
+    Shape, order and provenance, in the door's own order. No tool is judged
+    and no row is matched to a tool: those two tables live on the server.
+    """
+    problems: list[dict[str, str]] = []
+    ids = question_ids(questions)
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict):
+            continue
+        rows = connect_row_ids(step)
+        for position, act in enumerate(step.get("acts") or []):
+            if not isinstance(act, dict):
+                continue
+            if str(act.get("kind") or "").strip().lower() != CALLS_KIND:
+                continue
+            base = f"steps.{index}.acts.{position}"
+            if not str(act.get("title") or "").strip():
+                problems.append(
+                    {
+                        "path": base,
+                        "message": "a `calls` act carries a `title` in your own words",
+                    }
+                )
+            runs = act.get("runs")
+            if not isinstance(runs, list) or not runs:
+                problems.append(
+                    {
+                        "path": f"{base}.runs",
+                        "message": (
+                            "a `calls` act is an ORDERED LIST of calls: give "
+                            "`runs`, at least one, each with a `name` and "
+                            "either a `tool` or a `wait`"
+                        ),
+                    }
+                )
+                continue
+            if len(runs) > MAX_RUNS:
+                problems.append(
+                    {
+                        "path": f"{base}.runs",
+                        "message": (
+                            f"an act runs at most {MAX_RUNS} calls; split the "
+                            "work across steps"
+                        ),
+                    }
+                )
+            drafts = act_drafts(act)
+            all_runs = [
+                str(run.get("name") or "").strip()
+                for run in runs
+                if isinstance(run, dict)
+            ]
+            earlier: list[str] = []
+            seen: set[str] = set()
+            for order, run in enumerate(runs):
+                path = f"{base}.runs.{order}"
+                for message in _run_problems(
+                    run,
+                    path,
+                    rows=rows,
+                    earlier=list(earlier),
+                    all_runs=[name for name in all_runs if name],
+                    ids=ids,
+                    drafts=drafts,
+                ):
+                    problems.append({"path": path, "message": message})
+                name = (
+                    str(run.get("name") or "").strip() if isinstance(run, dict) else ""
+                )
+                if name:
+                    if name in seen:
+                        problems.append(
+                            {
+                                "path": path,
+                                "message": (
+                                    f"two runs are both called {name!r}; every "
+                                    "result needs its own name"
+                                ),
+                            }
+                        )
+                    seen.add(name)
+                    earlier.append(name)
+    return problems
+
+
+# --------------------------------------------------------------------------
+# RULE 240 -- "HAVE YOU FIND THEM": the person hands the question back.
+#
+# The contact question may be answered with {"research": true, "brief": "..."}
+# and no pick at all, and the brief then carries `contact_research`
+# {question_id, brief} -- always present, null when they picked or said
+# nothing. The recipient is not on the form and never will be, so the outreach
+# is bound to the agent's OWN research instead.
+#
+# WHAT THIS FUNCTION WILL NOT DO. It will not add a contact_picker (they have
+# already declined to pick), it will not keep an address (on a want where
+# nobody has been found yet, an address in the plan can only be invented), and
+# it will NOT write a `platform.research` run that the plan does not have:
+# that run's own arguments are the research the agent has not done, and a run
+# the harness filled in with the person's question instead of an answer is
+# refused at the door for arguments this package would have made up.
+# --------------------------------------------------------------------------
+
+RESEARCH_FIELD = "contact"
+CONTACT_FROM_FIELD = "contact_from"
+CONTACT_FROM_RESEARCH = "research"
+
+
+def contact_research_of(brief: Any) -> dict[str, Any] | None:
+    """The person's "find them for me" answer on this brief, or None."""
+    if not isinstance(brief, dict):
+        return None
+    research = brief.get("contact_research")
+    if not isinstance(research, dict):
+        return None
+    if not str(research.get("brief") or "").strip():
+        return None
+    return research
+
+
+def _research_run(act: dict[str, Any]) -> str | None:
+    """The name of this act's own contact-finding run, or None."""
+    for run in act.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        if str(run.get("tool") or "").strip().lower() in (
+            PLATFORM_RESEARCH,
+            PLATFORM_CONTACT,
+        ):
+            name = str(run.get("name") or "").strip()
+            if name:
+                return name
+    return None
+
+
+def _bound_to(value: Any, name: str) -> bool:
+    if not isinstance(value, dict) or FROM_KEY not in value:
+        return False
+    return str(value.get(FROM_KEY) or "").strip().partition(".")[0] == name
+
+
+def _outreach_run(act: dict[str, Any], research_name: str | None) -> int | None:
+    """Which run sends: the one carrying a recipient, else the last call."""
+    runs = act.get("runs") or []
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            continue
+        args = run.get("args")
+        if isinstance(args, dict) and any(field in args for field in RECIPIENT_FIELDS):
+            return index
+    for index in range(len(runs) - 1, -1, -1):
+        run = runs[index]
+        if (
+            isinstance(run, dict)
+            and run.get("wait") is None
+            and str(run.get("name") or "").strip() != research_name
+        ):
+            return index
+    return None
+
+
+def bind_contact_research(
+    proposal: dict[str, Any], research: Any
+) -> tuple[dict[str, Any], list[str]]:
+    """Bind every act that reaches a person to the research the person asked for."""
+    if not isinstance(research, dict) or not isinstance(proposal.get("steps"), list):
+        return proposal, []
+    if not str(research.get("brief") or "").strip():
+        return proposal, []
+    bound: list[str] = []
+    steps = copy.deepcopy(proposal["steps"])
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        for position, act in enumerate(step.get("acts") or []):
+            if not isinstance(act, dict) or not act_reaches_a_person(act):
+                continue
+            where = f"steps.{index + 1}.acts.{position + 1}"
+            if str(act.get(CONTACT_FROM_FIELD) or "").strip() == CONTACT_FROM_RESEARCH:
+                continue
+            if str(act.get("kind") or "").strip().lower() != CALLS_KIND:
+                for field in ("with", *RECIPIENT_FIELDS):
+                    value = act.get(field)
+                    if isinstance(value, str) and _EMAIL.search(value):
+                        act.pop(field, None)
+                act[CONTACT_FROM_FIELD] = CONTACT_FROM_RESEARCH
+                bound.append(f"{where} contact_from=research")
+                continue
+            runs = act.get("runs")
+            if not isinstance(runs, list) or not runs:
+                continue
+            research_name = _research_run(act)
+            if research_name is None:
+                # Nothing to bind to, and nothing this package may write in its
+                # place: a research run's arguments are the answer, and the
+                # answer is what nobody has yet.
+                continue
+            target = _outreach_run(act, research_name)
+            if target is None or target < 0:
+                continue
+            run = runs[target]
+            args = run.get("args")
+            if not isinstance(args, dict):
+                args = {}
+                run["args"] = args
+            field = next(
+                (name for name in RECIPIENT_FIELDS if name in args), RECIPIENT_FIELDS[0]
+            )
+            if _bound_to(args.get(field), research_name):
+                continue
+            args[field] = {FROM_KEY: f"{research_name}.{RESEARCH_FIELD}"}
+            bound.append(
+                f"{where} runs.{target}.args.{field}={research_name}.{RESEARCH_FIELD}"
+            )
+    if not bound:
+        return proposal, []
+    return {**proposal, "steps": steps}, bound
+
+
+# --------------------------------------------------------------------------
+# N PEOPLE, ONE OUTREACH.
+#
+# `each` runs a call once per item of a bound list, and it is a field on a
+# `calls` RUN. THE DECISION (0.33.0): when the person picked more than one
+# contact and the outreach is a `calls` act, the run takes the `each` form --
+# one act, one run, N executions, bound to the picker question the person
+# answered. When the outreach is a LEGACY act (`email`, and whatever else the
+# registry grows), it is filed once PER CONTACT instead. Why not one rule for
+# both: a legacy act has no `each` field to set, and turning it into a `calls`
+# act would mean the harness inventing tool keys and rows -- the two things
+# this package refuses to judge and must therefore refuse to write. Copying an
+# act the door already accepts changes nothing about it except who it goes to.
+# --------------------------------------------------------------------------
+
+CONTACT_REF_FIELDS = ("contact_ref", "ref", "id", "contact_id")
+# `label` first: that is what the bench actually publishes.
+# `private_contacts.reference()` is {"contact_ref": id, "label": name} --
+# names only, because an address is never on a brief.
+CONTACT_NAME_FIELDS = ("label", "name", "display_name", "with_name")
+
+
+def contact_references(contacts: Any) -> list[dict[str, str]]:
+    """``[{ref, name}]`` for every pick the harness can actually address."""
+    found: list[dict[str, str]] = []
+    for contact in contacts if isinstance(contacts, list) else []:
+        if isinstance(contact, str) and contact.strip():
+            found.append({"ref": contact.strip(), "name": ""})
+            continue
+        if not isinstance(contact, dict):
+            continue
+        ref = next(
+            (
+                str(contact[field]).strip()
+                for field in CONTACT_REF_FIELDS
+                if str(contact.get(field) or "").strip()
+            ),
+            "",
+        )
+        if not ref:
+            continue
+        name = next(
+            (
+                str(contact[field]).strip()
+                for field in CONTACT_NAME_FIELDS
+                if str(contact.get(field) or "").strip()
+            ),
+            "",
+        )
+        found.append({"ref": ref, "name": name})
+    return found
+
+
+def _picker_question_id(questions: Any) -> str | None:
+    for group in questions if isinstance(questions, list) else []:
+        entries = group if isinstance(group, list) else [group]
+        for question in entries:
+            if _question_format(question) == CONTACT_PICKER_FORMAT:
+                identifier = str(question.get("id") or "").strip()
+                if identifier:
+                    return identifier
+    return None
+
+
+def spread_over_contacts(
+    proposal: dict[str, Any], contacts: Any, questions: Any = None
+) -> tuple[dict[str, Any], list[str]]:
+    """One outreach, N people: `each` on a calls run, or one act per contact."""
+    picks = contact_references(contacts)
+    if len(picks) < 2 or not isinstance(proposal.get("steps"), list):
+        return proposal, []
+    picker = _picker_question_id(
+        questions if questions is not None else proposal.get("finalist_questions")
+    )
+    spread: list[str] = []
+    steps = copy.deepcopy(proposal["steps"])
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        acts = step.get("acts")
+        if not isinstance(acts, list) or not acts:
+            continue
+        rebuilt: list[Any] = []
+        for position, act in enumerate(acts):
+            if not isinstance(act, dict) or not act_reaches_a_person(act):
+                rebuilt.append(act)
+                continue
+            where = f"steps.{index + 1}.acts.{position + 1}"
+            if str(act.get("kind") or "").strip().lower() == CALLS_KIND:
+                runs = act.get("runs")
+                target = (
+                    _outreach_run(act, _research_run(act))
+                    if isinstance(runs, list) and runs
+                    else None
+                )
+                # `each` BINDS a list, so with no picker question to bind to
+                # there is nothing to write: the harness will not invent the
+                # source of an argument.
+                if target is None or not picker or runs[target].get("each") is not None:
+                    rebuilt.append(act)
+                    continue
+                runs[target]["each"] = {FROM_KEY: f"{SOURCE_PERSON}.{picker}"}
+                spread.append(f"{where} runs.{target}.each ({len(picks)} contacts)")
+                rebuilt.append(act)
+                continue
+            if str(act.get("contact_ref") or "").strip():
+                rebuilt.append(act)
+                continue
+            for pick in picks:
+                copied = copy.deepcopy(act)
+                copied["contact_ref"] = pick["ref"]
+                if pick["name"] and not str(copied.get("with_name") or "").strip():
+                    copied["with_name"] = pick["name"]
+                rebuilt.append(copied)
+            spread.append(f"{where} filed once per contact ({len(picks)} acts)")
+        step["acts"] = rebuilt
+    if not spread:
+        return proposal, []
+    return {**proposal, "steps": steps}, spread

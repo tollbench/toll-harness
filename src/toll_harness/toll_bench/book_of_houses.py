@@ -7,7 +7,7 @@ from typing import Any
 
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks
+from toll_harness.toll_bench import blocks, programs
 from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
@@ -30,6 +30,10 @@ REJ_GRANT_STEP_REMOVED = blocks.REJ_GRANT_STEP_REMOVED
 # that question on `bid_template.finalist_questions` -- so it is repaired from
 # there and is deliberately not in REJ_CARRIES_THE_FORM.
 REJ_CONTACT_ROUTE = blocks.REJ_CONTACT_ROUTE
+# RULE: SAY WHERE EVERY ARGUMENT CAME FROM (2026-09-09). The bid door's
+# fourth question refuses an argument with no declared source and a tool
+# whose account row is missing from its own step.
+REJ_ARGUMENT_PROVENANCE = blocks.REJ_ARGUMENT_PROVENANCE
 REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
 
 # CONTRACT 3.0 (2026-09-05): the free validate door, call 3 of six. It runs the
@@ -664,6 +668,21 @@ class BookOfHousesTollBenchProvider:
             brief["person_already_connected"] = blocks.connected_sentence(
                 brief.get("person_connected")
             )
+            # PROGRAM FIRST (Steven, 2026-09-09). Twelve worked programs on a
+            # brief are twelve things to read and nothing to do. The pick is
+            # made here, deterministically, and rides the brief inline in
+            # front of the other eleven -- always present, None when this
+            # bench publishes no examples or nothing overlaps this want.
+            pick = programs.nearest_program(brief)
+            brief["nearest_program"] = pick
+            brief["program_to_copy"] = programs.program_sentence(pick)
+            # ...and when the person answered the contact question with "find
+            # them for me", the recipient is not on the form and never will be.
+            brief["contact_research_note"] = (
+                blocks.CONTACT_RESEARCH_SENTENCE
+                if blocks.contact_research_of(brief)
+                else ""
+            )
         return response
 
     def list_act_kinds(self) -> dict[str, Any]:
@@ -983,6 +1002,27 @@ class BookOfHousesTollBenchProvider:
             error.rej,
             error.message,
         )
+        research = blocks.contact_research_of(brief)
+        if research is not None:
+            # The person already said they have nobody to pick. The answer is
+            # not a question, it is the binding: the send reads its recipient
+            # off a research run.
+            fixed, bound = blocks.bind_contact_research(proposal, research)
+            if bound:
+                _LOGGER.warning(
+                    "Target %s: bound the outreach to the research the person "
+                    "asked for (%s); re-filing once",
+                    target_id,
+                    "; ".join(bound),
+                )
+                return fixed, "; ".join(bound)
+            _LOGGER.warning(
+                "Target %s: this person asked us to find the recipient and "
+                "nothing in this plan can be bound to it; the door's own "
+                "refusal is the answer",
+                target_id,
+            )
+            return proposal, None
         fixed, asked = blocks.merge_contact_picker(
             proposal,
             proposal.get("steps"),
@@ -1006,6 +1046,79 @@ class BookOfHousesTollBenchProvider:
                 target_id,
             )
         return fixed, asked
+
+    def _bind_the_research_after(
+        self, target_id: str, error: Any, proposal: dict[str, Any], brief: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """REJ-41: the door refused an argument with no source.
+
+        One repair exists and only one: where this person asked us to FIND the
+        recipient, the send is bound to a research run. Everything else the
+        door refuses under this code -- a run quoting a run that has not
+        happened, a tool whose account row is missing, an address typed into
+        the plan -- is the model's own to fix in its own words, and the door
+        already said which. Nothing is re-filed then.
+        """
+        _LOGGER.warning(
+            "Target %s refused the bid %s -- an argument named no source it "
+            "could come from: %s",
+            target_id,
+            error.rej,
+            error.message,
+        )
+        research = blocks.contact_research_of(brief)
+        if research is None:
+            return proposal, []
+        fixed, bound = blocks.bind_contact_research(proposal, research)
+        if bound:
+            _LOGGER.warning(
+                "Target %s: bound the outreach to the research run (%s); "
+                "re-filing once",
+                target_id,
+                "; ".join(bound),
+            )
+        return fixed, bound
+
+    @staticmethod
+    def _argument_provenance_refusal(error: Any) -> dict[str, Any]:
+        """The door's REJ-41, handed to the model in the door's own words."""
+        return {
+            "ok": False,
+            "error": "argument_provenance",
+            "rej": error.rej,
+            "detail": error.message,
+            "terminal": False,
+            "fix": blocks.ARGUMENT_PROVENANCE_SENTENCE,
+            "message": (
+                "Nothing was filed. The bench refused this plan REJ-41: a run "
+                "took an argument from somewhere it cannot come from, or its "
+                "tool has no `connect_account` row on the step that runs it. "
+                "`detail` names the run and the argument. Every value is a "
+                "literal you wrote or one of three sources -- an answer to one "
+                "of your four questions, a run declared BEFORE this one, or a "
+                "draft this plan wrote -- and a recipient is never an address "
+                "typed into the plan."
+            ),
+        }
+
+    def _log_program_diff(
+        self, target_id: str, proposal: dict[str, Any], brief: Any
+    ) -> dict[str, Any] | None:
+        """One line saying whether this filing copied a program or composed one."""
+        pick = brief.get("nearest_program") if isinstance(brief, dict) else None
+        if pick is None:
+            pick = programs.nearest_program(brief)
+        if not pick:
+            return None
+        diff = programs.diff_from_program(proposal, pick)
+        _LOGGER.info(
+            "Target %s filed against %s -- %s | %s",
+            target_id,
+            pick.get("key"),
+            diff["line"],
+            programs.diff_json(diff),
+        )
+        return diff
 
     @staticmethod
     def _contact_route_refusal(error: Any) -> dict[str, Any]:
@@ -1213,6 +1326,15 @@ class BookOfHousesTollBenchProvider:
         # steps draw no new refusal. A blank left empty is named in the
         # validate door's own plain words.
         problems.extend(blocks.deliverable_problems(steps))
+        # THE `calls` KIND, AND WHERE EVERY ARGUMENT CAME FROM (REJ-41,
+        # 2026-09-09). Shape and provenance only: an unknown `$from` source, a
+        # run quoting a run that has not happened, an account-lane tool with no
+        # `connect_account` row on its step, an address typed into a recipient.
+        # The TOOL itself is never judged here -- composio:, key: and mcp: name
+        # somebody else's catalog and a plain verb names the bench's own.
+        problems.extend(
+            blocks.calls_problems(steps, proposal.get("finalist_questions"))
+        )
         return {
             "ok": not problems,
             "problems": problems,
@@ -1261,6 +1383,9 @@ class BookOfHousesTollBenchProvider:
             # one-bid-per-want board that is the whole round.
             bid_template=brief.get("bid_template"),
             bid_template_notes=brief.get("bid_template_notes"),
+            # "FIND THEM FOR ME": this person declined to pick, so no picker
+            # goes on the bid however much the plan reaches a person.
+            contact_research=brief.get("contact_research"),
         )
         if inserted:
             _LOGGER.warning(
@@ -1268,6 +1393,35 @@ class BookOfHousesTollBenchProvider:
                 "in and filed that (%s)",
                 target_id,
                 ", ".join(inserted),
+            )
+        # "FIND THEM FOR ME" (2026-09-09). The person answered the contact
+        # question with a research brief instead of a pick, so the recipient
+        # must come out of a `platform.research` run (or `contact_from`:
+        # "research" on a legacy act). Nothing here writes an address: there
+        # is none to write, and an invented one is the refusal REJ-41 exists
+        # for.
+        proposal, bound = blocks.bind_contact_research(
+            proposal, blocks.contact_research_of(brief)
+        )
+        if bound:
+            _LOGGER.warning(
+                "Plan for target %s reaches a person the person asked us to "
+                "find; bound the outreach to the research run (%s)",
+                target_id,
+                "; ".join(bound),
+            )
+        # N PEOPLE, ONE OUTREACH: `each` on a calls run, one act per contact
+        # on a legacy act. A legacy act has no `each` field and the harness
+        # will not invent a tool key to give it one.
+        proposal, spread = blocks.spread_over_contacts(
+            proposal, brief.get("selected_contacts")
+        )
+        if spread:
+            _LOGGER.warning(
+                "Plan for target %s sends to more than one picked contact; "
+                "spread the outreach (%s)",
+                target_id,
+                "; ".join(spread),
             )
         # RULE 236 / REJ-38 (Steven, 2026-09-08). A CONNECTION IS NOT A STEP.
         # A model that composes its own steps rather than copying the block
@@ -1385,6 +1539,10 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(str(index + 1) for index in cleared),
             )
+        # DID IT COPY, OR DID IT COMPOSE? One line per filing, against the
+        # program this brief handed over. Nothing is refused on it -- the
+        # foreman grades the run, the door judges the plan.
+        self._log_program_diff(target_id, proposal, brief)
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
             return {
@@ -1492,6 +1650,18 @@ class BookOfHousesTollBenchProvider:
                         proposal,
                         f"{idempotency_key}-{_retry_tag(first.rej)}",
                     )
+                # REJ-41: only one thing here is the harness's to repair.
+                elif first.rej == REJ_ARGUMENT_PROVENANCE:
+                    proposal, bound = self._bind_the_research_after(
+                        target_id, first, proposal, brief
+                    )
+                    if not bound:
+                        raise
+                    result = self.api.submit_proposal(
+                        target_id,
+                        proposal,
+                        f"{idempotency_key}-{_retry_tag(first.rej)}",
+                    )
                 elif first.rej not in REJ_CARRIES_THE_FORM or not first.plan_template:
                     raise
                 else:
@@ -1557,6 +1727,10 @@ class BookOfHousesTollBenchProvider:
                         agent_id=self.fleet_agent_id,
                     )
                 return self._grant_step_removed_refusal(error)
+            if error.rej == REJ_ARGUMENT_PROVENANCE:
+                # Nothing was written, so the round is not spent; the door's
+                # own words carry the run and the argument it refused.
+                return self._argument_provenance_refusal(error)
             if error.rej == REJ_CONTACT_ROUTE:
                 # RULE 238: a refused bid writes nothing, so the round is not
                 # spent. The reservation was released just above; the door's
@@ -1710,6 +1884,31 @@ class BookOfHousesTollBenchProvider:
             needs=self._grant_requirements(),
             block_templates=brief.get("block_templates"),
         )
+        submitted_plan, bound = blocks.bind_contact_research(
+            submitted_plan, blocks.contact_research_of(brief)
+        )
+        if bound:
+            _LOGGER.warning(
+                "Informed plan for target %s reaches a person the person asked "
+                "us to find; bound the outreach to the research run (%s)",
+                target_id,
+                "; ".join(bound),
+            )
+        # THE PICKS ARE IN. This is the filing that knows how many people the
+        # person actually chose, so the fan-out happens here as well as at bid
+        # time: `each` on a calls run, one act per contact on a legacy act.
+        submitted_plan, spread = blocks.spread_over_contacts(
+            submitted_plan,
+            brief.get("selected_contacts"),
+            (original or {}).get("finalist_questions"),
+        )
+        if spread:
+            _LOGGER.warning(
+                "Informed plan for target %s sends to more than one picked "
+                "contact; spread the outreach (%s)",
+                target_id,
+                "; ".join(spread),
+            )
         submitted_plan, retired = blocks.retire_grant_steps(
             submitted_plan, self._published_steps(brief)
         )

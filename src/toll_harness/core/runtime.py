@@ -44,6 +44,34 @@ informed plan - yours is the only plan the person is waiting on; each answer car
 answer_value and format beside the person's words, so read the structured value and not only
 the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
 block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
+FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS. The brief carries `plan_examples`: worked
+programs, each one a COMPLETE proposal that already passes the validate door, with `wants_like`
+naming the wants it is for. Do not compose a plan out of parts. Pick the program nearest this want
+-- `nearest_program` on the brief is the harness's own pick and rides it inline, with one sentence
+in `program_to_copy` -- copy its `proposal` WHOLE, change only what THIS want makes different (the
+words, the recipient, the numbers), keep its shape (its steps, its acts, its `connect_account`
+rows, its question formats), then compile it at the validate door and file once. A plan that shares
+no shape with any of the programs is a plan nobody has ever run.
+A program's work is a `calls` act: {"kind": "calls", "title": ..., "drafts": {name: your words},
+"runs": [...]}. A RUN IS EITHER A CALL OR A WAIT, never both. A call names a `tool` (a registry
+verb, `composio:<service>/<TOOL>`, `key:<service>/<action>`, `mcp:<server>/<tool>`, or
+platform.notify | platform.draft | platform.contact | platform.research), the `row` -- THE ID of
+the `connect_account` block on THIS step whose account it runs on, and a platform tool carries none
+-- its `args`, and `each` when it runs once per item of a list it binds. A wait names `wait`
+{"event", "of", "timeout_hours"} and no tool, and waits on a run ABOVE it. SAY WHERE EVERY
+ARGUMENT CAME FROM: every argument is a literal you wrote or a declared source, and there are four
+heads and no fifth -- {"$from": "person.<question id>"}, {"$from": "<a run ABOVE this one>
+[.field]"}, {"$from": "draft.<name>"} declared in this act's own `drafts`, and {"$from":
+"item[.field]"} inside a run that declares `each`. `$from` is the whole argument or none of it. An
+argument from anywhere else, a run reading a run below it, or a tool whose row is not on its step
+is refused REJ-41, and a recipient is never a typed address.
+WHEN THE PERSON HANDS THE QUESTION BACK (rule 240): they may answer the contact question with
+{"research": true, "brief": "..."} instead of picking anybody, and the brief carries it as
+`contact_research` {question_id, brief} -- always present, null when they picked or said nothing.
+Then the recipient comes from your OWN research: `to`: {"$from": "<a platform.research run above
+it>.contact"} in a `calls` act, or `contact_from`: "research" beside an empty `contact_ref` on an
+email act, and you file the person you found as `found_contact` {name, email, source_url} when you
+send. Never add a picker they already declined, and never write an address of your own.
 THE TEMPLATE IS A FORM, NOT A PLAN. The want is a posting; you decide what a plan for it is
 made of. The brief hands over the SHAPE of a legal bid and not one word of yours: plan_template
 is a blank SKELETON (the fewest steps this band allows, mechanics filled, every agent-owned field
