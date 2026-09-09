@@ -866,3 +866,136 @@ def test_the_put_door_is_not_a_tool_the_model_can_call():
     assert "toll_bench.put_proposal_draft" not in names
     assert "toll_bench.patch_proposal_draft" in names
     assert "toll_bench.get_proposal_draft" in names
+
+
+# ---------------------------------------------------------------------------
+# A REPEAT GETS A BETTER PROMPT, NOT A LIMIT
+# ---------------------------------------------------------------------------
+class _Nagging(FakeDraftBench):
+    """A bench that names one thing until the value it wants actually lands."""
+
+    WANTED = "four blocks"
+
+    def patch_draft(self, target_id, patches, *, kind="bid"):
+        self.patch_calls.append(list(patches))
+        self.rounds += 1
+        for entry in patches:
+            self._set(str(entry.get("path")), entry.get("value"))
+        if self.document.get("finalist_questions") == self.WANTED:
+            self.pending_fixes = []
+        if self.rounds >= self.cap:
+            return self.answer(closed="this draft used its rounds.")
+        return self.answer()
+
+
+def _nagging_bench():
+    bench = _Nagging(cap=12)
+    bench.pending_fixes = [
+        {"path": "finalist_questions.0.0", "current": "a text box",
+         "code": "REJ-15", "fix": "At most two of the four may be a text box.",
+         "detail": "finalist_questions[0][0] must be a block"}
+    ]
+    return bench
+
+
+def test_a_repeated_fix_hands_back_what_was_sent_and_what_is_there_now():
+    """WHAT FORCED IT: on 2026-09-09 Greg spent rounds 123-132 on one REJ-15,
+    asked in the same words each round and answered the same way each round,
+    until the bench closed the draft."""
+    bench = _nagging_bench()
+    model = _model(
+        _OUTLINE,
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}]},
+        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
+        {"patches": [{"path": "pitch_title", "value": "C"}]},
+        {"patches": [{"path": "finalist_questions", "value": "a text box again"}]},
+        {"patches": [{"path": "finalist_questions", "value": "four blocks"}]},
+    )
+
+    outcome = DraftLoop(model, bench).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+    )
+
+    first_ask = model.invocations[4]["messages"][0].content[0]["text"]
+    second_ask = model.invocations[5]["messages"][0].content[0]["text"]
+    # The first time it is asked plainly...
+    assert "did not clear" not in first_ask
+    # ...and the second time it is told, and shown both sides.
+    assert "THE BENCH IS NAMING THE SAME THING AGAIN" in second_ask
+    assert "you_sent_last_round" in second_ask
+    assert "a text box again" in second_ask
+    assert "what_is_in_the_document_now" in second_ask
+    assert outcome["ok"] is True
+
+
+def test_a_fix_named_once_is_asked_plainly():
+    bench = FakeDraftBench(
+        fixes=[{"path": "steps.1.title", "current": "x", "code": "REJ-34",
+                "fix": "Say how.", "detail": None}]
+    )
+    model = _happy_path_model()
+
+    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+
+    last = model.invocations[-1]["messages"][0].content[0]["text"]
+    assert "THE BENCH IS NAMING THE SAME THING AGAIN" not in last
+    assert "your_last_patch_did_not_clear_this" not in last
+
+
+def test_every_patch_body_is_logged_with_a_preview(caplog):
+    bench = FakeDraftBench()
+    model = _model(
+        _OUTLINE,
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "P " + "x" * 400}]},
+        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
+        {"patches": [{"path": "pitch_title", "value": "C"}]},
+    )
+
+    with caplog.at_level("INFO", logger="toll_harness.draft"):
+        DraftLoop(model, bench).run(
+            "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        )
+
+    patch_lines = [line for line in caplog.text.splitlines() if " patch " in line]
+    assert len(patch_lines) == 3
+    assert "steps.0.outcome_promise = P xxx" in caplog.text
+    # Bounded: the log carries a preview of the value, never the whole thing.
+    assert "x" * 400 not in caplog.text
+
+
+def test_a_round_is_never_sent_without_a_model_call():
+    """One ask, one patch, always: the loop never re-sends a body the model did
+    not just write."""
+    bench = _nagging_bench()
+    model = _model(
+        _OUTLINE,
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}]},
+        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
+        {"patches": [{"path": "pitch_title", "value": "C"}]},
+        {"patches": [{"path": "finalist_questions", "value": "not yet"}]},
+        {"patches": [{"path": "finalist_questions", "value": "four blocks"}]},
+    )
+
+    loop = DraftLoop(model, bench)
+    loop.run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+
+    # Every PATCH that went out had its own model call in front of it.
+    assert len(bench.patch_calls) == loop.rounds
+    assert len(model.invocations) == loop.rounds + 1  # +1 for the outline
+
+
+def test_the_repeat_finds_the_patch_that_touched_the_path_not_only_its_address():
+    """The bench names `finalist_questions.0.0` and the agent patches
+    `finalist_questions` -- which is the right move, the whole list goes back.
+    An exact-address lookup would tell the agent it had sent nothing."""
+    loop = DraftLoop(_model(), FakeDraftBench())
+    loop._sent = [("pitch_title", "A"), ("finalist_questions", ["one", "two"])]
+
+    assert loop._last_sent_for("finalist_questions.0.0") == {
+        "path": "finalist_questions",
+        "value": ["one", "two"],
+    }
+    assert loop._last_sent_for("steps.0.title") is None
+    # A descendant counts too: the agent answered one field of the thing named.
+    loop._sent.append(("steps.0.acts.0.title", "Send it"))
+    assert loop._last_sent_for("steps.0.acts")["path"] == "steps.0.acts.0.title"

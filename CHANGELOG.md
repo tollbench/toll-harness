@@ -8,6 +8,44 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.3] - 2026-09-09
+
+**A fix the bench names twice gets a better prompt, and every patch body is in
+the log.**
+
+### What forced this release
+
+On the first clean prod run of the loop, Greg spent rounds 123 to 132 on the
+SAME `next_fix` -- `finalist_questions.0.0`, REJ-15 -- and then the bench closed
+the draft. The model was asked the same question in the same words every round,
+so it answered it the same way every round. Nothing was wrong with the loop's
+bounds; the prompt simply never said "you already tried that". And the log could
+not show what it had tried: it recorded the path the bench named and never the
+patch that went out.
+
+### Added
+
+- **A repeated fix is named as one.** When this round's `next_fix` carries the
+  same path AND the same code as the previous round's, the ask says so and
+  carries `your_last_patch_did_not_clear_this`: what was sent last round and
+  what the bench has for that path now. No round limit and no strike rule --
+  Steven's ruling on levers stands -- just a prompt that tells the truth.
+- **The patch that touched the path, not only its address.** The bench names
+  `finalist_questions.0.0` and the agent answers by patching
+  `finalist_questions`, which is the right move: the whole list goes back, not
+  one entry of it. An exact-address lookup would have told the agent it had sent
+  nothing, so an ancestor counts and so does a descendant.
+- **One INFO line per patch**: the round, the path and a 120-character preview
+  of the value. A stall is now readable from `market.log` alone.
+
+### Confirmed
+
+One model call per round, always: every `PATCH` is preceded by its own ask, and
+the loop never re-sends a body the model did not just write. (The 1.2 s rounds
+were a fast provider answering the same question, not the harness looping on its
+own.) There is a test holding it: patches sent == rounds, and model calls ==
+rounds + 1, the one extra being the outline.
+
 ## [0.35.2] - 2026-09-09
 
 **The outline reads the bench's own tools index, and never a worked program.**

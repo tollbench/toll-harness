@@ -116,6 +116,16 @@ BLANKS_INSTRUCTION = (
     'path>", "value": <your value>}, ...]}.'
 )
 
+REPEATED_FIX_INSTRUCTION = (
+    "THE BENCH IS NAMING THE SAME THING AGAIN. Your last patch did not clear "
+    "it. `you_sent_last_round` is exactly what you sent and "
+    "`what_is_in_the_document_now` is what the bench has for that path after "
+    "it. Sending the same value a third time cannot work: read the code and "
+    "the fix sentence again and send something DIFFERENT -- a different "
+    "value, or the same idea in the shape the code asks for. If the path is "
+    "a list, send the whole list, not one entry of it.\n"
+)
+
 FIX_INSTRUCTION = (
     "The bench read the plan and named ONE thing to change. Change exactly "
     "that one thing. Do not touch any other path and do not resend the "
@@ -451,6 +461,9 @@ class DraftLoop:
         self.rounds = 0
         self.calls = 0
         self.trail: list[dict[str, Any]] = []
+        # Every patch sent, in order, so a repeated fix can be handed back with
+        # what the agent already tried.
+        self._sent: list[tuple[str, Any]] = []
 
     # -- the model ---------------------------------------------------------
     def _ask(self, instruction: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -516,9 +529,55 @@ class DraftLoop:
         self._record(target_id, kind, answer, "outline")
         return answer
 
+    PREVIEW = 120
+
+    def _last_sent_for(self, path: str) -> dict[str, Any] | None:
+        """The last patch that TOUCHED this path, whatever it was addressed to.
+
+        A path is not always answered at its own address: the bench names
+        `finalist_questions.0.0` and the agent patches `finalist_questions`,
+        which is the right move (the whole list goes back, not one entry of
+        it). An exact-match lookup finds nothing there and tells the agent it
+        sent nothing, which is worse than saying nothing at all. So an
+        ancestor counts, and so does a descendant.
+        """
+        if not path:
+            return None
+        for sent_path, value in reversed(self._sent):
+            if (
+                sent_path == path
+                or path.startswith(sent_path + ".")
+                or sent_path.startswith(path + ".")
+            ):
+                return {"path": sent_path, "value": value}
+        return None
+
+    def _preview(self, value: Any) -> str:
+        try:
+            text = value if isinstance(value, str) else json.dumps(value, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            text = str(value)
+        text = " ".join(str(text).split())
+        return text if len(text) <= self.PREVIEW else text[: self.PREVIEW - 1] + "\u2026"
+
     def _patch(
         self, target_id: str, kind: str, patches: Sequence[dict[str, Any]], what: str
     ) -> dict[str, Any]:
+        # WHAT WENT OUT, EVERY ROUND. A stall is unreadable without it: on
+        # 2026-09-09 a run spent rounds 123-132 on one REJ-15 and the log could
+        # say only that the bench kept naming the same path, never what the
+        # agent kept answering with.
+        for entry in patches:
+            path = str(entry.get("path") or "")
+            self.log.info(
+                "draft loop %s target=%s round=%d patch %s = %s",
+                kind,
+                target_id,
+                self.rounds + 1,
+                path or "?",
+                self._preview(entry.get("value")),
+            )
+            self._sent.append((path, entry.get("value")))
         answer = self.provider.patch_draft(target_id, list(patches), kind=kind)
         self.rounds += 1
         self._record(target_id, kind, answer, what)
@@ -660,7 +719,15 @@ class DraftLoop:
         worth of things to fix and the bench already knows how many rounds that
         is worth; the loop stops when the bench says `ready`, says `closed`, or
         publishes no rounds left.
+
+        WHAT A REPEAT GETS IS A BETTER PROMPT, NOT A LIMIT. When the bench
+        names the same path with the same code twice running, the next ask
+        carries what was sent last round and what the bench has for that path
+        now. Live on 2026-09-09, Greg spent rounds 123-132 on one REJ-15 on
+        `finalist_questions.0.0`, asked the same question in the same words
+        every time, and answered it the same way every time.
         """
+        last_named: tuple[str, str] | None = None
         while (
             not answer.get("ready")
             and not answer.get("closed")
@@ -669,24 +736,44 @@ class DraftLoop:
         ):
             fix = answer["next_fix"]
             path = str(fix.get("path") or "")
+            code = str(fix.get("code") or "")
             index = step_of(path)
-            patches = read_patches(
-                self._ask(
-                    FIX_INSTRUCTION,
-                    {
-                        "want": want,
-                        "fix_this": {
-                            "path": fix.get("path"),
-                            "current_value": fix.get("current"),
-                            "code": fix.get("code"),
-                            "fix": fix.get("fix"),
-                            "detail": fix.get("detail"),
-                        },
-                        "step_number": None if index is None else index + 1,
-                        "step": _fit(step_context(answer.get("draft"), index)),
-                    },
+            payload: dict[str, Any] = {
+                "want": want,
+                "fix_this": {
+                    "path": fix.get("path"),
+                    "current_value": fix.get("current"),
+                    "code": fix.get("code"),
+                    "fix": fix.get("fix"),
+                    "detail": fix.get("detail"),
+                },
+                "step_number": None if index is None else index + 1,
+                "step": _fit(step_context(answer.get("draft"), index)),
+            }
+            # SAME PATH, SAME CODE AS LAST ROUND: say so, and hand back what
+            # was sent beside what the bench has now. No strike rule and no
+            # round limit -- a model that is told its last answer did not land,
+            # and shown it, can send something else; a model that is asked the
+            # same question in the same words answers it the same way.
+            instruction = FIX_INSTRUCTION
+            if (path, code) == last_named and path:
+                instruction = REPEATED_FIX_INSTRUCTION + FIX_INSTRUCTION
+                payload["your_last_patch_did_not_clear_this"] = {
+                    "path": path,
+                    "you_sent_last_round": self._last_sent_for(path),
+                    "what_is_in_the_document_now": fix.get("current"),
+                }
+                self.log.info(
+                    "draft loop %s target=%s round=%d: %s (%s) again; telling "
+                    "the agent what it sent last round",
+                    kind,
+                    target_id,
+                    self.rounds + 1,
+                    path,
+                    code or "?",
                 )
-            )
+            last_named = (path, code)
+            patches = read_patches(self._ask(instruction, payload))
             if not patches:
                 self.log.warning(
                     "draft loop %s target=%s: no patch came back for %s; "
