@@ -57,8 +57,10 @@ names every field that is the agent's as an explicit blank with one sentence on 
 for ONE STEP's blanks at a time, and after that for the ONE `next_fix` each answer carries -- a
 path, its current value, a code and one sentence -- until `ready`, at which point
 `POST .../proposals {"from_draft": true}` files the document the bench has been holding. The
-informed plan walks the same loop with `kind: "plan"`, which opens empty and starts from the steps
-already filed. A run READS the draft the bench is already holding before it opens one, and sends at
+informed plan walks the same loop with `kind: "plan"`, which opens empty; when the person answered
+questions at the pick the door answers `next: "outline"` with the bid's steps beside those answers,
+and the loop makes one outline ask and PUTs the outline back before the blanks -- the runtime never
+assumes the sequence, it does what the door's answer names next. A run READS the draft the bench is already holding before it opens one, and sends at
 most ONE `PUT` -- a PUT replaces the standing draft and zeroes the rounds, so opening with one
 throws away every answer already given. For the same reason the PUT is not a tool: only the loop
 sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named

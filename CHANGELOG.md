@@ -8,6 +8,70 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.36.2] - 2026-09-09
+
+**The step ask and the draft tail carry what the person said.**
+
+### What forced this release
+
+Steven, 2026-09-09, 21:20, after a night of the same hole: "EVERYTHING THE
+PERSON HAS SAID THAT BEARS ON THIS STEP RIDES EVERY ASK, ALWAYS." Agents are
+stateless on purpose (small cached asks); the bench is the memory, so the
+bench shows what it remembers at the moment it matters. That night the plan
+draft did not carry the contact picks (the person was asked to type
+addresses they had picked), and the step ask did not carry the answers (on
+step 3 of "connect two people by email" the agent handed back a card with
+john.doe@example.com, jane.smith@example.com and an invented introduction,
+after the person had picked both real people and answered three questions).
+
+### Changed
+
+- **`the_person_said` rides the tail.** When a bench answer carries it (the
+  brief, every draft-door answer, `current-step`, the check-in 201), the
+  step ask, the blanks ask and the fix ask put it in the TAIL verbatim, under
+  one line: "This is what the person said and picked. Write from it. Never
+  invent a name, an address or a reason; the platform sends to the picks."
+  The prefix is byte for byte what it was, so the provider cache still
+  hits. On an older bench that sends nothing, nothing changes.
+- The bench side of the same law: a stand-in (a made-up address, a
+  `[bracket blank]`, the form's own note) is now refused `stand_in` (422)
+  at every door that takes a value. A refusal is asked once more with the
+  bench's words, as before; the block above is what to write from.
+
+## [0.36.1] - 2026-09-09
+
+**The plan road follows the door: an outline round with the person's answers.**
+
+### What forced this release
+
+Steven, 2026-09-09, 20:55: "peter has no memory... so we were missing a
+step basically." The informed plan opened empty at the bench's draft door
+and went straight to blanks and fixes, so the model never saw the steps it
+had bid beside what the person answered when they picked it. On one live
+deal the bid's step 1 said "Provide the two email addresses"; the person had
+already picked both people in the Contact book at the pick; the plan
+carried the stale step, and the person was asked to type addresses they had
+already given.
+
+### Changed
+
+- **The runtime never assumes the sequence; it does what the door's answer
+  names next.** Every draft-door answer is read for `next` before it is read
+  as a template. Today the one name is `outline`: the bench answers the
+  plan's first empty PUT with `next: "outline"`, `steps_you_bid` (the bid's
+  steps, one line each, numbered) and `the_person_answered` (the answers,
+  each with its question; a contact pick as people by name and reference).
+  The loop makes ONE outline ask with those two lists in the tail, on the
+  same stable prefix as every other round so the provider cache is shared,
+  and PUTs the outline back; the answer to that PUT is the template the
+  blanks and fix rounds read as before. A step kept by its `bid_step`
+  number carries everything already written on it; a step the answers
+  already cover is dropped; a new step comes back blank.
+- An outline round the model answers with no steps sends the steps already
+  bid, unchanged, rather than costing the plan. A door that answers the
+  template straight away (the person skipped every question) is walked
+  exactly as before: no outline ask is made.
+
 ## [0.36.0] - 2026-09-09
 
 **Stepping through the plan costs what a step costs.**

@@ -462,3 +462,47 @@ def test_the_step_ask_is_a_fraction_of_the_old_roads_opening_prompt(capsys):
     assert new_chars < 8_000
     assert new_chars * 3 < old_chars
     cli._IDLE_STEP_MEMO.clear()
+
+
+# ---------------------------------------------------------------------------
+# LAW A (Steven, 2026-09-09): what the person said rides the tail, never the prefix
+# ---------------------------------------------------------------------------
+THE_PERSON_SAID = [
+    {"question": "What do you want?", "answer": "Connect two people by email"},
+    {"question": "How formal should the introduction be?", "answer": "Warm and casual"},
+    {"question": "May I mention that you two met at the fair?", "answer": "yes"},
+    {"question": "Anything they should know before they meet?",
+     "answer": "John is only free on weekday evenings."},
+    {"question": "Who are the two people?", "answer": "Jane Real, John Actual",
+     "people": [{"name": "Jane Real", "contact_ref": "c-1"},
+                {"name": "John Actual", "contact_ref": "c-2"}],
+     "finding": []},
+]
+
+
+def test_the_tail_carries_what_the_person_said_verbatim():
+    from toll_harness.toll_bench import step as step_module
+    with_it = _payload(the_person_said=THE_PERSON_SAID)
+    tail = step_tail(with_it, OBLIGATION, the_move(with_it), [])
+    assert tail["the_person_said"] == THE_PERSON_SAID
+    # an older bench that sends nothing changes nothing
+    bare = step_tail(_payload(), OBLIGATION, the_move(_payload()), [])
+    assert "the_person_said" not in bare
+    assert step_module.PERSON_SAID_INSTRUCTION == draft.PERSON_SAID_INSTRUCTION
+
+
+def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the_tail():
+    from toll_harness.toll_bench import step as step_module
+    kinds = FakeBench().list_act_kinds()
+    with_it = _model(CAFES)
+    StepAsk(with_it, FakeBench()).run(
+        OBLIGATION, _payload(the_person_said=THE_PERSON_SAID), brief=BRIEF, act_kinds=kinds)
+    without = _model(CAFES)
+    StepAsk(without, FakeBench()).run(OBLIGATION, _payload(), brief=BRIEF, act_kinds=kinds)
+    assert with_it.invocations[0]["system"] == without.invocations[0]["system"]
+    said = with_it.invocations[0]["messages"][0].content[0]["text"]
+    plain = without.invocations[0]["messages"][0].content[0]["text"]
+    assert step_module.PERSON_SAID_INSTRUCTION in said
+    assert step_module.PERSON_SAID_INSTRUCTION not in plain
+    assert '"contact_ref":"c-1"' in said and "Jane Real" in said
+    assert "the_person_said" not in plain

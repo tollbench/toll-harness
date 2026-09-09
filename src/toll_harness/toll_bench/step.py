@@ -47,6 +47,8 @@ from typing import Any
 from toll_harness.core.budget import ContextBudget
 from toll_harness.core.types import ModelMessage
 from toll_harness.toll_bench.draft import (
+    PERSON_SAID_INSTRUCTION,
+    PERSON_SAID_KEY,
     PROMPT_CHAR_BUDGET,
     _fit,
     cached_input_tokens,
@@ -490,6 +492,13 @@ def step_tail(
     }
     if obligation.get("kind") == "draft_sent_back" and obligation.get("sent_back_reason"):
         tail["sent_back_reason"] = _fit(obligation.get("sent_back_reason"), 400)
+    # LAW A (Steven, 2026-09-09): what the person said and picked rides the
+    # tail of the step ask, verbatim, when the bench sent it. It is the one
+    # thing a shed never drops: without it a stateless agent on step 3 of
+    # "connect two people by email" wrote john.doe@example.com.
+    said = payload.get(PERSON_SAID_KEY)
+    if isinstance(said, list):
+        tail[PERSON_SAID_KEY] = list(said)
     if pulse_due:
         tail["pulse_due"] = True
     if refused:
@@ -703,6 +712,10 @@ class StepAsk:
         instruction = MOVE_INSTRUCTIONS[move["move"]]
         if pulse_due and move["move"] == "hand_back":
             instruction = instruction + " " + PULSE_DUE_INSTRUCTION
+        if isinstance(payload.get(PERSON_SAID_KEY), list):
+            # LAW A: the one instruction line rides the tail with the block;
+            # the prefix does not move.
+            instruction = instruction + "\n" + PERSON_SAID_INSTRUCTION
         tail = step_tail(payload, obligation, move, changed or [], pulse_due=pulse_due)
         ids = dict(tail["ids"])
         answer = self._ask(instruction, tail, f"{move['move']} step {number}")

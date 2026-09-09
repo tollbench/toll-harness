@@ -38,6 +38,21 @@ hours; when it says `closed` this module opens ONE fresh outline and, if that
 closes too, gives up on the want for this cycle. The only numbers below are a
 stall guard (the same fix named over and over is not progress) and a prompt
 budget that a loop prompt should never come near.
+
+THE RUNTIME NEVER ASSUMES THE SEQUENCE; IT DOES WHAT THE DOOR'S ANSWER NAMES
+NEXT. Every answer from the draft door is read for what it asks for before
+anything is assumed about where the loop is: `next` names a round the door
+wants before the template (today: `"outline"`), `blanks` a step to fill,
+`next_fix` one thing to change, `ready` the filing. The plan road is the
+case that forced this (Steven, 2026-09-09 20:55: "peter has no memory... so
+we were missing a step basically"): the informed plan used to open empty and
+go straight to blanks, so the agent never saw its own bid steps beside the
+person's selection answers, and a step that asked the person to type the
+two addresses they had already picked in the Contact book rode into the plan
+unchanged. Now the bench answers that first PUT with `next: "outline"`,
+`steps_you_bid` and `the_person_answered`, and this module makes ONE outline
+ask with those in front of the model and PUTs the outline back. A door that
+one day names another round is followed the same way, not scripted here.
 """
 from __future__ import annotations
 
@@ -142,6 +157,48 @@ OUTLINE_INSTRUCTION = (
     "of those, one at a time, after the bench hands back the form.\n"
     'Answer: {"steps": [ ... ]}.'
 )
+
+# THE PLAN'S OUTLINE ROUND. The same shape as the bid road's outline ask
+# (the same stable prefix, so the provider cache is shared), with the two
+# things the bench put in front of us in the tail.
+PLAN_OUTLINE_INSTRUCTION = (
+    "The person picked your bid and answered your questions. Below are "
+    "`steps_you_bid` -- your own steps, one line each, numbered -- and "
+    "`the_person_answered` -- their answers, each with the question it "
+    "answers; a contact pick is the people by name. Write the OUTLINE of the "
+    "plan you will actually run now that they have answered: keep a step by "
+    "its `bid_step` number (everything you wrote on it comes with it), DROP a "
+    "step the answers already cover -- never ask for what they have already "
+    "given -- and add a step only where the answers call for one. No promises, "
+    "no pitch, no money, no odds: each of those is asked for afterwards, one "
+    "at a time.\n"
+    'Answer: {"steps": [{"bid_step": 2, "ask": "APPROVE", "title": "..."}, ...]}.'
+)
+
+# LAW A (Steven, 2026-09-09, 21:20): "EVERYTHING THE PERSON HAS SAID THAT BEARS
+# ON THIS STEP RIDES EVERY ASK, ALWAYS." An agent is stateless on purpose; the
+# bench is the memory and hands it over as `the_person_said` on every answer.
+# The runtime puts it in the TAIL of the blanks ask, the fix ask and the step
+# ask, verbatim, under this one line -- never in the prefix, which stays byte
+# for byte the same so the provider cache still hits. Absent on an older
+# bench, nothing changes.
+PERSON_SAID_INSTRUCTION = (
+    "This is what the person said and picked. Write from it. Never invent a "
+    "name, an address or a reason; the platform sends to the picks."
+)
+PERSON_SAID_KEY = "the_person_said"
+
+
+def with_the_person_said(instruction: str, payload: dict, answer: Any) -> str:
+    """Put `the_person_said` from a bench answer into the tail payload and
+    hang the one instruction line under it. The instruction comes back
+    unchanged when the bench sent nothing."""
+    said = answer.get(PERSON_SAID_KEY) if isinstance(answer, dict) else None
+    if not isinstance(said, list):
+        return instruction
+    payload[PERSON_SAID_KEY] = list(said)
+    return instruction + "\n" + PERSON_SAID_INSTRUCTION
+
 
 BLANKS_INSTRUCTION = (
     "Below is ONE step of your plan as the bench expanded it, and every blank on "
@@ -1045,8 +1102,10 @@ class DraftLoop:
         if kind == "plan":
             # THE PLAN STARTS FROM THE STEPS ALREADY FILED (rule 113). An
             # outline here would replace the bid the person picked, so the
-            # draft is opened empty and the bench hands back the owned plan
-            # with the selection answers beside it.
+            # draft is opened empty. The bench answers with the owned plan
+            # expanded -- or, when the person answered questions at the pick,
+            # with `next: "outline"` and the answers beside the bid's steps;
+            # `run` follows whichever it names (see `_follow`).
             return self._put(target_id, kind, {})
         # AN AGENT'S OWN WINS ARE ITS SHELF. A want that needs the tools of a
         # job this agent already won is that job again in other words, so the
@@ -1071,6 +1130,58 @@ class DraftLoop:
             outline = seed
         if not outline.get("steps"):
             return None
+        return self._put(target_id, kind, outline)
+
+    def _follow(
+        self, target_id: str, kind: str, answer: dict[str, Any], want: Any, strategy: Any
+    ) -> dict[str, Any]:
+        """WHAT THE DOOR NAMES NEXT IS WHAT HAPPENS NEXT. `next: "outline"`
+        is the one name today: the bench has put `steps_you_bid` beside
+        `the_person_answered` and wants the outline back before it builds a
+        template. One model ask, one PUT, and the answer to that PUT is the
+        template the rest of the loop reads. An answer with no `next` is
+        handed back untouched."""
+        if not isinstance(answer, dict) or answer.get("next") != "outline":
+            return answer
+        bid_steps = [s for s in (answer.get("steps_you_bid") or []) if isinstance(s, dict)]
+        payload = {
+            "want": want,
+            "what_the_person_said": strategy,
+            "steps_you_bid": bid_steps,
+            "the_person_answered": answer.get("the_person_answered") or [],
+        }
+        outline = read_outline(self._ask(PLAN_OUTLINE_INSTRUCTION, payload, "plan outline"))
+        if not outline.get("steps"):
+            # The model was shown its own steps and the answers and said
+            # nothing. The steps it bid are still the best thing anyone has,
+            # so they go back as they stand rather than costing the plan.
+            self.log.warning(
+                "draft loop %s target=%s: the outline round answered with no "
+                "steps; sending the steps already bid, unchanged",
+                kind,
+                target_id,
+            )
+            outline = {
+                "steps": [
+                    {
+                        k: step.get(k)
+                        for k in ("bid_step", "ask", "title")
+                        if step.get(k) is not None
+                    }
+                    for step in bid_steps
+                ]
+            }
+        if not outline.get("steps"):
+            return answer
+        self.log.info(
+            "draft loop %s target=%s: outline round -- %d step(s) bid, %d "
+            "answer(s) from the person, %d step(s) sent back",
+            kind,
+            target_id,
+            len(bid_steps),
+            len(payload["the_person_answered"]),
+            len(outline["steps"]),
+        )
         return self._put(target_id, kind, outline)
 
     # -- the pieces --------------------------------------------------------
@@ -1102,9 +1213,12 @@ class DraftLoop:
                 payload["these_are"] = (
                     "the fields of the bid itself, not of any one step"
                 )
+            # LAW A: the person's words and picks ride the tail of every
+            # blanks ask, so a blank is filled from them and never invented.
+            instruction = with_the_person_said(BLANKS_INSTRUCTION, payload, answer)
             patches = read_patches(
                 self._ask(
-                    BLANKS_INSTRUCTION,
+                    instruction,
                     payload,
                     "blanks" if index is None else f"step {index + 1}",
                 )
@@ -1192,6 +1306,8 @@ class DraftLoop:
                     code or "?",
                 )
             last_named = (path, code)
+            # LAW A: and the tail of every fix ask.
+            instruction = with_the_person_said(instruction, payload, answer)
             patches = read_patches(self._ask(instruction, payload, f"fix {path or '?'}"))
             if not patches:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
@@ -1303,6 +1419,14 @@ class DraftLoop:
                     "The model was asked for an outline and answered with no steps.",
                 )
             answer = opened
+        # THE DOOR SAYS WHAT COMES NEXT. Read it before assuming a template.
+        answer = self._follow(target_id, kind, answer, want, strategy)
+        if answer.get("next"):
+            return self._gave_up(
+                target_id, kind, "no_outline",
+                f"The door asked for the {answer.get(next)} and the model gave none.",
+                answer,
+            )
         if not answer.get("ok") and not answer.get("closed"):
             return self._gave_up(
                 target_id, kind,

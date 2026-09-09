@@ -465,6 +465,144 @@ def test_the_plan_kind_opens_empty_and_files_at_the_plan_door():
     assert bench.filed is None
 
 
+class _AnsweredPlanBench(FakeDraftBench):
+    """The plan door after 2026-09-09: the person answered questions at the
+    pick, so the FIRST empty PUT answers `next: outline` with the bid's steps
+    beside the answers, and the outline that comes back is what expands."""
+
+    STEPS_BID = [
+        {"bid_step": 1, "ask": "PROVIDE", "title": "Provide the two email addresses",
+         "tools": [], "block": None},
+        {"bid_step": 2, "ask": "APPROVE", "title": "Write and send the introduction",
+         "tools": ["gmail.message.send on google-gmail"], "block": None},
+    ]
+    ANSWERED = [
+        {"ordinal": 1, "question": "Who are the two people to introduce?",
+         "answer": "Ada Lovelace, Bob Ross", "format": "contact_picker",
+         "answer_value": [{"contact_ref": "c-ada", "label": "Ada Lovelace"},
+                          {"contact_ref": "c-bob", "label": "Bob Ross"}],
+         "people": [{"seat": 1, "name": "Ada Lovelace", "contact_ref": "c-ada"},
+                    {"seat": 2, "name": "Bob Ross", "contact_ref": "c-bob"}]},
+        {"ordinal": 2, "question": "Any tone you want?", "answer": "Warm and short.",
+         "format": None, "answer_value": None},
+    ]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.outline_asks = 0
+        self.outline_got: dict | None = None
+
+    def put_draft(self, target_id, outline, *, kind="bid"):
+        if kind == "plan" and not (outline or {}).get("steps"):
+            self.puts.append((target_id, dict(outline or {}), kind))
+            self.outline_asks += 1
+            self.kind = kind
+            self.rounds = 1
+            return {
+                "ok": True, "kind": "plan", "next": "outline",
+                "steps_you_bid": json.loads(json.dumps(self.STEPS_BID)),
+                "the_person_answered": json.loads(json.dumps(self.ANSWERED)),
+                "selection_answers": json.loads(json.dumps(self.ANSWERED)),
+                "send": "PUT this door again with the outline.",
+                "draft": {}, "blanks": [], "next_fix": {"path": "outline"},
+                "problems": [], "remaining": 1, "ready": False,
+                "rounds": {"used": 1, "left": self.cap - 1, "cap": self.cap},
+                "closed": None,
+            }
+        if kind == "plan":
+            self.outline_got = json.loads(json.dumps(outline))
+        return super().put_draft(target_id, outline, kind=kind)
+
+
+def test_the_plan_road_follows_the_door_into_an_outline_round():
+    """Steven, 2026-09-09 20:55: "peter has no memory... so we were missing a
+    step basically". The bench says `next: outline`; the runtime makes ONE
+    outline ask with the bid's steps beside the person's answers, and the
+    stale step -- "Provide the two email addresses", already answered by two
+    Contact-book picks -- can be dropped."""
+    bench = _AnsweredPlanBench()
+    model = _model(
+        # The outline back: step 1 dropped, step 2 kept by its number.
+        {"steps": [{"bid_step": 2, "ask": "APPROVE",
+                    "title": "Write and send the introduction"}]},
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "One introduction, sent."}]},
+        {"patches": [{"path": "pitch_title", "value": "The introduction"}]},
+    )
+
+    outcome = DraftLoop(model, bench).run(
+        "t-1", kind="plan", proposal_id="p-9", idempotency_key="plan-key",
+        brief={"want": "Introduce two friends of mine by email"},
+    )
+
+    assert outcome["ok"] is True, outcome
+    assert bench.outline_asks == 1
+    # The outline ask carried the bid's steps and the person's answers, and
+    # nothing was assumed about the sequence: the first model call IS the
+    # outline ask, and it rides the same stable prefix as every other round.
+    first = model.invocations[0]["messages"][0].content[0]["text"]
+    assert "steps_you_bid" in first and "the_person_answered" in first
+    assert "Provide the two email addresses" in first
+    assert "Ada Lovelace" in first and "Bob Ross" in first
+    assert "c-ada" in first
+    assert "Warm and short." in first
+    assert "OUTLINE" in first
+    assert model.invocations[0]["system"] == model.invocations[1]["system"]
+    # The outline went back as the model wrote it, without the stale step.
+    assert bench.outline_got == {
+        "steps": [{"bid_step": 2, "ask": "APPROVE",
+                   "title": "Write and send the introduction"}]
+    }
+    assert [step["title"] for step in bench.document["steps"]] == [
+        "Write and send the introduction"
+    ]
+    # Two PUTs: the empty open and the outline. Then the loop as before.
+    assert [put[2] for put in bench.puts] == ["plan", "plan"]
+    assert bench.puts[0][1] == {}
+    assert len(bench.patch_calls) == 2
+    assert bench.plan_filed == ("t-1", "p-9", "plan-key")
+
+
+def test_an_outline_round_answered_with_nothing_sends_the_bid_steps_unchanged():
+    bench = _AnsweredPlanBench()
+    model = _model(
+        {"nothing": True},
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "The addresses."}]},
+        {"patches": [{"path": "steps.1.outcome_promise", "value": "The introduction."}]},
+        {"patches": [{"path": "pitch_title", "value": "The introduction"}]},
+    )
+
+    outcome = DraftLoop(model, bench).run(
+        "t-1", kind="plan", proposal_id="p-9", idempotency_key="k",
+        brief={"want": "Introduce two friends"},
+    )
+
+    assert outcome["ok"] is True, outcome
+    assert bench.outline_got == {"steps": [
+        {"bid_step": 1, "ask": "PROVIDE", "title": "Provide the two email addresses"},
+        {"bid_step": 2, "ask": "APPROVE", "title": "Write and send the introduction"},
+    ]}
+
+
+def test_a_plan_door_with_no_answers_is_not_asked_for_an_outline():
+    # The person skipped every question: the door answers the template
+    # straight away and no outline ask is made (the first model call is a
+    # blanks round).
+    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}])
+    model = _model(
+        {"patches": [{"path": "steps.0.outcome_promise", "value": "The list."}]},
+        {"patches": [{"path": "pitch_title", "value": "The list"}]},
+    )
+
+    outcome = DraftLoop(model, bench).run(
+        "t-1", kind="plan", proposal_id="p-9", idempotency_key="k"
+    )
+
+    assert outcome["ok"] is True
+    first = model.invocations[0]["messages"][0].content[0]["text"]
+    assert "steps_you_bid" not in first
+    assert len(bench.puts) == 1
+
+
 def test_there_is_no_strike_count_only_the_bench_s_own_bound():
     """Steven, 2026-09-09: "3 strikes on a 30 step job is too little", "I don't
     think we should do any levers". The bench keeps naming the same fix, the
@@ -1161,3 +1299,70 @@ def test_the_cached_share_is_read_from_whatever_the_provider_called_it():
     # Not reported is not zero, and must never read as zero.
     assert cached_input_tokens(SimpleNamespace(raw={"input_tokens": 5})) is None
     assert cached_input_tokens(None) is None
+
+
+# ---------------------------------------------------------------------------
+# LAW A (Steven, 2026-09-09): the blanks and fix tails carry what the person said
+# ---------------------------------------------------------------------------
+THE_PERSON_SAID = [
+    {"question": "What do you want?", "answer": "Book a table for four"},
+    {"question": "Who is coming?", "answer": "Jane Real, John Actual",
+     "people": [{"name": "Jane Real", "contact_ref": "c-1"},
+                {"name": "John Actual", "contact_ref": "c-2"}],
+     "finding": []},
+]
+
+
+class _TalkativeBench(FakeDraftBench):
+    """A bench whose every draft answer carries the person's words."""
+
+    def answer(self, closed=None):
+        out = super().answer(closed=closed)
+        out["the_person_said"] = THE_PERSON_SAID
+        return out
+
+
+def _fix():
+    return {"path": "steps.1.title", "current": "Offer the times and book it",
+            "code": "REJ-34", "fix": "Say how the booking is made.",
+            "detail": "step 2: the promise has no act"}
+
+
+def test_the_blanks_and_fix_tails_carry_what_the_person_said_under_one_line():
+    from toll_harness.toll_bench.draft import PERSON_SAID_INSTRUCTION
+    bench = _TalkativeBench(fixes=[_fix()])
+    model = _happy_path_model()
+    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    texts = [inv["messages"][0].content[0]["text"] for inv in model.invocations]
+    blanks_call, fix_call = texts[1], texts[-1]
+    for text in (blanks_call, fix_call):
+        assert PERSON_SAID_INSTRUCTION in text
+        assert '"contact_ref":"c-1"' in text and "Jane Real" in text
+        # the block is the tail's, not the prefix's
+        assert text.count(PERSON_SAID_INSTRUCTION) == 1
+    assert bench.plan_filed is None and bench.filed is not None
+
+
+_HAPPY = [
+    _OUTLINE,
+    {"patches": [{"path": "steps.0.outcome_promise", "value": "Three places, with sources."}]},
+    {"patches": [{"path": "steps.1.outcome_promise", "value": "A booked table."}]},
+    {"patches": [{"path": "pitch_title", "value": "A table for four"}]},
+    {"patches": [{"path": "steps.1.title", "value": "Offer the times and book the table"}]},
+]
+
+
+def test_the_prefix_is_byte_identical_with_and_without_it():
+    from toll_harness.toll_bench.draft import PERSON_SAID_INSTRUCTION
+    said = _caching_model(*_HAPPY)
+    DraftLoop(said, _TalkativeBench(fixes=[_fix()])).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    plain = _caching_model(*_HAPPY)
+    DraftLoop(plain, FakeDraftBench(fixes=[_fix()])).run(
+        "t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    assert len(said.invocations) == len(plain.invocations)
+    for a, b in zip(said.invocations, plain.invocations):
+        assert a["system"] == b["system"]
+    plain_blanks = plain.invocations[1]["messages"][0].content[0]["text"]
+    assert PERSON_SAID_INSTRUCTION not in plain_blanks
+    assert "the_person_said" not in plain_blanks
