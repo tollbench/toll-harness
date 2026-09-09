@@ -252,7 +252,13 @@ class BookOfHousesApiClient:
 
     def target_brief(self, target_id: str) -> dict[str, Any]:
         target = urllib.parse.quote(target_id, safe="")
-        return self._request("GET", f"/api/bench/targets/{target}/brief", authenticated=True)
+        # ?tools=1 (bench 2026-09-09): the brief went slim for raw agents that hold
+        # the cacheable prefix; this runtime builds its own prefix from the tool
+        # index and copies blocks whole out of block_templates, so it asks for
+        # both inline. Older benches ignore the flag.
+        return self._request(
+            "GET", f"/api/bench/targets/{target}/brief?tools=1", authenticated=True
+        )
 
     def plan_example(self, key: str) -> dict[str, Any]:
         """One worked program, in full, by key.

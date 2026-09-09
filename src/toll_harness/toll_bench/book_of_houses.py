@@ -1348,9 +1348,92 @@ class BookOfHousesTollBenchProvider:
     # copy is enough; the newer word is the one kept.
     PROPOSAL_DUPLICATE_KEYS = ("finalist_answers", "finalist_health")
 
+    # THE MODEL'S VIEW OF ITS OWN BIDS IS SMALL (0.35.5). On 2026-09-09 one
+    # `list_proposals` call handed a GLM run 213,096 characters (~53k tokens):
+    # 79 bids, sixteen of them accepted deals long ended, each kept WHOLE
+    # because it carried a deal id. The run burned 268k input tokens and was
+    # cut off by its budget before it filed anything. A settled bid -- expired,
+    # rejected, withdrawn, or a deal that ended -- is one line now, only the
+    # newest few of those are listed, and the whole answer is capped: past the
+    # cap the oldest live plans drop out first. `_owned_proposals` (the
+    # harness's own reader) is untouched and still sees every bid whole.
+    SETTLED_STATUSES = frozenset({"expired", "rejected", "withdrawn", "superseded"})
+    ENDED_DEAL_STATUSES = frozenset({"ended", "resolved", "lapsed"})
+    SETTLED_ROWS_KEPT = 12
+    LIST_PROPOSALS_CHARS = 48_000
+
     def list_proposals(self) -> dict[str, Any]:
         rows = self.api.proposals()
-        return {"ok": True, "proposals": [self._proposal_row(row) for row in rows]}
+        return self._proposals_view(rows)
+
+    def _proposals_view(self, rows: Any) -> dict[str, Any]:
+        live: list[dict[str, Any]] = []
+        settled: list[dict[str, Any]] = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            if self._settled(row):
+                settled.append(self._settled_line(row))
+            else:
+                live.append(self._proposal_row(row))
+        settled.sort(key=lambda r: str(r.get("filed_at") or ""), reverse=True)
+        omitted = max(0, len(settled) - self.SETTLED_ROWS_KEPT)
+        settled = settled[: self.SETTLED_ROWS_KEPT]
+        payload: dict[str, Any] = {
+            "ok": True,
+            "proposals": live + settled,
+            "settled_omitted": omitted,
+        }
+        if omitted:
+            payload["note"] = (
+                f"{omitted} older settled bid(s) are not listed; the bench still holds them."
+            )
+        # The cap: the oldest live plan goes first, the bid's row stays.
+        with_plans = sorted(
+            (i for i, r in enumerate(live) if "steps" in r),
+            key=lambda i: str(live[i].get("filed_at") or ""),
+        )
+        while with_plans and self._measure(payload) > self.LIST_PROPOSALS_CHARS:
+            row = live[with_plans.pop(0)]
+            for key in self.PROPOSAL_PLAN_KEYS:
+                row.pop(key, None)
+            row["plan_omitted"] = (
+                "This list is too long to carry every plan, so this one is not "
+                "handed back. The bench holds it; the deal's live step comes "
+                "from toll_bench.current_step."
+            )
+        return payload
+
+    @staticmethod
+    def _measure(value: Any) -> int:
+        try:
+            return len(json.dumps(value, separators=(",", ":"), default=str))
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return len(str(value))
+
+    def _settled(self, row: dict[str, Any]) -> bool:
+        if row.get("your_move"):
+            return False
+        deal = row.get("deal") if isinstance(row.get("deal"), dict) else {}
+        deal_status = str(deal.get("status") or "")
+        if deal_status in self.ENDED_DEAL_STATUSES:
+            return True
+        if deal_status:
+            return False
+        return str(row.get("status") or "") in self.SETTLED_STATUSES
+
+    @staticmethod
+    def _settled_line(row: dict[str, Any]) -> dict[str, Any]:
+        deal = row.get("deal") if isinstance(row.get("deal"), dict) else {}
+        steps = row.get("steps")
+        line = {
+            key: row.get(key)
+            for key in ("id", "target_goal_id", "status", "filed_at", "total_ask_cents")
+        }
+        line["deal"] = {"deal_id": deal.get("deal_id"), "status": deal.get("status")}
+        line["steps_count"] = len(steps) if isinstance(steps, list) else 0
+        line["settled"] = True
+        return line
 
     def _owned_proposals(self) -> list[dict[str, Any]]:
         """Every filed bid, WHOLE. `list_proposals` is the MODEL's view.

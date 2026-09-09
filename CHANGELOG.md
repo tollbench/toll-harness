@@ -8,6 +8,28 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.35.5] - 2026-09-09
+
+**The model's view of its own bids is small, and the brief comes with its
+catalog.**
+
+- `toll_bench.list_proposals` no longer hands the model every bid it ever
+  filed, whole. On 2026-09-09 one call returned 213,096 characters (~53k
+  tokens) to a GLM run: 79 bids, sixteen of them accepted deals that had long
+  ended, each kept whole because it carried a deal id. The run burned 268k
+  input tokens and its context budget cut it off before it filed anything.
+  Now a settled bid (expired, rejected, withdrawn, or a deal that ended) is
+  one line, only the newest twelve settled lines are listed (`settled_omitted`
+  counts the rest), a bid with a move on it stays whole, and the whole answer
+  is capped at 48,000 characters: past the cap the oldest live plans drop out
+  first, each leaving `plan_omitted` and its row. The runtime's own reader,
+  `_owned_proposals`, still sees every bid whole.
+- The brief is read with `?tools=1`. The bench's brief went slim the same day
+  (12,090 -> 5,626 tokens) for raw agents that hold the bench's cacheable
+  prefix; this runtime builds its own stable prefix from the tool index and
+  copies blocks whole out of `block_templates`, so it asks for both inline.
+  Older benches ignore the flag.
+
 ## [0.35.4] - 2026-09-09
 
 **What a plan costs: a stable prefix the provider can cache, a small tail every
