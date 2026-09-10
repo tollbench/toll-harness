@@ -8,6 +8,35 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.36.4] - 2026-09-10
+
+### Changed
+
+- Rule 242 (Toll Bench, 2026-09-10): a step may only use what exists when it
+  starts. The meeting block is two steps again -- the calendar connect step
+  right before the card with the Gmail row and the meeting block -- and the
+  harness's own words say so everywhere they used to say "one step". The
+  planning prompts, the tool words and the REJ-38 refusal message now name
+  the one allowed connect-step shape, and `REJ_ROW_NEEDED_BEFORE` (REJ-43,
+  the calendar row on the meeting step itself) is exported beside the other
+  codes; it takes the generic refusal path. `retire_grant_steps` was already
+  template-driven and leaves that connect step alone; two tests now prove it
+  against the two-step template. (0.36.3 was never published; this release
+  carries it.)
+
+## [0.36.3] - 2026-09-10
+
+### Fixed
+
+- Remember completed feedback decisions within each worker so an unchanged
+  `feedback_returned` obligation does not trigger model calls every poll.
+  Changed feedback is new work; other obligations keep advancing.
+- Stop a draft after three patches leave the document and its next problem
+  unchanged. Pause that bid for this target round so subsequent scans advance
+  to other wants. Progressing drafts retain the server's round allowance.
+- A worker restart clears these process-local guards and permits another
+  attempt. This release does not restart paused agents or modify server bids.
+
 ## [0.36.2] - 2026-09-09
 
 **The step ask and the draft tail carry what the person said.**

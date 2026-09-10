@@ -603,11 +603,11 @@ def test_a_plan_door_with_no_answers_is_not_asked_for_an_outline():
     assert len(bench.puts) == 1
 
 
-def test_there_is_no_strike_count_only_the_bench_s_own_bound():
-    """Steven, 2026-09-09: "3 strikes on a 30 step job is too little", "I don't
-    think we should do any levers". The bench keeps naming the same fix, the
-    model keeps missing it, and the loop keeps going until the BENCH closes the
-    draft -- well past three tries."""
+def test_identical_no_progress_stops_before_the_bench_cap():
+    """The spending incident requires stopping identical no-progress loops.
+
+    This is not a cap on a thirty-step job: changing drafts can keep advancing.
+    """
     bench = FakeDraftBench(cap=9)
     bench.pending_fixes = [
         {"path": "steps.0.title", "current": "", "code": "REJ-34",
@@ -629,10 +629,8 @@ def test_there_is_no_strike_count_only_the_bench_s_own_bound():
     )
 
     assert outcome["ok"] is False
-    assert outcome["error"] == "draft_closed"
-    # The bench's own cap, not a harness number: nine rounds, and more than
-    # three of them spent on the one fix the model keeps missing.
-    assert len(bench.patch_calls) > 3 + 3
+    assert outcome["error"] == "draft_stalled"
+    assert len(bench.patch_calls) == 6
     assert len(bench.puts) == 1
     assert bench.filed is None
 

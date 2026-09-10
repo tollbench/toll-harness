@@ -1244,10 +1244,9 @@ class DraftLoop:
     ) -> dict[str, Any]:
         """ONE problem at a time, for as long as the bench names one.
 
-        There is no strike count here. A thirty-step plan has thirty steps'
-        worth of things to fix and the bench already knows how many rounds that
-        is worth; the loop stops when the bench says `ready`, says `closed`, or
-        publishes no rounds left.
+        Advancing the draft is useful work. Repeating an identical draft and
+        problem is not: stop after three unchanged responses and let the
+        watcher advance to another target. There is no total step/round cap.
 
         WHAT A REPEAT GETS IS A BETTER PROMPT, NOT A LIMIT. When the bench
         names the same path with the same code twice running, the next ask
@@ -1257,6 +1256,8 @@ class DraftLoop:
         every time, and answered it the same way every time.
         """
         last_named: tuple[str, str] | None = None
+        last_progress = None
+        unchanged = 0
         while (
             not answer.get("ready")
             and not answer.get("closed")
@@ -1266,6 +1267,14 @@ class DraftLoop:
             fix = answer["next_fix"]
             path = str(fix.get("path") or "")
             code = str(fix.get("code") or "")
+            progress = json.dumps({"draft": answer.get("draft"),
+                                   "next_fix": fix, "remaining": answer.get("remaining")},
+                                  sort_keys=True, default=str)
+            unchanged = unchanged + 1 if progress == last_progress else 0
+            last_progress = progress
+            if unchanged >= 3:
+                return dict(answer, ok=False, error="draft_stalled",
+                            message="The draft and its next problem were unchanged after three patches; paused to avoid repeated model spending.")
             index = step_of(path)
             payload: dict[str, Any] = {
                 "want": want,
@@ -1438,6 +1447,8 @@ class DraftLoop:
             answer = self._fill_the_blanks(target_id, kind, answer, want)
         if not answer.get("closed"):
             answer = self._answer_the_fixes(target_id, kind, answer, want)
+        if answer.get("error") == "draft_stalled":
+            return self._gave_up(target_id, kind, "draft_stalled", answer["message"], answer)
         if answer.get("closed"):
             # A closed draft is never re-PUT, in this run or the next: the
             # bench counts a repeated PUT as a round and holds a used-up draft

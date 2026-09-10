@@ -92,12 +92,17 @@ from block_templates IN FULL and in its order, and DO NOT COMPOSE THE STEPS YOUR
 carries the person's connection is the block's business, not yours. RULE 236: A CONNECTION IS NOT
 A STEP, IT IS PART OF THE ACTION THAT NEEDS IT. The connection is a `connect_account` ROW inside
 the step that uses it - one card holding the account rows, then what the step does, then one
-button that stays asleep until every row is settled. The meeting plan is ONE step: a Google
-Calendar row, a Gmail row and the meeting block on a single card. A new plan that lifts a
-registry connector back into a GRANT step of its own is refused REJ-38, and the refusal hands you
-back the exact row to put on the action's step. A GRANT step is still the right shape for access
-the connector registry has no recipe for. Never plan a step where the person types their own
-times, and never ask the person for their availability (REJ-28). A block whose connection nothing
+button that stays asleep until every row is settled. RULE 242: A STEP MAY ONLY USE WHAT EXISTS
+WHEN IT STARTS. A connection the agent needs to WORK - a meeting reads the calendar to offer
+times - is a connect step RIGHT BEFORE the step that uses it: `ask: GRANT`, one `connect_account`
+row, one tap, not counted against the step cap; that row on the meeting step itself is refused
+REJ-43. A connection only the SEND needs - the mailbox - stays a row on the action's own step.
+So the meeting plan is TWO steps: the calendar connect step, then the card with the Gmail row and
+the meeting block. Any other standalone GRANT step for a registry connector is refused REJ-38, and
+the refusal hands you back the exact row to put on the action's step. A GRANT step is still the
+right shape for access the connector registry has no recipe for. Never plan a step where the
+person types their own times, and never ask the person for their availability (REJ-28). A block
+whose connection nothing
 on its step opens is refused REJ-35. Before you file, validate the exact payload: the
 validate door answers with EVERY problem at once, each with a plain-words fix, writes no row and
 counts against nothing. Fix what it names, then file once. An older bench may still name required

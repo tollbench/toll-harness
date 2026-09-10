@@ -710,10 +710,13 @@ _FILE_INFORMED_PLAN_INSTRUCTION = (
     "on a block are its fields. A meeting message carries no dates and no times, and "
     "`with` is left out unless the invitee's address is known. Pull a block in FULL "
     "(rule 236): the connection is a `connect_account` ROW inside the step that uses "
-    "it, never a step of its own, and the meeting plan is ONE step -- a Google Calendar "
-    "row, a Gmail row and the meeting block on one card. A new plan that puts a registry "
-    "connector in a GRANT step of its own is refused REJ-38; a block whose connection "
-    "nothing on its step opens is refused REJ-35. An "
+    "it, except the one rule 242 names: a connection the agent needs to WORK (a meeting "
+    "reads the calendar to offer times) is a connect step RIGHT BEFORE the step that uses "
+    "it -- `ask: GRANT`, one `connect_account` row, one tap, not counted against the step "
+    "cap -- so the meeting plan is TWO steps: the calendar connect step, then the card with "
+    "the Gmail row and the meeting block; that calendar row on the meeting step itself is "
+    "refused REJ-43. Any other registry connector in a GRANT step of its own is refused "
+    "REJ-38; a block whose connection nothing on its step opens is refused REJ-35. An "
     "older bench may name required_blocks and refuse a missing one REJ-32. "
     "NAME WHAT YOU HAND BACK (rule 230): a step that hands back a thing carries "
     "`deliverable` -- {\"channel\": \"file\", \"family\": \"video\", \"types\": [\"mp4\"]}. "
@@ -1039,7 +1042,7 @@ _OBLIGATION_FAILURES: dict[tuple[str, ...], dict[str, Any]] = {}
 # round, so a repost -- a new round -- is a new want to this memo.
 # Process-local like the memos above: a restart costs one extra ask per key.
 _CLOSED_TARGET_MEMO: set[str] = set()
-_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed"})
+_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed", "draft_stalled"})
 
 
 def _remember_closed(target: dict[str, Any], error: Any) -> bool:
@@ -1240,6 +1243,12 @@ def _process_market_attention(
     _live: list[dict[str, Any]] = []
     _stalled = 0
     for item in obligations:
+        # A successful feedback decision may deliberately leave the bid as-is.
+        # The server keeps that feedback visible; visibility is not new work.
+        completed = getattr(resources, "_completed_feedback", {})
+        if (item.get("kind") == "feedback_returned"
+                and completed.get(_obligation_key(item)) == _obligation_fingerprint(item)):
+            continue
         if _breaker_skip(item):
             _stalled += 1
             continue
@@ -1545,6 +1554,10 @@ def _process_market_attention(
         payload["ok"] = ok
         payload["plan_filing_verified"] = ok
     if ok:
+        if kind == "feedback_returned" and result.status.value == "completed":
+            completed = getattr(resources, "_completed_feedback", {})
+            completed[_obligation_key(obligation)] = _obligation_fingerprint(obligation)
+            resources._completed_feedback = completed
         _breaker_reset(obligation)
         return payload
     breaker = _breaker_record_failure(
@@ -1717,7 +1730,7 @@ def _bid_through_the_draft_loop(
     )
     if _remember_closed(target, outcome.get("error") if isinstance(outcome, dict) else None):
         _LOGGER.info(
-            "the door closed want %s for this round (%s); not asked again until it is posted again",
+            "paused bidding on want %s for this round (%s); not asked again until it is posted again or the worker is restarted",
             target_id,
             outcome.get("error"),
         )
@@ -2055,9 +2068,12 @@ def _process_market_opportunities(
         "is written in its place. Never file the form as handed to you. required_blocks "
         "is [] and that means YOU decide which blocks this want needs. When you need one, "
         "pull it out of block_templates IN FULL and in its order -- the connection is a "
-        "`connect_account` ROW inside the step that uses it, never a step of its own "
-        "(rule 236), and a registry connector in a GRANT step of its own is refused "
-        "REJ-38 -- and do not "
+        "`connect_account` ROW inside the step that uses it (rule 236), except a "
+        "connection the agent needs to WORK, which is a connect step RIGHT BEFORE the "
+        "step that uses it (rule 242: the meeting plan is TWO steps, calendar connect "
+        "step then the card; the calendar row on the card itself is refused REJ-43); "
+        "any other registry connector in a GRANT step of its own is refused REJ-38 -- "
+        "and do not "
         "rewrite a block step's title, outcome_promise or har_blocks, which the platform "
         "writes at signing. NAME WHAT YOU HAND BACK (rule 230): a step that hands back "
         "a thing carries `deliverable` -- {\"channel\": \"file\", \"family\": \"video\", "

@@ -51,15 +51,23 @@ refusal carries the same ``plan_template``. A declared block whose fields the
 kind refuses is REJ-33. A step describing an invitation, a booking or a publish
 while declaring no act at all is REJ-34.
 
-RULE 236 (Steven, 2026-09-08: "fix it, remove the old path and lets do it") --
-A CONNECTION IS NOT A STEP, IT IS PART OF THE ACTION THAT NEEDS IT. A block
-that runs on the person's account carries a ``connect_account`` ROW inside the
-step that uses it: the card is the account rows, then what the step does, then
-one button that stays asleep until every row is settled. ``plan_template`` for
-a meeting want is now ONE step -- a google-calendar row, a google-gmail row and
-the meeting block on a single card -- and a NEW plan that lifts a registry
-connector back into a GRANT step of its own is refused REJ-38
-(grant_step_removed) at the validate door and at the bid door.
+RULE 236 (Steven, 2026-09-08) -- A CONNECTION IS NOT A STEP, IT IS PART OF THE
+ACTION THAT NEEDS IT. A block that runs on the person's account carries a
+``connect_account`` ROW inside the step that uses it: the card is the account
+rows, then what the step does, then one button that stays asleep until every
+row is settled. A standalone GRANT step for a registry connector is refused
+REJ-38 (grant_step_removed) at the validate door and at the bid door.
+
+RULE 242 (Steven, 2026-09-10) -- A STEP MAY ONLY USE WHAT EXISTS WHEN IT
+STARTS. One shape is allowed back, and only one: a connection the agent needs
+to WORK (the meeting kind reads the calendar to offer times) is a connect step
+RIGHT BEFORE the step that uses it -- ``ask: GRANT``, one ``connect_account``
+row, one tap, not counted against the step cap -- and that same row sitting on
+the meeting step itself is refused REJ-43 (row_needed_before). A connection
+only the SEND needs (the mailbox) stays a row on the action's step. So the
+meeting ``block_templates`` entry is TWO steps again: the calendar connect
+step, then the card with the Gmail row and the meeting block. Nothing here
+knows that by heart: the brief's own template is the shape, copied whole.
 
 WHAT FORCED THE REWRITE HERE. This module carried the two-step law as a
 hardcoded fact (``BLOCK_GRANTS = {"meeting": "google-calendar"}``) and counted
@@ -103,6 +111,12 @@ REJ_BLOCK_GRANT = "REJ-35"
 # from. A GRANT step for a provider the connector registry does not know is the
 # ``access`` mold and is not refused.
 REJ_GRANT_STEP_REMOVED = "REJ-38"
+
+# RULE 242: an act whose agent half READS an account (a meeting reads the
+# calendar) has its row on the step BEFORE; the row on the same step is
+# refused. The fix rides the refusal (`fix`, field `steps`) like any other
+# structural refusal, so nothing special is done with it here.
+REJ_ROW_NEEDED_BEFORE = "REJ-43"
 
 # RULE 238: an act on the person's own account that names nobody to send to,
 # or a raw address typed into the plan. What it hands back is the QUESTION,
@@ -164,15 +178,19 @@ CONNECT_FORMAT = "connect_account"
 # The one sentence every planning surface carries about a connection, kept here
 # so the prompt, the tool words and the refusal cannot drift apart (rule 236).
 CONNECTION_IN_THE_ACTION_SENTENCE = (
-    "The connection is a `connect_account` ROW inside the step that uses it, "
-    "never a step of its own: the card is the account rows, then what the step "
-    "does, then one button that stays asleep until every row is settled. The "
-    "meeting plan is ONE step -- a Google Calendar row, a Gmail row and the "
-    "meeting block on a single card. Copy `block_templates[<kind>]` from the "
-    "brief whole rather than composing the steps yourself; a new plan that "
-    "lifts a registry connector back into a GRANT step of its own is refused "
-    "REJ-38. Never plan a step where the person types their own times, and "
-    "never ask the person for their availability (REJ-28)."
+    'Copy `block_templates[<kind>]` from the brief WHOLE and in its order; how a '
+    "block carries the person's connection is the block's business, not yours. "
+    'RULE 242: a step may only use what already exists when it starts. A '
+    'connection the agent needs to WORK -- a meeting reads the calendar to offer '
+    'times -- is a connect step RIGHT BEFORE the step that uses it: `ask: GRANT`, '
+    'one `connect_account` row, one tap, not counted against the step cap; that '
+    'row on the meeting step itself is refused REJ-43. A connection only the SEND '
+    "needs -- the mailbox -- stays a `connect_account` ROW on the action's own "
+    'step (rule 236), and any other standalone GRANT step for a registry '
+    'connector is still refused REJ-38. The meeting plan is TWO steps: the '
+    'calendar connect step, then the card with the Gmail row and the meeting '
+    'block. Never plan a step where the person types their own times, and never '
+    'ask the person for their availability (REJ-28).'
 )
 
 # A template blank: the whole value is one <angle bracket> instruction.

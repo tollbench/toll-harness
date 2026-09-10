@@ -26,6 +26,11 @@ REJ_BLOCK_GRANT = blocks.REJ_BLOCK_GRANT
 # refusal's own words -- so it is repaired from the BRIEF's template instead,
 # and it is deliberately not in REJ_CARRIES_THE_FORM.
 REJ_GRANT_STEP_REMOVED = blocks.REJ_GRANT_STEP_REMOVED
+# RULE 242 (2026-09-10): an act whose agent half reads an account has its row
+# on the step BEFORE; the same row on the act's step is refused. The refusal
+# carries its own `fix` and field like every structural refusal, so it takes
+# the generic path: nothing is repaired at home and nothing is re-filed.
+REJ_ROW_NEEDED_BEFORE = blocks.REJ_ROW_NEEDED_BEFORE
 # RULE 238 (2026-09-08): an act on the person's own account that names nobody
 # to send to, or a raw address typed into the plan. Like REJ-38 it carries no
 # `plan_template`: what it hands back is the QUESTION, and the brief published
@@ -1148,7 +1153,9 @@ class BookOfHousesTollBenchProvider:
             "message": (
                 "Nothing was filed. The bench refused this plan REJ-38: a "
                 "connection is not a step of its own, it is a "
-                "`connect_account` row on the step of the action that uses it. "
+                "`connect_account` row on the step of the action that uses it "
+                "(the one exception is rule 242's connect step right before an "
+                "action whose agent half reads that account). "
                 "`detail` names the step and carries the exact row to add. "
                 "Pull the block out of the brief's block_templates WHOLE "
                 "instead of composing its steps, and file once more."

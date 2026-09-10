@@ -2,10 +2,13 @@
 
 It is a `connect_account` ROW inside the step of the action that needs it. One
 card: the account rows, then what the step does, then one button that stays
-asleep until every row is settled. The meeting plan is ONE step -- a Google
-Calendar row, a Gmail row and the meeting block on a single card -- and a NEW
-plan that lifts a registry connector back into a GRANT step of its own is
-refused REJ-38 (grant_step_removed).
+asleep until every row is settled. A NEW plan that lifts a registry connector
+back into a GRANT step of its own is refused REJ-38 (grant_step_removed).
+
+RULE 242 (Steven, 2026-09-10) allows ONE shape back: the calendar connect
+step right before the meeting card, because the meeting kind reads the
+calendar to offer times. The bench's template says so; the harness reads it
+off the template and knows it by heart from nowhere (the last two tests).
 
 WHAT FORCED THIS FILE. The harness carried the two-step law as a hardcoded
 fact: `BLOCK_GRANTS = {"meeting": "google-calendar"}`, and a connection counted
@@ -618,3 +621,69 @@ def test_a_registry_that_cannot_be_read_leaves_the_mirror_silent():
 
     provider = BookOfHousesTollBenchProvider(_Broken())
     assert provider._grant_requirements() == {}
+
+
+# ---------------------------------------------------------------------------
+# 5. RULE 242 (2026-09-10): the bench's meeting template is two steps again --
+#    the calendar connect step, then the card with the Gmail row. The harness
+#    reads that off the template and must neither retire the connect step nor
+#    stop retiring a standalone mailbox GRANT step.
+# ---------------------------------------------------------------------------
+
+RULE_242_CONNECT_STEP = {
+    "ask": "GRANT",
+    "actor": "agent",
+    "title": "Connect your calendar for this plan",
+    "outcome_promise": "Your calendar is connected for this plan.",
+    "minor_detail": "Explaining which calendar access this needs and why",
+    "grant_request": CALENDAR_ROW["config"]["grant_request"],
+    "har_blocks": [CALENDAR_ROW],
+    "acts": [],
+    "rounds": 1,
+    "declared_odds": "<fill 0.05..0.99>",
+    "declared_odds_reason": "<why that number>",
+    "person_minutes": 1,
+    "line_item_amount": 0,
+    "agent_court_estimate": 0,
+    "examples": [],
+    "materials": [],
+}
+RULE_242_MEETING_STEP = {
+    **ONE_STEP_TEMPLATE[0],
+    "har_blocks": [b for b in ONE_STEP_TEMPLATE[0]["har_blocks"] if b is not CALENDAR_ROW],
+}
+RULE_242_TEMPLATE = [RULE_242_CONNECT_STEP, RULE_242_MEETING_STEP]
+
+
+def test_rule_242_leaves_the_calendar_connect_step_alone():
+    """The template publishes the calendar row on a GRANT step of its own, so
+    google-calendar is not a retired provider and the connect step stays."""
+    assert blocks.retired_grant_providers(RULE_242_TEMPLATE) == {"google-gmail"}
+    plan = _plan(RULE_242_CONNECT_STEP, RULE_242_MEETING_STEP)
+    assert blocks.retire_grant_steps(plan, RULE_242_TEMPLATE) == (plan, [])
+    assert blocks.REJ_ROW_NEEDED_BEFORE == "REJ-43"
+
+
+def test_rule_242_still_moves_a_standalone_mailbox_grant_step_into_the_card():
+    """The Gmail row lives on the card (rule 236 unchanged), so a model that
+    writes a mailbox GRANT step of its own still has it moved onto the card,
+    while the calendar connect step ahead of it is untouched."""
+    own_gmail_grant = {
+        "ask": "GRANT",
+        "actor": "agent",
+        "title": "Connect your email",
+        "grant_request": {
+            "connector": {"provider": "google-gmail", "actions": ["gmail.message.send"]}
+        },
+        "declared_odds": 0.4,
+    }
+    card_without_gmail = {
+        **RULE_242_MEETING_STEP,
+        "har_blocks": [b for b in RULE_242_MEETING_STEP["har_blocks"] if b is not GMAIL_ROW],
+    }
+    plan = _plan(RULE_242_CONNECT_STEP, own_gmail_grant, card_without_gmail)
+    fixed, moved = blocks.retire_grant_steps(plan, RULE_242_TEMPLATE)
+    assert moved and "google-gmail" in moved[0]
+    assert [s.get("ask") for s in fixed["steps"]] == ["GRANT", "APPROVE"]
+    assert blocks.grant_provider(fixed["steps"][0]) == "google-calendar"
+    assert "google-gmail" in blocks.connect_row_providers(fixed["steps"][1])
