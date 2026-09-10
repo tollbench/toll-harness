@@ -204,7 +204,11 @@ BLANKS_INSTRUCTION = (
     "Below is ONE step of your plan as the bench expanded it, and every blank on "
     "it that is yours to write, each with the bench's own sentence saying what "
     "belongs there. Fill them in your own words; leave nothing you can answer "
-    "empty; change nothing else.\n"
+    "empty; change nothing else. A `you` blank is the person's own bullet for "
+    "that part, pinned to it: write it as its note says (one line, starts with "
+    "connect / approve / pick / answer, names the thing) rather than leaving "
+    "the bench to print a flat line. A promise names the thing you deliver, "
+    "never you; a work item starts with an -ing word.\n"
     'Answer: {"patches": [{"path": "<the exact path>", "value": <your value>}, '
     "...]}."
 )

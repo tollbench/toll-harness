@@ -31,6 +31,7 @@ REJ_GRANT_STEP_REMOVED = blocks.REJ_GRANT_STEP_REMOVED
 # carries its own `fix` and field like every structural refusal, so it takes
 # the generic path: nothing is repaired at home and nothing is re-filed.
 REJ_ROW_NEEDED_BEFORE = blocks.REJ_ROW_NEEDED_BEFORE
+REJ_FRAME = blocks.REJ_FRAME
 # RULE 238 (2026-09-08): an act on the person's own account that names nobody
 # to send to, or a raw address typed into the plan. Like REJ-38 it carries no
 # `plan_template`: what it hands back is the QUESTION, and the brief published

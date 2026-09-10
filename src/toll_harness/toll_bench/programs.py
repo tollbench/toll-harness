@@ -329,6 +329,7 @@ EXPECTED_TO_CHANGE = (
 EXPECTED_LEAVES = (
     "title",
     "outcome_promise",
+    "you",
     "purpose",
     "message",
     "subject",

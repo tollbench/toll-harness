@@ -123,6 +123,13 @@ REJ_ROW_NEEDED_BEFORE = "REJ-43"
 # published on the brief's own `bid_template.finalist_questions`.
 REJ_CONTACT_ROUTE = "REJ-40"
 
+# THE FRAME (Steven, 2026-09-10): the bench refuses an `outcome_promise` that
+# starts in the first person, a `minor_detail` line that does not start with an
+# -ing word, or a `you` line that is a status phrase or a promise, and the
+# refusal quotes the frame the template blank carried. Generic path (`fix`,
+# `field`): nothing is repaired at home, the model rewrites the one line.
+REJ_FRAME = "REJ-44"
+
 # RULE 236: RETIRED, AND DELIBERATELY EMPTY. This used to say a meeting block
 # needs google-calendar opened by a step of its own, and that one hardcoded
 # fact refused the one-step template the bench now publishes. Which kinds run

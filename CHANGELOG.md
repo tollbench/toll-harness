@@ -8,6 +8,21 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.36.5] - 2026-09-10
+
+### Changed
+- The person's bullet is the agent's to write, pinned to its part: the `you` blank
+  the bench now lists on every step, act and account row is asked for in the same
+  blanks call as the promise, with the bench's own note as the instruction, and the
+  blanks instruction says to write it rather than leave the bench's flat line.
+- The harness's own plan words follow the frame: a promise names the thing it
+  delivers, never the speaker (the informed-plan instruction no longer tells the
+  model to promise "you will file").
+- `REJ-44` (the frame: a first-person promise, a work item not starting with an
+  -ing word, a `you` line that is a status phrase) is named and takes the generic
+  fix path; nothing is repaired at home.
+- `you` counts as the model's own words in the copied-or-composed diff.
+
 ## [0.36.4] - 2026-09-10
 
 ### Changed
