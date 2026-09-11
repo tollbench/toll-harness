@@ -449,6 +449,19 @@ def _finalist_block_problems(block: dict[str, Any], pos: str) -> list[dict[str, 
     return problems
 
 
+# A problem the door raises for a field that is simply NOT THERE. Filing over
+# one is a round spent on a certainty: the filing door runs the same pipeline.
+_MISSING_FIELD_CODES = frozenset({"REJ-31"})
+
+
+def _is_a_missing_field(problem: Any) -> bool:
+    if not isinstance(problem, dict):
+        return False
+    if str(problem.get("code") or "").strip() in _MISSING_FIELD_CODES:
+        return True
+    return " is required" in str(problem.get("detail") or "")
+
+
 def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
     """Local mirror of the bench's REJ-15 gate on finalist_questions."""
     path = "finalist_questions"
@@ -1999,34 +2012,47 @@ class BookOfHousesTollBenchProvider:
                 "message": error.message,
             }
 
-    def _trims_of_the_small_proposal(
-        self, target_id: str, proposal: dict[str, Any]
-    ) -> list[Any]:
-        """ONE FREE CALL AT THE DOOR, and what it says is logged, not retried.
+    def _the_small_proposal_at_the_door(
+        self, target_id: str, proposal: dict[str, Any], brief: Any
+    ) -> tuple[dict[str, Any], list[Any], dict[str, Any] | None]:
+        """THE FREE DOOR, ONE FIX ROUND, THEN FILE. (proposal, trims, refusal).
 
         `POST .../proposals/validate` writes nothing, counts against nothing
         and answers with every problem at once plus `trimmed` -- each entry
         {path, from, to, from_chars, to_chars}, exactly what would be stored
         if this proposal were filed as it stands. A TRIM IS NOT A REFUSAL
-        (rule 244): the door takes the words and shortens what is over a cap.
-        So the trims come back to be logged, the problems are written to the
-        run log, and the proposal is filed either way -- the door's own
-        refusal is the record, and there is no second model call in a stage
-        that is one call by law.
+        (rule 244): the door takes the words and shortens what is over a cap,
+        so the trims are logged and never retried.
+
+        A PROBLEM IS DIFFERENT, and the old policy here was wrong. It filed
+        every proposal anyway "so the door's own answer is the record" -- but
+        the validate door and the filing door run ONE pipeline, so a problem
+        here is a refusal there, every time. On a one-bid-per-want board that
+        spent the round to learn what we had just been told for free.
+
+        So: the problems get ONE fix round of the fixes this package can
+        actually make -- a question shape, an off-list tool -- and the door is
+        asked again for free. The bench's own `corrected_plan` is taken when
+        it says `corrected_ok`, because that correction is the door's. What is
+        left after that is filed anyway, EXCEPT a required field nobody can
+        fill in from here: a bid the door has already refused for a missing
+        `research_links` is a round spent on a certainty.
         """
         door = self.validate_at_the_door(target_id, proposal)
         if not isinstance(door, dict):
-            return []
+            return proposal, [], None
         trims = [row for row in (door.get("trimmed") or []) if row]
         problems = [p for p in (door.get("problems") or []) if isinstance(p, dict)]
         if problems:
             _LOGGER.warning(
                 "Validate door named %d problem(s) on the proposal for target "
-                "%s (%s); filing it anyway so the door's own answer is the "
-                "record",
+                "%s (%s); one fix round before filing",
                 len(problems),
                 target_id,
-                ", ".join(str(p.get("code") or "?") for p in problems),
+                ", ".join(str(row.get("code") or "?") for row in problems),
+            )
+            proposal, problems = self._one_fix_round(
+                target_id, proposal, brief, door, problems
             )
         if trims:
             _LOGGER.info(
@@ -2036,7 +2062,73 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(str(row.get("path") or "?") for row in trims),
             )
-        return trims
+        missing = [row for row in problems if _is_a_missing_field(row)]
+        if missing:
+            _LOGGER.warning(
+                "Target %s: the door refuses this proposal for a required "
+                "field nothing here can fill in (%s); NOT filed -- a bid spent "
+                "on a certain refusal is the round",
+                target_id,
+                "; ".join(str(row.get("code") or "?") for row in missing),
+            )
+            return proposal, trims, {
+                "ok": False,
+                "error": "proposal_incomplete",
+                "terminal": False,
+                "problems": problems,
+                "message": (
+                    "Nothing was filed. The free validate door -- the same "
+                    "pipeline the filing door runs -- refuses this proposal "
+                    "for a required field: "
+                    + "; ".join(
+                        str(row.get("detail") or row.get("code") or "")
+                        for row in missing
+                    )[:600]
+                ),
+            }
+        if problems:
+            _LOGGER.warning(
+                "Target %s: %d problem(s) left that this package cannot "
+                "change (%s); filing anyway so the door's own answer is the "
+                "record",
+                target_id,
+                len(problems),
+                ", ".join(str(row.get("code") or "?") for row in problems),
+            )
+        return proposal, trims, None
+
+    def _one_fix_round(
+        self,
+        target_id: str,
+        proposal: dict[str, Any],
+        brief: Any,
+        door: dict[str, Any],
+        problems: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The door's own correction, else ours, checked once for free."""
+        if door.get("corrected_ok") and isinstance(door.get("corrected_plan"), dict):
+            _LOGGER.warning(
+                "Target %s: the door handed back a corrected proposal that "
+                "passes it unchanged; filing that",
+                target_id,
+            )
+            return door["corrected_plan"], []
+        fixed, mended = draft.mend_the_small_proposal(proposal, brief)
+        if not mended:
+            return proposal, problems
+        _LOGGER.warning(
+            "Target %s: mended the proposal at home (%s); asking the free "
+            "door once more",
+            target_id,
+            "; ".join(mended),
+        )
+        second = self.validate_at_the_door(target_id, fixed)
+        if not isinstance(second, dict):
+            return fixed, []
+        left = [row for row in (second.get("problems") or []) if isinstance(row, dict)]
+        if not left:
+            _LOGGER.info("Target %s: the mended proposal passes the door", target_id)
+        return fixed, left
 
     def _repair_the_plan_shaped_proposal(
         self, target_id: str, proposal: dict[str, Any], brief: Any
@@ -2257,12 +2349,22 @@ class BookOfHousesTollBenchProvider:
             raise
         if draft.is_small_proposal(proposal):
             # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
-            # There are no steps to repair, no blocks to merge and no local
-            # step validator to run -- the bench's own door is the only check,
-            # it is free, and what it says it TRIMMED rides back on the
-            # receipt as `bench_fixed` so the runtime logs the cut instead of
-            # asking the model to make the same sentence shorter.
-            trims = self._trims_of_the_small_proposal(target_id, proposal)
+            # There are no steps to repair and no blocks to merge -- but the
+            # question shapes and the want's tool list ARE this package's to
+            # get right, and since 0.38.2 the free door gets one fix round
+            # before anything is filed.
+            proposal, _mended = draft.mend_the_small_proposal(proposal, brief)
+            if _mended:
+                _LOGGER.info(
+                    "Target %s: proposal mended before the door (%s)",
+                    target_id,
+                    "; ".join(_mended),
+                )
+            proposal, trims, refusal = self._the_small_proposal_at_the_door(
+                target_id, proposal, brief
+            )
+            if refusal is not None:
+                return refusal
         else:
             trims = []
             proposal, refusal = self._repair_the_plan_shaped_proposal(

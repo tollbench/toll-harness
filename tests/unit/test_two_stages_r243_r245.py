@@ -32,11 +32,14 @@ from toll_harness.toll_bench.draft import (
     block_grammar_summary,
     example_plan,
     is_small_proposal,
+    mend_the_small_proposal,
+    pick_tools,
     read_form,
     read_proposal,
     read_questions,
     stance_of,
     the_form_is_blank,
+    tool_slugs,
     tools_index,
 )
 
@@ -236,15 +239,16 @@ def test_a_proposal_with_no_steps_is_the_small_one():
 
 
 # ---------------------------------------------------------------------------
-# THE QUESTIONS ARE CONTROLS, NOT SENTENCES (contract 2.37 + the frames)
+# THE WHOLE QUESTION, IN THE AGENT'S OWN WORDS (contract 3.16, 2026-09-11)
 # ---------------------------------------------------------------------------
-def test_a_question_is_a_block_with_its_own_id_and_only_the_blank_in_it():
-    """The bench owns the sentence -- "Should I ___?" -- and the agent writes
-    the blank on `fill`. A model that writes the whole sentence has the frame
-    taken off it here rather than reaching the person as "Should I Should I
-    include the background?"."""
+def test_a_question_is_a_block_carrying_the_whole_question_in_title():
+    """THE FRAMES ARE DROPPED (Steven, 2026-09-11: "fine drop them"). The
+    bench no longer writes half of anybody's sentence and no longer reads
+    `fill`: "Write the whole question, in your own words, in `title`." The
+    first fleet cycle on 0.38.1 was refused REJ-15 on every question of every
+    bid because this package was still filing {id, format, fill}."""
     blocks_out = read_questions([
-        "what you want them to do next",
+        "What do you want them to do next?",
         {"format": "yes_no", "title": "Should I include the background?"},
         {"format": "single_choice", "fill": "Which tone should it have?",
          "config": {"options": ["Warm", "Straight to the point"]}},
@@ -252,14 +256,37 @@ def test_a_question_is_a_block_with_its_own_id_and_only_the_blank_in_it():
 
     assert [q["id"] for q in blocks_out] == ["q1", "q2", "q3"]
     assert blocks_out[0] == {"id": "q1", "format": "short_answer",
-                             "fill": "what you want them to do next"}
-    assert blocks_out[1]["fill"] == "include the background"
-    assert blocks_out[2]["fill"] == "tone should it have"
+                             "title": "What do you want them to do next?"}
+    # Nothing is taken off the front any more: the sentence is the agent's.
+    assert blocks_out[1]["title"] == "Should I include the background?"
+    # A model still writing the old shape keeps its question -- the words move
+    # to `title` rather than the question being thrown away.
+    assert blocks_out[2]["title"] == "Which tone should it have?"
+    assert all("fill" not in q for q in blocks_out)
     # A choice's options are read as the door reads them, labels untouched.
     assert blocks_out[2]["config"] == {
         "options": [{"id": "o1", "label": "Warm"},
                     {"id": "o2", "label": "Straight to the point"}],
     }
+
+
+def test_a_shape_the_door_does_not_take_comes_down_to_a_text_box():
+    """A date, a number, a form or an upload is a control on a STEP of the
+    plan. Asked here it is refused REJ-15 and the bid is the round, so the
+    words are kept and the shape comes down."""
+    out = read_questions([
+        {"format": "date_time", "title": "Which dates work for you?"},
+        {"format": "number", "title": "How many people?"},
+        {"format": "written_response", "title": "Anything to avoid?"},
+        {"format": "single_choice", "title": "Warm or formal?",
+         "config": {"options": ["Warm"]}},
+    ])
+    assert [q["format"] for q in out[:3]] == ["short_answer"] * 3
+    assert out[0]["title"] == "Which dates work for you?"
+    # An empty dropdown is a text box wearing a control, and the door says so.
+    assert read_questions([{"format": "single_choice", "title": "Warm or formal?",
+                            "config": {"options": ["Warm"]}}])[0]["format"] == (
+        "short_answer")
 
 
 def test_a_contact_question_is_dropped_and_never_filed():
@@ -306,10 +333,378 @@ def test_the_proposal_ask_names_the_shapes_and_the_frames():
     # And NOT the fourth shape: who this goes to is the bench's own step.
     assert "contact_picker" not in ask
     assert "DO NOT ASK WHO THIS GOES TO" in ask
-    assert "Should I ___?" in ask
-    assert '"fill"' in ask
+    # The frames are gone, and so is the field the door stopped reading.
+    assert "WRITE THE WHOLE QUESTION YOURSELF" in ask
+    assert "Should I ___?" not in ask
+    assert '"fill"' not in ask
     # The filed questions are blocks, not the strings the model wrote.
     assert bench.filed[0][1]["finalist_questions"][0]["format"] == "short_answer"
+    assert bench.filed[0][1]["finalist_questions"][0]["title"]
+
+
+# ---------------------------------------------------------------------------
+# THE WANT'S TOOL LIST IS THE WANT'S (REJ-01, 0.38.2)
+# ---------------------------------------------------------------------------
+# A live brief's `tools`, as it arrives with ?tools=1: the same `tool` name
+# repeats under several providers, and the last row is the wildcard.
+TOOLS_BRIEF = {
+    "want": "Run the ads and email the list",
+    "tools": [
+        {"tool": "gmail.message.send", "provider": "google-gmail",
+         "family": "mailbox", "one_line": "send an email"},
+        {"tool": "gmail.message.send", "provider": "composio:gmail",
+         "family": "mailbox", "one_line": "send an email"},
+        {"tool": "platform.research", "provider": "", "family": "platform",
+         "one_line": "the platform looks something up"},
+        {"tool": "composio:<service>/<TOOL>", "provider": "composio",
+         "one_line": "any of 1,500 services"},
+    ],
+}
+
+
+def test_the_catalog_is_the_briefs_own_slugs_and_never_the_wildcard():
+    assert tool_slugs(TOOLS_BRIEF) == {"gmail.message.send", "platform.research"}
+    # `composio:<service>/<TOOL>` is the door a plan step's run goes through,
+    # not a slug the proposal door will match.
+    assert "composio:<service>/<TOOL>" not in tool_slugs(TOOLS_BRIEF)
+
+
+def test_a_tool_the_want_does_not_offer_is_dropped_before_filing():
+    """WHAT FORCED IT: most bids of the first 0.38.1 fleet cycle were refused
+    REJ-01 -- '"composio:facebook-ads/campaign.create" is not on this want's
+    tool list'. One off-list name costs the whole bid."""
+    kept, dropped = pick_tools(
+        ["gmail.message.send", "composio:facebook-ads/campaign.create"], TOOLS_BRIEF
+    )
+    assert kept == ["gmail.message.send"]
+    assert dropped == ["composio:facebook-ads/campaign.create"]
+
+
+def test_a_provider_name_is_not_a_tool_and_neither_is_an_invented_slug():
+    # The two shapes the models actually wrote.
+    kept, dropped = pick_tools(["google-gmail", "slack.post.publish"], TOOLS_BRIEF)
+    assert kept == []
+    assert dropped == ["google-gmail", "slack.post.publish"]
+
+
+def test_a_provider_prefixed_slug_is_read_as_the_slug_it_names():
+    kept, dropped = pick_tools(
+        ["google-gmail/gmail.message.send", "GMAIL.MESSAGE.SEND"], TOOLS_BRIEF
+    )
+    assert kept == ["gmail.message.send"]
+    assert dropped == []
+
+
+def test_a_want_that_publishes_no_list_refuses_nothing_of_our_own():
+    kept, dropped = pick_tools(["anything.at.all"], {"want": "x"})
+    assert kept == ["anything.at.all"] and dropped == []
+
+
+def test_the_filed_proposal_carries_only_tools_the_want_offers():
+    bench = _FilingBench()
+    model = _model(dict(PROPOSAL, tools_needed=["google-gmail",
+                                                "gmail.message.send",
+                                                "composio:facebook-ads/campaign.create"]))
+
+    DraftLoop(model, bench).run("t-1", kind="bid", brief=TOOLS_BRIEF,
+                                idempotency_key="k")
+
+    assert bench.filed[0][1]["tools_needed"] == ["gmail.message.send"]
+
+
+def test_a_proposal_whose_tools_are_all_off_the_list_files_none():
+    bench = _FilingBench()
+    model = _model(dict(PROPOSAL, tools_needed=["composio:facebook-ads/campaign.create"]))
+
+    DraftLoop(model, bench).run("t-1", kind="bid", brief=TOOLS_BRIEF,
+                                idempotency_key="k")
+
+    # A service off the list belongs on the step that uses it, as an outside
+    # act -- never here, and never as a reason to lose the bid.
+    assert "tools_needed" not in bench.filed[0][1]
+
+
+def test_the_ask_tells_the_model_to_copy_the_slug_exactly():
+    bench = _FilingBench()
+    model = _model(PROPOSAL)
+
+    DraftLoop(model, bench).run("t-1", kind="bid", brief=TOOLS_BRIEF,
+                                idempotency_key="k")
+
+    ask = model.invocations[0]["messages"][0].content[0]["text"]
+    assert "COPIED EXACTLY" in ask
+    assert "tools_on_this_want" in ask
+    assert "is not a tool" in ask
+
+
+# ---------------------------------------------------------------------------
+# RESEARCH LINKS ARE REQUIRED (REJ-31, 0.38.2)
+# ---------------------------------------------------------------------------
+def test_a_proposal_with_no_links_gets_one_more_ask_and_then_files():
+    """WHAT FORCED IT: the models filed zero research_links on nearly every
+    want, and the field is required -- so the free door refused the proposal
+    and the filing door refused it again. One more small ask is cheaper than
+    the round."""
+    bench = _FilingBench()
+    model = _model(
+        dict(PROPOSAL, research_links=[]),
+        {"research_links": [{"url": "https://example.test/a", "note": "Who takes guests."}]},
+    )
+
+    out = DraftLoop(model, bench).run("t-1", kind="bid", brief={"want": "x"},
+                                      idempotency_key="k")
+
+    assert out["filed"] is True
+    assert len(model.invocations) == 2
+    assert bench.filed[0][1]["research_links"] == [
+        {"url": "https://example.test/a", "note": "Who takes guests."}
+    ]
+
+
+def test_the_links_ask_says_what_a_link_is_and_asks_for_nothing_else():
+    bench = _FilingBench()
+    model = _model(dict(PROPOSAL, research_links=[]),
+                   {"research_links": [{"url": "https://example.test/a", "note": "x"}]})
+
+    DraftLoop(model, bench).run("t-1", kind="bid", brief={"want": "x"},
+                                idempotency_key="k")
+
+    second = model.invocations[1]["messages"][0].content[0]["text"]
+    assert "REJ-31" in second
+    assert "research_links" in second
+
+
+def test_no_links_twice_files_nothing_at_all():
+    """A bid the door has already said it will refuse is the round. Nothing is
+    filed, and the run says why."""
+    bench = _FilingBench()
+    model = _model(dict(PROPOSAL, research_links=[]), {"research_links": []})
+
+    out = DraftLoop(model, bench).run("t-1", kind="bid", brief={"want": "x"},
+                                      idempotency_key="k")
+
+    assert out["ok"] is False and out["filed"] is False
+    assert out["error"] == "no_research_links"
+    assert bench.filed == []
+
+
+def test_the_ask_says_the_links_are_required():
+    bench = _FilingBench()
+    model = _model(PROPOSAL)
+
+    DraftLoop(model, bench).run("t-1", kind="bid", brief={"want": "x"},
+                                idempotency_key="k")
+
+    ask = model.invocations[0]["messages"][0].content[0]["text"]
+    assert "REQUIRED" in ask
+
+
+# ---------------------------------------------------------------------------
+# THE MEND: every fix this package can make with no model call
+# ---------------------------------------------------------------------------
+def test_the_mend_puts_the_questions_in_the_doors_shape():
+    fixed, mended = mend_the_small_proposal(
+        {"finalist_questions": [{"format": "yes_no", "fill": "include background"}]},
+        TOOLS_BRIEF,
+    )
+    assert fixed["finalist_questions"] == [
+        {"id": "q1", "title": "include background", "format": "yes_no"}
+    ]
+    assert mended and "finalist_questions" in mended[0]
+
+
+def test_the_mend_drops_an_off_list_tool_and_says_so():
+    fixed, mended = mend_the_small_proposal(
+        {"tools_needed": ["gmail.message.send", "google-gmail"]}, TOOLS_BRIEF
+    )
+    assert fixed["tools_needed"] == ["gmail.message.send"]
+    assert any("google-gmail" in line for line in mended)
+
+
+def test_the_mend_leaves_a_whole_plan_bid_alone():
+    """`[[...]]` is the old whole-plan shape -- one group of four -- and it has
+    a road of its own. Reading it as a flat list would drop every question."""
+    grouped = {"finalist_questions": [[{"id": "q1", "format": "yes_no",
+                                        "title": "Ok?"}]]}
+    fixed, mended = mend_the_small_proposal(grouped, TOOLS_BRIEF)
+    assert mended == []
+    assert fixed is grouped
+
+
+def test_the_mend_invents_nothing():
+    # A missing required field is not something this package can fill in.
+    bare = {"pitch_title": "A", "pitch_body": "B"}
+    fixed, mended = mend_the_small_proposal(bare, TOOLS_BRIEF)
+    assert mended == [] and fixed is bare
+
+
+# ---------------------------------------------------------------------------
+# THE FREE DOOR, ONE FIX ROUND, THEN FILE (0.38.2)
+# ---------------------------------------------------------------------------
+# WHAT FORCED IT: the old policy filed every proposal "anyway so the door's own
+# answer is the record". The validate door and the filing door run ONE
+# pipeline, so a problem there is a refusal here, every time -- and on a
+# one-bid-per-want board that spent the round to learn what we had just been
+# told for free. The first 0.38.1 fleet cycle filed one bid in six minutes and
+# every refusal had been named by the free door first.
+from toll_harness.toll_bench.book_of_houses import (  # noqa: E402
+    BookOfHousesTollBenchProvider,
+)
+
+
+class _DoorApi:
+    """The proposals door and the free validate door, scripted."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.asked: list[dict] = []
+        self.filed: list[tuple[str, dict, str]] = []
+
+    def protocol(self):
+        return {"contract_version": "3.16"}
+
+    def target_brief(self, target_id):
+        return {"ok": True, "brief": dict(TOOLS_BRIEF, target_id=target_id)}
+
+    def validate_proposal(self, target_id, proposal):
+        self.asked.append(json.loads(json.dumps(proposal)))
+        return self.answers.pop(0) if self.answers else {"ok": True, "problems": []}
+
+    def submit_proposal(self, target_id, proposal, idempotency_key):
+        self.filed.append((target_id, json.loads(json.dumps(proposal)), idempotency_key))
+        return {"ok": True, "proposal_id": "p-1"}
+
+    def me(self):
+        return {"ok": True, "reachability_test": {"reachable": True}}
+
+
+def _door_provider(api):
+    provider = BookOfHousesTollBenchProvider(api)
+    provider.fleet = None
+    return provider
+
+
+SMALL = {
+    "pitch_title": "Three podcast bookings",
+    "pitch_body": "I find the shows, write the pitch you approve and send it.",
+    "odds": 0.55,
+    "total_ask_cents": 25_000,
+    "research_links": [{"url": "https://example.test/shows", "note": "Who takes guests."}],
+    "finalist_questions": [{"id": "q1", "title": "Warm or formal?", "format": "yes_no"}],
+}
+
+
+def test_a_clean_proposal_is_filed_with_no_second_door_call():
+    api = _DoorApi({"ok": True, "problems": [], "trimmed": []})
+    out = _door_provider(api).submit_proposal("t-1", dict(SMALL), "k")
+    assert out["ok"] is True
+    assert len(api.asked) == 1
+    assert len(api.filed) == 1
+
+
+def test_an_off_list_tool_is_mended_before_the_door_ever_sees_it():
+    api = _DoorApi({"ok": True, "problems": [], "trimmed": []})
+    _door_provider(api).submit_proposal(
+        "t-1", dict(SMALL, tools_needed=["google-gmail", "gmail.message.send"]), "k"
+    )
+    # The door is asked about the MENDED proposal, and that is what is filed.
+    assert api.asked[0]["tools_needed"] == ["gmail.message.send"]
+    assert api.filed[0][1]["tools_needed"] == ["gmail.message.send"]
+
+
+def test_the_doors_own_corrected_plan_is_filed_when_it_passes_unchanged():
+    corrected = dict(SMALL, pitch_title="Three podcast bookings, start to finish")
+    api = _DoorApi({
+        "ok": False,
+        "problems": [{"code": "REJ-01", "detail": "pitch_title is thin"}],
+        "corrected_plan": corrected,
+        "corrected_ok": True,
+        "trimmed": [],
+    })
+    _door_provider(api).submit_proposal("t-1", dict(SMALL), "k")
+    assert api.filed[0][1]["pitch_title"] == "Three podcast bookings, start to finish"
+
+
+def test_the_mend_runs_before_the_door_so_the_old_shape_never_reaches_it():
+    """The fix round is EARLIER than the door, and free: a question still
+    carrying `fill` is put in the door's shape at home, so the door is asked
+    about -- and the filing carries -- the proposal we actually mean to file.
+    On the first 0.38.1 cycle this exact shape was refused REJ-15 on every
+    question of every bid."""
+    api = _DoorApi({"ok": True, "problems": [], "trimmed": []})
+    out = _door_provider(api).submit_proposal(
+        "t-1",
+        dict(SMALL, finalist_questions=[{"format": "yes_no", "fill": "include background"}]),
+        "k",
+    )
+    assert out["ok"] is True
+    assert len(api.asked) == 1
+    assert api.asked[0]["finalist_questions"] == [
+        {"id": "q1", "title": "include background", "format": "yes_no"}
+    ]
+    assert "fill" not in api.filed[0][1]["finalist_questions"][0]
+
+
+def test_a_mend_the_door_makes_possible_gets_one_more_free_call():
+    """The safety net: a proposal that reached the filing road already mended
+    still gets one more free look when the door names a problem, and the door
+    is asked again only when something actually changed."""
+    api = _DoorApi({"ok": True, "problems": [], "trimmed": []})
+    provider = _door_provider(api)
+    mended, left = provider._one_fix_round(
+        "t-1",
+        dict(SMALL, finalist_questions=[{"format": "contact_picker", "config": {"count": 2}},
+                                        {"format": "yes_no", "title": "Warm?"}]),
+        TOOLS_BRIEF,
+        {"corrected_ok": False},
+        [{"code": "REJ-15", "detail": "question 1 is a contact_picker"}],
+    )
+    assert [q["format"] for q in mended["finalist_questions"]] == ["yes_no"]
+    assert left == []
+    assert len(api.asked) == 1
+
+
+def test_a_fix_round_with_nothing_to_mend_asks_the_door_no_second_time():
+    api = _DoorApi()
+    provider = _door_provider(api)
+    problems = [{"code": "REJ-09", "detail": "the price is over the want's budget"}]
+    same, left = provider._one_fix_round(
+        "t-1", dict(SMALL), TOOLS_BRIEF, {"corrected_ok": False}, problems
+    )
+    assert same == dict(SMALL)
+    assert left == problems
+    assert api.asked == []
+
+
+def test_a_missing_required_field_is_never_filed():
+    """A bid the free door has already refused for a field nothing here can
+    fill in is a round spent on a certainty."""
+    api = _DoorApi({
+        "ok": False,
+        "problems": [{"code": "REJ-31",
+                      "detail": "research_links is required (1..3 entries of {url, note})"}],
+        "trimmed": [],
+    })
+    out = _door_provider(api).submit_proposal("t-1", dict(SMALL, research_links=[]), "k")
+    assert out["ok"] is False
+    assert out["error"] == "proposal_incomplete"
+    assert out["terminal"] is False
+    assert "research_links is required" in out["message"]
+    assert api.filed == []
+
+
+def test_a_problem_this_package_cannot_change_is_still_filed_anyway():
+    """The door's own answer is the record for anything we cannot touch -- a
+    thin pitch, a price the person will not take -- as long as the proposal is
+    complete."""
+    api = _DoorApi({
+        "ok": False,
+        "problems": [{"code": "REJ-09", "detail": "the price is over the want's budget"}],
+        "trimmed": [],
+    })
+    out = _door_provider(api).submit_proposal("t-1", dict(SMALL), "k")
+    assert out["ok"] is True
+    assert len(api.filed) == 1
 
 
 # ---------------------------------------------------------------------------

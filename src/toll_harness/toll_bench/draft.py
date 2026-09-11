@@ -938,22 +938,27 @@ PROPOSAL_BODY_MAX = 600
 PROPOSAL_LINKS_MIN = 1
 PROPOSAL_LINKS_MAX = 3
 PROPOSAL_QUESTIONS_MAX = 3
-# THE QUESTIONS ARE CONTROLS, NOT SENTENCES (contract 2.37, frames 2026-09-09).
-# A finalist question is a HAR block the person TAPS, and the bench owns the
-# sentence: each control shape carries a fixed frame and the agent writes only
-# the blank, on `fill`. What forced the frames: slot 2 of a live bid read "What
-# information about each person is most important to highlight?" over a Yes/No
-# box, and Steven asked "why is question #2 on these always wrong?". A title
-# the agent writes itself is taken only when it already fits the frame, so the
-# words go in `fill` and the bench composes the sentence.
-FINALIST_FRAMES = {
-    "yes_no": ("Should I ", "?"),
-    "single_choice": ("Which ", "?"),
-    "short_answer": ("Anything to add about ", "?"),
-}
-# A question with no shape of its own is a text box: legal, and one of the
-# three the door allows.
+# THE FRAMES ARE DROPPED (Steven, 2026-09-11, contract 3.16: "fine drop them").
+# The bench no longer writes half of anybody's sentence and no longer reads
+# `fill`: "`fill` is not read any more, and the bench no longer writes half of
+# your sentence. Write the whole question, in your own words, in `title`."
+#
+# WHAT FORCED THE CHANGE HERE: the first fleet cycle on 0.38.1 was refused
+# REJ-15 on EVERY question of every bid, because this package was still filing
+# {id, format, fill} against a door that had stopped reading it.
+#
+# THREE SHAPES AND NO FOURTH. A date, a number, a form or an upload is a
+# control on a STEP of the plan, where the work is -- not a question asked
+# before anybody has chosen this agent.
+PROPOSAL_QUESTION_FORMATS: tuple[str, ...] = ("short_answer", "yes_no", "single_choice")
+# A text box under another name, and a question with no shape at all: both are
+# the box, and the door takes it.
+_TEXT_BOX_SPELLINGS = frozenset({"", "written_response", "text", "short_text", "long_text"})
 FINALIST_DEFAULT_FORMAT = "short_answer"
+# Where the words of a question can be found, best first. `fill` is last and
+# is read only so a model still writing the old shape keeps its question
+# instead of having it thrown away.
+_QUESTION_WORD_KEYS = ("title", "question", "prompt", "text", "fill")
 # RULE 238 CORRECTED (Steven, 2026-09-11): THE CONTACT BOOK IS NOT A QUESTION.
 # Who this goes to is a STEP of the plan that the BENCH stamps, after the
 # person has chosen this agent, out of their own private book -- so a
@@ -988,32 +993,51 @@ PROPOSAL_INSTRUCTION = (
     "0 and 1.\n"
     "`total_ask_cents` -- what you charge, in whole cents, inside the want's "
     "budget.\n"
-    f"`research_links` -- {PROPOSAL_LINKS_MIN} to {PROPOSAL_LINKS_MAX} of "
-    'them, each {"url": ..., "note": "one line"}. No "plan use" sentence.\n'
+    f"`research_links` -- REQUIRED, {PROPOSAL_LINKS_MIN} to "
+    f"{PROPOSAL_LINKS_MAX} of them, each "
+    '{"url": ..., "note": "one line: what this link told you about this '
+    'want"}. Links you went and found for THIS want. A proposal with none is '
+    'refused. No "plan use" sentence.\n'
     f"`finalist_questions` -- up to {PROPOSAL_QUESTIONS_MAX} questions for "
     "this person, and `[]` if you need nothing. The plan gets built from "
-    "their answers, so ask what you actually need before you can plan. EACH "
-    "ONE IS A CONTROL THE PERSON TAPS, NOT A SENTENCE YOU WRITE: pick the "
-    "shape and write only the BLANK, on `fill`, and the platform writes the "
-    "sentence around it.\n"
-    '  yes_no -- "Should I ___?": {"format": "yes_no", "fill": "include '
-    'background on each person"}\n'
-    '  single_choice -- "Which ___?", and it needs at least two options: '
-    '{"format": "single_choice", "fill": "tone should the message have", '
-    '"config": {"options": ["Warm", "Straight to the point"]}}\n'
-    '  short_answer -- "Anything to add about ___?": {"format": '
-    '"short_answer", "fill": "what you want them to do next"}\n'
+    "their answers, so ask what you actually need before you can plan. WRITE "
+    "THE WHOLE QUESTION YOURSELF, in `title`, in your own words. Nobody "
+    "writes half of it for you and there is no `fill` field. Three shapes and "
+    "no fourth:\n"
+    '  short_answer -- they type one short line: {"title": "What do you want '
+    'them to do next?", "format": "short_answer"}\n'
+    '  yes_no -- they tap Yes or No: {"title": "Should I include background '
+    'on each person?", "format": "yes_no"}\n'
+    '  single_choice -- they tap one of the options you write, TWO OR MORE: '
+    '{"title": "Which tone should the message have?", "format": '
+    '"single_choice", "config": {"options": ["Warm", "Straight to the '
+    'point"]}}\n'
+    "A date, a number, a form or a file is a control on a STEP of the plan, "
+    "never a question here.\n"
     "DO NOT ASK WHO THIS GOES TO. The bench asks that itself, on a step of the "
     "plan, after this person has chosen you, out of their own private contact "
     "book -- a contact question here is refused. Never ask a person to type an "
     "address or a phone number into a box.\n"
-    "`tools_needed` -- the tools you will need, by slug, from the list on the "
-    "want. Name none if the want offers none.\n"
+    "`tools_needed` -- the tools you will need, each one COPIED EXACTLY from "
+    "the `tool` value of a row in `tools_on_this_want`. That exact string and "
+    "nothing else: a provider name (\"google-gmail\") is not a tool, and "
+    "neither is a slug you assembled out of a service and a verb. A service "
+    "that is not on that list is named on the STEP that uses it, as an "
+    "outside act, never here. File [] when you need none.\n"
     "A long title or paragraph is TRIMMED by the bench, not refused, so write "
     "it well and do not pad it.\n"
     'Answer: {"pitch_title": "...", "pitch_body": "...", "odds": 0.0, '
     '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
     '[...], "tools_needed": [...]}.'
+)
+
+LINKS_INSTRUCTION = (
+    "Your proposal is written, but it carries no research links and the bench "
+    f"refuses a proposal without them (REJ-31). Give {PROPOSAL_LINKS_MIN} to "
+    f"{PROPOSAL_LINKS_MAX} links you went and found for THIS want, each "
+    '{"url": "https://...", "note": "one line: what this link told you about '
+    'this want"}. Real pages you read, not a search box and not this site. '
+    'Answer with nothing else: {"research_links": [...]}'
 )
 
 # What a brief calls the money the person put up. Read in this order and
@@ -1031,22 +1055,18 @@ def budget_of(brief: Any) -> Any:
     return None
 
 
-def _fill_for(fmt: str, text: Any) -> str:
-    """The BLANK inside a question, without the frame's own words.
+def _question_words(entry: dict[str, Any]) -> str:
+    """The whole question, in the model's own words.
 
-    A model handed a frame writes the whole sentence half the time ("Should I
-    include the background?"), and the bench composes frame + fill -- so the
-    prefix comes off here rather than reaching the person as "Should I Should
-    I include the background?". Nothing else is rewritten: what is left is the
-    model's own words.
+    Read in order of how sure we are they are the question: `title` first,
+    `fill` last. Nothing is stripped and no frame is taken off -- since
+    contract 3.16 the sentence is the agent's from end to end.
     """
-    words = " ".join(str(text or "").split())
-    prefix = (FINALIST_FRAMES.get(fmt) or ("", ""))[0]
-    if prefix and words[: len(prefix)].lower() == prefix.lower():
-        words = words[len(prefix):].strip()
-    while words and words[-1] in "?.!":
-        words = words[:-1].rstrip()
-    return words
+    for key in _QUESTION_WORD_KEYS:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return ""
 
 
 def _options_of(config: Any) -> list[dict[str, str]] | None:
@@ -1075,10 +1095,17 @@ def _options_of(config: Any) -> list[dict[str, str]] | None:
 def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
     """ONE finalist question as the door reads one, or None.
 
-    The door takes a HAR block -- {id, format, fill, config} -- or a plain
-    string (a text box, legacy). This builds the block: the shape the model
-    picked, its blank on `fill`, its options where it is a choice, and an id
-    of its own so the answers can be matched back to it.
+    CONTRACT 3.16: {id, title, format}, and `title` is the WHOLE question in
+    the model's own words. `fill` is not filed any more -- a model still
+    writing one has its words moved into `title` rather than its question
+    thrown away.
+
+    A SHAPE THE DOOR DOES NOT TAKE COMES DOWN TO A TEXT BOX rather than
+    spending the bid. A date, a number, a form or an upload belongs on a step
+    of the plan; asked here it is refused REJ-15, and the words are still a
+    fair question the person can type an answer to. A `single_choice` with
+    fewer than two real options is an empty dropdown, which is a text box
+    wearing a control, and the door says so -- so it becomes one.
 
     A `contact_picker` is DROPPED (rule 238 corrected, 2026-09-11). The bench
     refuses one here -- "The contact book is not one of your questions: the
@@ -1088,29 +1115,29 @@ def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
     the other two than to file nothing.
     """
     if isinstance(entry, str):
-        entry = {"format": FINALIST_DEFAULT_FORMAT, "fill": entry}
+        entry = {"title": entry}
     if not isinstance(entry, dict):
         return None
-    fmt = str(entry.get("format") or "").strip().lower() or FINALIST_DEFAULT_FORMAT
-    identifier = str(entry.get("id") or "").strip() or f"q{ordinal}"
-    out: dict[str, Any] = {"id": identifier, "format": fmt}
+    fmt = str(entry.get("format") or "").strip().lower()
     if fmt == CONTACT_PICKER_FORMAT:
         # Not ours to ask. The who step is the bench's (rule 238 corrected).
         return None
-    fill = entry.get("fill")
-    if not (isinstance(fill, str) and fill.strip()):
-        fill = (
-            entry.get("title")
-            or entry.get("question")
-            or entry.get("prompt")
-            or entry.get("text")
-        )
-    fill = _fill_for(fmt, fill)
-    if not fill:
+    words = _question_words(entry)
+    if not words:
         return None
-    out["fill"] = fill
     options = _options_of(entry.get("config"))
-    if options:
+    if fmt in _TEXT_BOX_SPELLINGS:
+        fmt = FINALIST_DEFAULT_FORMAT
+    if fmt == "single_choice" and (options is None or len(options) < 2):
+        fmt = FINALIST_DEFAULT_FORMAT
+    if fmt not in PROPOSAL_QUESTION_FORMATS:
+        fmt = FINALIST_DEFAULT_FORMAT
+    out: dict[str, Any] = {
+        "id": str(entry.get("id") or "").strip() or f"q{ordinal}",
+        "title": words,
+        "format": fmt,
+    }
+    if fmt == "single_choice" and options:
         out["config"] = {"options": options}
     description = entry.get("description")
     if isinstance(description, str) and description.strip():
@@ -1136,6 +1163,64 @@ def read_questions(rows: Any) -> list[dict[str, Any]]:
         seen.add(block["id"])
         out.append(block)
     return out
+
+
+def tool_slugs(brief: Any) -> set[str]:
+    """Every slug this want's list actually publishes, exactly as written.
+
+    Read off `brief["tools"]` whole and never through the prompt budget: the
+    catalog the door matches against is the bench's, not the part of it that
+    fitted in one ask. The WILDCARD row is not a slug -- `composio:<service>/
+    <TOOL>` is the door a `calls` run goes through on a plan step, and the
+    proposal door matches `tools_needed` exactly.
+    """
+    published = (brief or {}).get("tools") if isinstance(brief, dict) else None
+    found: set[str] = set()
+    for row in published if isinstance(published, list) else []:
+        slug = str((row.get("tool") if isinstance(row, dict) else row) or "").strip()
+        if slug and "<" not in slug:
+            found.add(slug)
+    return found
+
+
+def pick_tools(named: Any, brief: Any) -> tuple[list[str], list[str]]:
+    """Only the slugs this want's list carries. Returns (kept, dropped).
+
+    WHAT FORCED IT (first fleet cycle on 0.38.1): most bids were refused
+    REJ-01 -- '"composio:facebook-ads/campaign.create" is not on this want's
+    tool list' -- and the names the models wrote were a PROVIDER
+    ("google-gmail") or a slug they had assembled themselves
+    ("slack.post.publish"). One off-list name costs the whole bid, and a
+    service that is not on the list belongs on the step that uses it as an
+    outside act.
+
+    Nothing here guesses which of forty-one rows a made-up name meant. An
+    exact match, the same name in another case, or the tail after a provider
+    prefix -- and anything else is dropped and logged.
+    """
+    catalog = tool_slugs(brief)
+    rows = [str(entry or "").strip() for entry in (named or [])]
+    rows = [slug for slug in rows if slug]
+    if not catalog:
+        # No list published: this package refuses nothing on its own opinion.
+        return rows, []
+    by_lower = {slug.lower(): slug for slug in catalog}
+    kept: list[str] = []
+    dropped: list[str] = []
+    for slug in rows:
+        match = slug if slug in catalog else by_lower.get(slug.lower())
+        if match is None:
+            for separator in ("/", ":"):
+                tail = slug.rsplit(separator, 1)[-1].strip()
+                if tail and tail != slug:
+                    match = by_lower.get(tail.lower())
+                    if match:
+                        break
+        if match is None:
+            dropped.append(slug)
+        elif match not in kept:
+            kept.append(match)
+    return kept, dropped
 
 
 def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
@@ -1192,6 +1277,55 @@ def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
     if tools:
         out["tools_needed"] = tools
     return out
+
+
+def mend_the_small_proposal(
+    proposal: Any, brief: Any = None
+) -> tuple[dict[str, Any], list[str]]:
+    """Every fix this package can make to a seven-field proposal, with no
+    model call. Returns the (possibly unchanged) proposal and what was mended.
+
+    Two things, and only the two the door refuses this package for:
+
+      * THE QUESTION SHAPES (REJ-15). `read_questions` is idempotent, so
+        running it again over a proposal built by hand, carried over from an
+        older contract, or handed back by another caller puts every question
+        in the shape the door takes: the whole question in `title`, one of the
+        three formats, options where it is a choice, and no `fill`.
+      * THE TOOL LIST (REJ-01). A name the want's list does not carry comes
+        off; a service that is not on the list belongs on the step that uses
+        it, as an outside act.
+
+    It does not invent a research link, a title or a price. A field that is
+    simply not there is not something this package can mend.
+    """
+    if not isinstance(proposal, dict):
+        return {}, []
+    mended: list[str] = []
+    out = dict(proposal)
+    asked_now = out.get("finalist_questions")
+    # A FLAT list only. `[[...]]` is the old whole-plan bid's shape -- one
+    # group of four -- and it has a road of its own; reading it as a list of
+    # questions would drop every one of them.
+    if isinstance(asked_now, list) and not any(
+        isinstance(entry, list) for entry in asked_now
+    ):
+        asked = read_questions(asked_now)
+        if asked != asked_now:
+            out["finalist_questions"] = asked
+            mended.append(f"finalist_questions: {len(asked)} in the door's shape")
+    named = out.get("tools_needed")
+    if named:
+        kept, off_list = pick_tools(named, brief)
+        if off_list:
+            if kept:
+                out["tools_needed"] = kept
+            else:
+                out.pop("tools_needed", None)
+            mended.append(
+                "tools_needed: dropped " + ", ".join(off_list) + " (not on this want's list)"
+            )
+    return (out, mended) if mended else (proposal, [])
 
 
 def bench_fixed(answer: Any) -> list[Any]:
@@ -1958,6 +2092,39 @@ class DraftLoop:
                 "The model was asked for a proposal and answered with no "
                 "title and no paragraph.",
             )
+        # THE TOOL LIST IS THE WANT'S, NOT THE MODEL'S (REJ-01). One name the
+        # list does not carry costs the whole bid, so an off-list name comes
+        # off here and is logged; a service that is not on the list belongs on
+        # the step that uses it, as an outside act.
+        kept, off_list = pick_tools(proposal.get("tools_needed"), brief)
+        if off_list:
+            self.log.warning(
+                "proposal for target=%s named %d tool(s) this want does not "
+                "offer; dropped %s (a service off the list goes on the step "
+                "that uses it, never in tools_needed)",
+                target_id,
+                len(off_list),
+                ", ".join(off_list),
+            )
+        if kept:
+            proposal["tools_needed"] = kept
+        else:
+            proposal.pop("tools_needed", None)
+        # LINKS ARE REQUIRED (REJ-31) AND THE MODELS FILE NONE. One more small
+        # ask rather than a bid the door has already told us it will refuse.
+        if not proposal.get("research_links"):
+            proposal = self._links_for(target_id, brief, proposal)
+        if not proposal.get("research_links"):
+            return self._gave_up(
+                target_id,
+                "bid",
+                "no_research_links",
+                "research_links is required (1..3 entries of {url, note}) and "
+                "the model gave none, twice. Nothing was filed: the door has "
+                "already said it would refuse this, and a bid spent on a "
+                "refusal is the round.",
+                proposal,
+            )
         self.log.info(
             "proposal for target=%s: %d of %d fields, %d link(s), %d "
             "question(s), %d tool(s)",
@@ -2006,6 +2173,42 @@ class DraftLoop:
                 self._preview(out["message"]),
             )
         return out
+
+    def _links_for(
+        self, target_id: str, brief: Any, proposal: dict[str, Any]
+    ) -> dict[str, Any]:
+        """ONE more small ask, for the links and nothing else.
+
+        WHAT FORCED IT (first fleet cycle on 0.38.1): the models filed zero
+        research links on nearly every want, and `research_links` is a
+        required field -- so the validate door refused the proposal before it
+        was filed and the filing door refused it again. A field the harness
+        can get by asking for it is worth one more ask; the alternative is
+        spending the want's one bid on a refusal.
+        """
+        answer = self._ask(
+            LINKS_INSTRUCTION,
+            {
+                "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
+                "your_proposal": {
+                    key: proposal.get(key)
+                    for key in ("pitch_title", "pitch_body")
+                    if proposal.get(key)
+                },
+            },
+            "research links",
+            head=self._head(),
+        )
+        links = read_proposal(answer).get("research_links") or []
+        if links:
+            self.log.info(
+                "proposal for target=%s carried no links; one more ask found "
+                "%d",
+                target_id,
+                len(links),
+            )
+            return {**proposal, "research_links": links}
+        return proposal
 
     def _open(self, target_id: str, kind: str) -> dict[str, Any]:
         """THE ONE PUT, AND IT IS EMPTY (rule 243 + rule 113).

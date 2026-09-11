@@ -8,6 +8,66 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.38.2] - 2026-09-11
+
+**Three refusals off every bid: the whole question, the want's own tools, and
+the links.**
+
+### What forced this release
+
+The first fleet cycle on 0.38.1 filed ONE bid in six minutes. The picker
+refusal was gone and three others were on nearly every proposal:
+
+- **REJ-15 on every question.** "`fill` is not read any more, and the bench no
+  longer writes half of your sentence. Write the whole question, in your own
+  words, in `title`." This package was still filing `{id, format, fill}`
+  against a door that had dropped the frames.
+- **REJ-01 on most bids.** `tools_needed` named tools that are not on the
+  want's list -- a PROVIDER ("google-gmail"), or a slug the model assembled
+  itself ("slack.post.publish", "composio:facebook-ads/campaign.create").
+- **REJ-31 on many bids.** `research_links` is required, 1 to 3 of
+  `{url, note}`, and the models filed none.
+
+Every one of those was named by the FREE validate door before the bid was
+filed, and the harness filed anyway "so the door's own answer is the record".
+The validate door and the filing door run one pipeline, so that was a round
+spent to learn what we had just been told for nothing.
+
+### Changed
+
+- **A proposal question is `{id, title, format}`** and `title` is the whole
+  question in the model's own words. `FINALIST_FRAMES` and `_fill_for` are
+  gone; `read_question` writes `title`, never `fill`, and a model still
+  writing `fill` has its words moved into `title` rather than its question
+  thrown away. Three shapes and no fourth
+  (`PROPOSAL_QUESTION_FORMATS`): a date, a number, a form or an upload comes
+  DOWN to a `short_answer` rather than spending the bid, and so does a
+  `single_choice` with fewer than two real options -- an empty dropdown is a
+  text box wearing a control, and the door says so. The proposal ask was
+  rewritten to match.
+- **`tools_needed` is filtered to the want's own list before filing.**
+  `tool_slugs` reads `brief["tools"]` whole (never through the prompt budget,
+  and never the `composio:<service>/<TOOL>` wildcard, which is a plan step's
+  door and not a slug), and `pick_tools` keeps an exact match, the same name
+  in another case, or the tail after a provider prefix -- and DROPS anything
+  else with a log line naming it. Nothing guesses which of forty-one rows a
+  made-up name meant. The ask now says to copy the `tool` value out of
+  `tools_on_this_want` exactly, and that a service off the list belongs on the
+  step that uses it as an outside act.
+- **A proposal with no research links gets one more small ask** (`_links_for`,
+  `LINKS_INSTRUCTION`) for the links and nothing else. If it still has none,
+  NOTHING IS FILED: the door has already said it would refuse, and a bid spent
+  on a certain refusal is the round.
+- **The free door gets one fix round, and "file it anyway" is now the
+  exception.** `_the_small_proposal_at_the_door` replaces
+  `_trims_of_the_small_proposal`: the proposal is mended at home first
+  (`draft.mend_the_small_proposal` -- question shapes and the tool list, no
+  model call), the door is asked, the bench's own `corrected_plan` is taken
+  when it says `corrected_ok`, and one more free look follows any mend that
+  changed something. What is left is filed anyway EXCEPT a required field
+  nothing here can fill in (`_is_a_missing_field`), which returns
+  `proposal_incomplete` and files nothing.
+
 ## [0.38.1] - 2026-09-11
 
 **The contact book is not one of your questions.**
