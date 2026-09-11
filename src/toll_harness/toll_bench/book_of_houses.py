@@ -101,20 +101,66 @@ ARTIFACT_MAX_BYTES = 50 * 1024 * 1024
 # The refusals the file doors speak. Surfaced to the model VERBATIM: the
 # platform is the scanner, and its sentence is the one that tells the model
 # what to do next.
+# EVERY STRUCTURED REFUSAL THE OUTCOME DOOR CAN SAY (0.38.0).
+#
+# WHAT FORCED THE ADDITIONS: `stand_in` was not on this list, so a 422 the
+# agent could have FIXED was raised as an exception instead. Down the old
+# road, `ToolRegistry.execute` flattens any exception to
+# `{"error": "<str(error)>"}`, so the model saw one sentence of English and
+# lost `field`, `reason` and `fix` -- the three keys that say what to change.
+# One fleet unit re-earned that refusal every forty seconds on production on
+# 2026-09-11 without ever being told which field was wrong.
+#
+# The rule for this list: a 4xx the agent can act on comes back as a RESULT,
+# with the bench's own keys on it. Anything else still raises.
 FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
     {
         "deliverable_missing",
         "deliverable_type_mismatch",
         "deliverable_unfetchable",
         "deliverable_too_large",
+        "deliverable_empty",
         "claim_url_rejected",
         "out_of_turn_filing",
         "title_too_long",
         "artifact_budget_exceeded",
+        # LAW B (2026-09-09): a stand-in is not a value. The bench names the
+        # field, quotes the value, says why, and points at `the_person_said`.
+        "stand_in",
+        # The step is not free to close yet: something the agent owes first.
+        "reply_owed",
+        "acts_not_filed",
+        "outcome_promises_send",
+        "options_are_the_delivery",
+        # The filing's own shape, note and words.
+        "note_required",
+        "note_too_long",
+        "document_required",
+        "document_invalid",
+        "block_over_cap",
+        "prose_over_cap",
+        "outcome_text_too_long",
+        "link_in_outcome_text",
+        "credential_request_rejected",
+        "secret_rejected",
+        "off_platform_payment",
+        # The deal itself, not the filing: nothing to re-file until it changes.
+        "deal_not_active",
         # RULE 233 (2026-09-05): the shape door. The bench counts the empty
         # boxes on the cards and its sentence names the card and the field.
         *blocks.SHAPE_DOOR_REFUSALS,
     }
+)
+
+# Refusals no re-filing can clear: the deal, not the delivery.
+FILE_DOOR_TERMINAL: frozenset[str] = frozenset({"deal_not_active"})
+
+# The bench's own keys on a refusal body, lifted to the TOP of the result.
+# They used to sit only under `detail`, where a model reading a tool result
+# does not look, and `fix` is the whole point of the sentence.
+FILE_DOOR_BODY_KEYS: tuple[str, ...] = (
+    "field", "reason", "fix", "how", "rej", "detail", "kinds", "owed",
+    "deliverable", "next",
 )
 
 # THE MIRROR WARNS ONCE, THEN THE DOOR DECIDES. `current-step` publishes the
@@ -3473,15 +3519,22 @@ class BookOfHousesTollBenchProvider:
             if error.code not in FILE_DOOR_REFUSALS:
                 raise
             # VERBATIM. The platform is the scanner; its sentence is the one
-            # that tells the model what to do next.
-            return {
+            # that tells the model what to do next -- and so are its `field`,
+            # `reason` and `fix`, which ride at the top level where a model
+            # reading a tool result will actually see them.
+            refusal: dict[str, Any] = {
                 "ok": False,
                 "error": error.code,
                 "status": error.status,
                 "message": error.message,
-                "detail": error.body,
-                "terminal": False,
+                "terminal": error.code in FILE_DOOR_TERMINAL,
             }
+            body = error.body if isinstance(error.body, dict) else {}
+            for key in FILE_DOOR_BODY_KEYS:
+                if body.get(key) is not None and key not in refusal:
+                    refusal[key] = body[key]
+            refusal.setdefault("detail", error.body)
+            return refusal
 
     def _file_step_owes_a_file(
         self, step_ref: str | None, outcome: dict[str, Any]

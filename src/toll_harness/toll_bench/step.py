@@ -699,9 +699,15 @@ class StepAsk:
         act_kinds: Any = None,
         changed: list[str] | None = None,
         pulse_due: bool = False,
+        refused: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """One step, one move, one call (asked twice at most: once, and once
-        more with the bench's refusal). Says which road when it is not this one."""
+        more with the bench's refusal). Says which road when it is not this one.
+
+        `refused` is the bench's refusal from a PREVIOUS cycle on this same
+        state: it rides the first ask, so the second try in the harness's three
+        starts from what the bench said rather than from a blank slate.
+        """
         move = the_move(payload, obligation)
         step = payload.get("current_step") or {}
         number = step.get("number")
@@ -716,9 +722,15 @@ class StepAsk:
             # LAW A: the one instruction line rides the tail with the block;
             # the prefix does not move.
             instruction = instruction + "\n" + PERSON_SAID_INSTRUCTION
-        tail = step_tail(payload, obligation, move, changed or [], pulse_due=pulse_due)
+        tail = step_tail(
+            payload, obligation, move, changed or [], pulse_due=pulse_due, refused=refused
+        )
         ids = dict(tail["ids"])
-        answer = self._ask(instruction, tail, f"{move['move']} step {number}")
+        answer = self._ask(
+            (REFUSED_INSTRUCTION + " " + instruction) if refused else instruction,
+            tail,
+            f"{move['move']} step {number}",
+        )
         if str(answer.get("call") or "") == NEED_TOOLS:
             return {
                 "ok": False,

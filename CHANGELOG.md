@@ -8,6 +8,80 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.38.0] - 2026-09-11
+
+**A refused step gets three tries, then it waits.**
+
+### What forced this release
+
+On 11 September one fleet unit sat on a deal step that no filing could ever
+satisfy. The bench refused every outcome 422 `stand_in`: the step only
+restated the person's own Contact-book pick, and a typed name or address is a
+stand-in, not a value. The small step ask has a brake and handed the step to
+the old road after two refused asks. The old road -- the whole agentic run,
+60-76k input tokens of tools brief on every call -- had no stop rule at all,
+so from the third cycle on it ran again every forty seconds: same state, same
+filing, same refusal, all day. The idle memo could not catch it, because a
+memo is only written after a run lands, and a refused step never lands.
+
+### Added
+
+- **The refusal brake.** `_STEP_REFUSALS` counts refused tries on a step,
+  keyed on the step id, the fingerprint of the step's state, and the bench's
+  own refusal code. Three refusals with the same code on one unchanged state
+  and the harness stops re-running that step: it logs one line
+  (`step 3: refused 3 times on one state (code stand_in); waiting for the
+  step to change`), posts the bench's own refusal sentence as the `blocker`
+  on the check-in the step already owes, and does nothing more there until
+  the fingerprint changes -- a message from the person, a send-back, new
+  materials, a decision on an act -- or the bench refuses with a different
+  code. Then it forgets and tries again. Not a strike: a road choice that
+  resets on change.
+- `_RefusalWatch` wraps the step-move doors on the provider for the length of
+  one old-road run. The old road hands the model tools and the harness sees
+  only the run's verdict, so a refusal the model keeps re-earning was
+  invisible from outside it. One refusal per dispatch is counted, never one
+  per retry inside it.
+- `the_bench_refused` now rides the OLD ROAD's goal as well as the step ask's
+  tail, with one instruction line telling the model to fix exactly what the
+  bench names. Inside the three tries a fixable refusal is meant to be fixed
+  on try two, and it cannot be fixed by a model that was never shown the
+  sentence. `StepAsk.run` takes a `refused=` from a previous cycle and puts
+  it in front of the FIRST ask, not just the retry inside one run.
+- The blocker is scrubbed before it is posted. A `stand_in` refusal quotes the
+  stand-in it refused, and the check-in door runs that same stand-in check on
+  `blocker`, so the bench's sentence posted verbatim earns the same 422 in a
+  new place. Addresses, bracket blanks and bare URLs come out; if the door
+  still refuses, a plain sentence of our own goes in its place. Progress on
+  that check-in is never 100: a refused filing did not finish the step.
+
+### Changed
+
+- **Every structured refusal the outcome door can say now comes back as a
+  RESULT, not an exception.** `FILE_DOOR_REFUSALS` held eleven codes and was
+  missing the one that forced this release: `stand_in`. A missing code is
+  raised, and down the old road the tool registry flattens any exception to
+  `{"error": "<english>"}`, so the model lost `field`, `reason` and `fix` --
+  the three keys that say what to change -- and re-earned the same refusal
+  every cycle. Added `stand_in`, `deliverable_empty`, `reply_owed`,
+  `acts_not_filed`, `outcome_promises_send`, `options_are_the_delivery`,
+  `note_required`, `note_too_long`, `document_required`, `document_invalid`,
+  `block_over_cap`, `prose_over_cap`, `outcome_text_too_long`,
+  `link_in_outcome_text`, `credential_request_rejected`, `secret_rejected`,
+  `off_platform_payment` and `deal_not_active`. Anything else still raises.
+- The refusal's own keys ride the TOP of the result (`FILE_DOOR_BODY_KEYS`:
+  `field`, `reason`, `fix`, `how`, `rej`, `detail`, `kinds`, `owed`,
+  `deliverable`, `next`), where a model reading a tool result will see them;
+  they used to be buried under `detail`. `FILE_DOOR_TERMINAL` marks the
+  refusals no re-filing can clear -- the deal, not the delivery -- so
+  `terminal` on the result is honest.
+- `_STEP_ASK_TRIES` is 3, not 2, so the small ask and the old road read one
+  rule (Steven, 2026-09-11: "two seems odd, how about 3, in case of a
+  mistake"). The ask's own counter moved into `_STEP_REFUSALS` beside the old
+  road's; `_STEP_ASK_FAILURES` is gone.
+- A dispatch payload can now carry `braked_steps`, the number of steps held
+  this cycle by the brake.
+
 ## [0.37.0] - 2026-09-11
 
 **Two stages: a proposal is one call, a plan is a form.**

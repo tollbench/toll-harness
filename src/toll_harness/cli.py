@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import sys
 import time
@@ -748,6 +749,11 @@ _FEEDBACK_RETURNED_INSTRUCTION = (
     "what they named, change nothing and call result.complete with 'let it "
     "stand'."
 )
+_REFUSED_BEFORE_TAIL = (
+    " The bench already refused this step's filing on exactly this state; its "
+    "own words are in `the_bench_refused`. Fix exactly what it names before "
+    "you file again, and never re-send the payload it refused."
+)
 _GOAL_COMMON_TAIL = (
     " Do not bid on unrelated open targets and do not request the full protocol "
     "or proposal schema. If a previous attempt failure is present, correct it "
@@ -993,6 +999,370 @@ def _deal_step_is_idle(
     if _deal_step_pulse_due(step_payload, now=now):
         return False
     return _deal_step_fingerprint(step_payload) == memo
+
+
+# ---------------------------------------------------------------------------
+# THE REFUSAL BRAKE (0.38.0)
+#
+# WHAT FORCED IT (production, 2026-09-11): one fleet unit sat on a deal step
+# no filing could ever satisfy. The bench refused every outcome 422
+# `stand_in` -- the step only restated the person's own Contact-book pick, and
+# a typed name or address is a stand-in, not a value. The small step ask has
+# a brake and handed the step to the OLD ROAD after two refused asks. The old
+# road -- the whole agentic run, 60-76k input tokens of tools brief -- had no
+# stop rule at all, so from the third cycle on it ran again every ~40 seconds
+# forever: same state, same filing, same refusal. `_IDLE_STEP_MEMO` could not
+# catch it, because a memo is only written after a run lands, and a refused
+# step never lands.
+#
+# So the old road gets a brake too, and the number is THREE (Steven: "two
+# seems odd, how about 3, in case of a mistake"). Three refusals carrying the
+# SAME code on ONE unchanged state and the harness stops re-running the step:
+# it memos the step as waiting on a change, posts the bench's own refusal
+# sentence as the blocker on the next check-in so the person can see why
+# nothing is moving, and leaves the step alone until the fingerprint changes
+# (a person message, a send-back, new materials, an act decision) or the
+# refusal code changes -- then it forgets and tries again.
+#
+# NOT A STRIKE. A road choice that resets on change. One journal, two
+# counters, so the small ask and the old road read the same rule.
+_STEP_REFUSALS: dict[str, dict[str, Any]] = {}
+_REFUSAL_TRIES = 3
+
+# The provider doors that move a step. The old road is a model holding tools,
+# so the harness never sees the bench's answers from out here; these are
+# wrapped for the length of one run.
+_STEP_MOVE_CALLS = (
+    "file_outcome",
+    "post_check_in",
+    "reply_step_message",
+    "propose_act",
+    "wait_outside",
+    "dismiss_reply",
+    "deliver_file",
+    "deliver_hosted_file",
+)
+
+_REFUSAL_KEYS = (
+    "error", "code", "status", "message", "refusal", "field", "reason",
+    "fix", "move", "allowed", "unexpected_fields", "deliverable",
+)
+
+# A `stand_in` refusal QUOTES the stand-in it refused, and the check-in door
+# runs that same stand-in check on `blocker` -- so the bench's sentence posted
+# verbatim earns the same 422 in a new place. Addresses, bracket blanks and
+# bare URLs come out of it; the rest of the words are the bench's own.
+_ADDRESS_SHAPED = re.compile(r"[A-Za-z0-9._%+\-\[\]<>{}]+@[A-Za-z0-9.\-]+")
+_BRACKET_TOKEN = re.compile(r"\[[^\]\n]{1,60}\]")
+_BARE_URL = re.compile(r"https?://\S+|\bwww\.\S+", re.IGNORECASE)
+
+_BRAKE_TAIL = (
+    "Waiting for a change on this step: a message from you, the work sent "
+    "back, or new materials."
+)
+_BRAKE_BLOCKER_PLAIN = (
+    "The bench refuses this step's filing the same way every time. " + _BRAKE_TAIL
+)
+
+
+def _person_safe(value: str) -> str:
+    """The bench's words, minus anything the check-in door would refuse."""
+    cleaned = _BARE_URL.sub("a link", str(value or ""))
+    cleaned = _ADDRESS_SHAPED.sub("that address", cleaned)
+    cleaned = _BRACKET_TOKEN.sub("a blank", cleaned)
+    return " ".join(cleaned.replace("`", "").split())
+
+
+def _refusal_code(refusal: Any) -> str:
+    if not isinstance(refusal, dict):
+        return ""
+    for key in ("error", "code", "rej"):
+        value = refusal.get(key)
+        if value:
+            return str(value)[:120]
+    return ""
+
+
+def _refusal_sentence(refusal: Any) -> str:
+    """The one sentence the bench wrote about this refusal."""
+    for source in (refusal, (refusal or {}).get("detail") if isinstance(refusal, dict) else None):
+        if not isinstance(source, dict):
+            continue
+        for key in ("refusal", "message", "move"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _refusal_body(refusal: Any) -> dict[str, Any]:
+    """The refusal, small enough to ride the next ask. Its OWN words: the
+    bench is the one that knows what is wrong, and a model that never sees
+    the sentence earns it again from a blank slate."""
+    if not isinstance(refusal, dict):
+        return {}
+    body = {key: refusal[key] for key in _REFUSAL_KEYS if refusal.get(key) is not None}
+    detail = refusal.get("detail")
+    if isinstance(detail, dict):
+        for key in ("refusal", "message", "fix", "reason", "field"):
+            if key not in body and detail.get(key) is not None:
+                body[key] = detail[key]
+    return {
+        key: (value[:600] if isinstance(value, str) else value)
+        for key, value in body.items()
+    }
+
+
+def _refusal_note(
+    step_id: str,
+    fingerprint: str,
+    refusal: Any,
+    *,
+    road: str,
+    number: Any = None,
+) -> dict[str, Any] | None:
+    """Count ONE refused try on this step, in this state, with this code.
+
+    One per dispatch, never one per retry inside it: a run that re-files three
+    times and is refused three times has spent one cycle, not three.
+    """
+    code = _refusal_code(refusal)
+    if not step_id or not code:
+        return None
+    record = _STEP_REFUSALS.get(step_id)
+    if (
+        not record
+        or record.get("fingerprint") != fingerprint
+        or record.get("code") != code
+    ):
+        record = {
+            "fingerprint": fingerprint,
+            "code": code,
+            "ask": 0,
+            "road": 0,
+            "sentence": "",
+            "body": {},
+            "blocker_posted": False,
+        }
+        _STEP_REFUSALS[step_id] = record
+    record[road] = int(record.get(road) or 0) + 1
+    sentence = _refusal_sentence(refusal)
+    if sentence:
+        record["sentence"] = sentence
+    body = _refusal_body(refusal)
+    if body:
+        record["body"] = body
+    if road == "road" and record["road"] == _REFUSAL_TRIES:
+        _LOGGER.warning(
+            "step %s: refused %d times on one state (code %s); waiting for the "
+            "step to change",
+            number if number is not None else step_id,
+            record["road"],
+            record["code"],
+        )
+    return record
+
+
+def _refused_asks(step_id: str, fingerprint: str) -> int:
+    record = _STEP_REFUSALS.get(step_id)
+    if not record or record.get("fingerprint") != fingerprint:
+        return 0
+    return int(record.get("ask") or 0)
+
+
+def _standing_refusal(step_id: str, fingerprint: str) -> dict[str, Any] | None:
+    """The bench's last refusal on this step while the state has not changed.
+
+    It rides the NEXT try on BOTH roads. Inside the three tries a fixable
+    refusal is meant to be fixed on try two, and it cannot be fixed by a model
+    that was never shown what the bench said.
+    """
+    record = _STEP_REFUSALS.get(step_id)
+    if not record or record.get("fingerprint") != fingerprint:
+        return None
+    body = dict(record.get("body") or {})
+    if not body:
+        return None
+    body["refused_tries_on_this_state"] = int(record.get("ask") or 0) + int(
+        record.get("road") or 0
+    )
+    return body
+
+
+def _held_progress(step_payload: dict[str, Any]) -> int:
+    """The step's own progress, never 100: a refused filing did not finish."""
+    pulse = step_payload.get("latest_work_pulse")
+    try:
+        value = int((pulse or {}).get("progress_percent") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    for step_value in (75, 50, 25):
+        if value >= step_value:
+            return step_value
+    return 0
+
+
+def _brake_blocker(record: dict[str, Any]) -> str:
+    times = record.get("road") or _REFUSAL_TRIES
+    code = record.get("code") or "no code"
+    head = f"The bench refused this filing {times} times, the same way ({code})."
+    said = _person_safe(record.get("sentence") or "").rstrip(". ")
+    room = 280 - len(head) - len(_BRAKE_TAIL) - len(" It said: ") - 2
+    if said and room > 24:
+        if len(said) > room:
+            said = said[: room - 1].rstrip() + "\u2026"
+        return f"{head} It said: {said}. {_BRAKE_TAIL}"[:280]
+    return f"{head} {_BRAKE_TAIL}"[:280]
+
+
+def _post_the_blocker(
+    resources: Any,
+    obligation: dict[str, Any],
+    step_payload: dict[str, Any],
+    record: dict[str, Any],
+) -> None:
+    """The bench's own refusal sentence, on the check-in the step already owes.
+
+    No new call: `post_check_in` is the path the pulse already rides, and its
+    `blocker` field is what the person's card shows.
+    """
+    post = getattr(getattr(resources, "toll_bench", None), "post_check_in", None)
+    deal_id = str(
+        obligation.get("deal_id") or (step_payload.get("deal") or {}).get("id") or ""
+    )
+    step_id = str(obligation.get("step_id") or "")
+    if not callable(post) or not deal_id:
+        record["blocker_posted"] = True
+        return
+    progress = _held_progress(step_payload)
+    # The bench's words first; a plain sentence of our own if its words are
+    # themselves something the check-in door will not take.
+    for blocker in (_brake_blocker(record), _BRAKE_BLOCKER_PLAIN):
+        pulse = {
+            "changed": "Nothing changed here.",
+            "now": "Waiting: the bench refuses this step's filing the same way every time.",
+            "next": "Your move: a message, sending the work back, or new materials.",
+            "progress_percent": progress,
+            "blocker": blocker,
+        }
+        digest = hashlib.sha256(blocker.encode("utf-8")).hexdigest()[:10]
+        key = f"brake-{step_id or deal_id}-{record.get('code') or 'none'}-{digest}"
+        try:
+            answer = post(deal_id, pulse, key)
+        except Exception as error:  # noqa: BLE001 - a blocker must not kill the cycle
+            _LOGGER.warning("the brake's blocker check-in failed: %s", error)
+            break
+        if (answer or {}).get("ok", True):
+            record["blocker_posted"] = True
+            _LOGGER.info("the brake posted its blocker on the check-in: %s", blocker)
+            return
+        _LOGGER.warning(
+            "the brake's blocker check-in was refused (%s); trying plain words",
+            (answer or {}).get("error"),
+        )
+    record["blocker_posted"] = True
+
+
+def _refusal_brake_holds(
+    resources: Any, obligation: dict[str, Any], step_payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """The standing brake on this step in this state, or None.
+
+    Three refusals with one code on one unchanged state: no model call, and
+    the person gets the bench's own sentence as the blocker.
+    """
+    step_id = str(obligation.get("step_id") or "")
+    record = _STEP_REFUSALS.get(step_id)
+    if not record or int(record.get("road") or 0) < _REFUSAL_TRIES:
+        return None
+    if record.get("fingerprint") != _deal_step_fingerprint(step_payload):
+        return None
+    number = (step_payload.get("current_step") or {}).get("number")
+    _LOGGER.info(
+        "step %s: still waiting for the step to change (refused %d times, "
+        "code %s); no model call",
+        number if number is not None else step_id,
+        record["road"],
+        record["code"],
+    )
+    if not record.get("blocker_posted") or _deal_step_pulse_due(step_payload):
+        _post_the_blocker(resources, obligation, step_payload, record)
+    return record
+
+
+class _RefusalWatch:
+    """What the bench refused while the old road ran.
+
+    The old road hands the model tools and the harness sees only the run's
+    verdict, so a refusal the model keeps re-earning is invisible from out
+    here. This wraps the step-move doors on the provider for the length of one
+    run and keeps the LAST refusal.
+    """
+
+    _MISSING = object()
+
+    def __init__(self, provider: Any):
+        self.provider = provider
+        self._refusal: dict[str, Any] | None = None
+        self._restore: list[tuple[str, Any]] = []
+
+    def last_refusal(self) -> dict[str, Any] | None:
+        return self._refusal
+
+    def _note(self, call: str, answer: Any) -> None:
+        if not isinstance(answer, dict) or answer.get("ok", True):
+            return
+        body = _refusal_body(answer)
+        if _refusal_code(body):
+            body["call"] = call
+            self._refusal = body
+
+    def _wrap(self, name: str, original: Any):
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            try:
+                answer = original(*args, **kwargs)
+            except BookOfHousesApiError as error:
+                self._note(
+                    name,
+                    {
+                        "ok": False,
+                        "error": error.code,
+                        "status": error.status,
+                        "message": error.message,
+                        "detail": error.body,
+                    },
+                )
+                raise
+            self._note(name, answer)
+            return answer
+
+        return wrapped
+
+    def __enter__(self) -> _RefusalWatch:
+        if self.provider is None:
+            return self
+        for name in _STEP_MOVE_CALLS:
+            original = getattr(self.provider, name, None)
+            if not callable(original):
+                continue
+            try:
+                previous = vars(self.provider).get(name, self._MISSING)
+                setattr(self.provider, name, self._wrap(name, original))
+            except (AttributeError, TypeError):  # pragma: no cover - exotic provider
+                continue
+            self._restore.append((name, previous))
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        for name, previous in reversed(self._restore):
+            try:
+                if previous is self._MISSING:
+                    delattr(self.provider, name)
+                else:
+                    setattr(self.provider, name, previous)
+            except AttributeError:  # pragma: no cover - defensive
+                pass
+        self._restore = []
 
 
 def _platform_owned_block(resources: Any, step_id: str) -> dict[str, Any] | None:
@@ -1348,6 +1718,7 @@ def _process_market_attention(
     prefetched_steps: dict[str, dict[str, Any]] = {}
     _remaining: list[dict[str, Any]] = []
     _idle_step_ids: list[str] = []
+    _braked_step_ids: list[str] = []
     _platform_step_ids: list[str] = []
     _read_step = getattr(resources.toll_bench, "current_step", None)
     for item in obligations:
@@ -1375,6 +1746,9 @@ def _process_market_attention(
                     )
                     _platform_step_ids.append(step_id)
                     continue
+                if _refusal_brake_holds(resources, item, payload) is not None:
+                    _braked_step_ids.append(step_id)
+                    continue
                 if step_id in _IDLE_STEP_MEMO and _deal_step_is_idle(step_id, payload):
                     _idle_step_ids.append(step_id)
                     continue
@@ -1388,11 +1762,16 @@ def _process_market_attention(
         )
     obligations = _remaining
     # Forget steps that left the attention feed (ended, approved, reassigned).
-    _live_step_ids = {
-        str(item.get("step_id") or "") for item in obligations
-    } | set(_idle_step_ids) | set(_platform_step_ids)
+    _live_step_ids = (
+        {str(item.get("step_id") or "") for item in obligations}
+        | set(_idle_step_ids)
+        | set(_braked_step_ids)
+        | set(_platform_step_ids)
+    )
     for _sid in [sid for sid in _IDLE_STEP_MEMO if sid not in _live_step_ids]:
         _IDLE_STEP_MEMO.pop(_sid, None)
+    for _sid in [sid for sid in _STEP_REFUSALS if sid not in _live_step_ids]:
+        _STEP_REFUSALS.pop(_sid, None)
     deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
     email_provider = resources.runtime.email_provider
     mail_client = getattr(email_provider, "client", None)
@@ -1448,6 +1827,8 @@ def _process_market_attention(
         }
         if _platform_step_ids:
             _nothing["platform_steps"] = len(_platform_step_ids)
+        if _braked_step_ids:
+            _nothing["braked_steps"] = len(_braked_step_ids)
         return _nothing
     kind = str(obligation.get("kind") or "")
     # RULE 241: the informed plan is built up in pieces too, at the same door.
@@ -1509,8 +1890,20 @@ def _process_market_attention(
             if _platform_step_ids:
                 asked["platform_steps"] = len(_platform_step_ids)
             return asked
+    # The bench's own words about the last refusal on THIS step ride the next
+    # dispatch, so a fixable refusal is fixed on try two instead of being
+    # earned again from a blank slate.
+    step_fingerprint = (
+        _deal_step_fingerprint(step_state) if isinstance(step_state, dict) else ""
+    )
+    refused_before = (
+        _standing_refusal(str(obligation.get("step_id") or ""), step_fingerprint)
+        if step_fingerprint
+        else None
+    )
     goal = (
         instruction
+        + (_REFUSED_BEFORE_TAIL if refused_before else "")
         + _GOAL_COMMON_TAIL
         + "\n\n"
         + json.dumps(
@@ -1519,6 +1912,7 @@ def _process_market_attention(
                 "current_step": step_state,
                 "confirmed_email_send_receipt": resumed_email,
                 "previous_attempt_failure": previous_failure,
+                "the_bench_refused": refused_before,
             },
             separators=(",", ":"),
             sort_keys=True,
@@ -1527,8 +1921,10 @@ def _process_market_attention(
     original_tools = resources.runtime.enabled_tools
     resources.runtime.enabled_tools = [name for name in original_tools if name in obligation_tools]
     meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
+    watch = _RefusalWatch(getattr(resources, "toll_bench", None))
     try:
-        result = resources.runtime.start(goal, mode)
+        with watch:
+            result = resources.runtime.start(goal, mode)
     finally:
         resources.runtime.enabled_tools = original_tools
     if kind == "deal_step" and step_state is not None:
@@ -1543,6 +1939,22 @@ def _process_market_attention(
         _step_id = str(obligation.get("step_id") or "")
         if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
             _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
+    # THE BRAKE counts this run. One refusal per dispatch, whatever the run
+    # did afterwards; a run that moved the step with nothing refused forgets
+    # the whole journal.
+    if kind in _STEP_ASK_KINDS and step_state is not None:
+        _brake_step_id = str(obligation.get("step_id") or "")
+        _last_refusal = watch.last_refusal()
+        if _last_refusal is not None:
+            _refusal_note(
+                _brake_step_id,
+                step_fingerprint,
+                _last_refusal,
+                road="road",
+                number=(step_state.get("current_step") or {}).get("number"),
+            )
+        elif result.status.value in {"completed", "waiting"}:
+            _STEP_REFUSALS.pop(_brake_step_id, None)
     ok = result.status.value in {"completed", "waiting"}
     payload: dict[str, Any] = {
         "ok": ok,
@@ -1555,6 +1967,8 @@ def _process_market_attention(
         payload["stalled_obligations"] = _stalled
     if _platform_step_ids:
         payload["platform_steps"] = len(_platform_step_ids)
+    if _braked_step_ids:
+        payload["braked_steps"] = len(_braked_step_ids)
     postcondition_error = None
     if ok and kind == "file_informed_plan":
         ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
@@ -1887,13 +2301,14 @@ def _file_the_informed_plan_from_draft(
 _STEP_ASK_KINDS: frozenset[str] = frozenset(
     {"deal_step", "unanswered_message", "draft_sent_back"}
 )
-# step_id -> (fingerprint of the step state, consecutive step-ask failures on
-# it). Two refused asks on one unchanged state hand the step to the old road
-# next cycle: the ask is cheap, and a move it cannot shape must not stall the
-# step behind a refusal it will get again. Not a strike rule -- a road choice,
-# forgotten the moment the state changes or an ask lands.
-_STEP_ASK_FAILURES: dict[str, tuple[str, int]] = {}
-_STEP_ASK_TRIES = 2
+# THREE refused asks on one unchanged state hand the step to the old road next
+# cycle: the ask is cheap, and a move it cannot shape must not stall the step
+# behind a refusal it will get again. Not a strike rule -- a road choice,
+# forgotten the moment the state changes or an ask lands. THREE, not two, and
+# the same three as the old road's brake, so the two roads read one rule
+# (Steven, 2026-09-11: "two seems odd, how about 3, in case of a mistake").
+# The count itself lives in `_STEP_REFUSALS`, beside the old road's.
+_STEP_ASK_TRIES = _REFUSAL_TRIES
 
 
 def _step_ask_available(resources: Any) -> bool:
@@ -1928,11 +2343,11 @@ def _the_step_ask(
         )
         return None
     fingerprint = _deal_step_fingerprint(step_state)
-    tried = _STEP_ASK_FAILURES.get(step_id)
-    if tried and tried[0] == fingerprint and tried[1] >= _STEP_ASK_TRIES:
+    refused_asks = _refused_asks(step_id, fingerprint)
+    if refused_asks >= _STEP_ASK_TRIES:
         _LOGGER.info(
             "step %s: the small ask was refused %d times on this state; the old road",
-            number, tried[1],
+            number, refused_asks,
         )
         return None
     previous = _IDLE_STEP_MEMO.get(step_id)
@@ -1956,6 +2371,7 @@ def _the_step_ask(
         act_kinds=_act_kinds_for_the_loop(resources),
         changed=changed,
         pulse_due=_deal_step_pulse_due(step_state),
+        refused=_standing_refusal(step_id, fingerprint),
     )
     if outcome.get("road") == ROAD_AGENTIC:
         _LOGGER.info("step %s: %s; the old road", number, outcome.get("why"))
@@ -1978,16 +2394,20 @@ def _the_step_ask(
         "run": None,
     }
     if ok:
-        _STEP_ASK_FAILURES.pop(step_id, None)
+        _STEP_REFUSALS.pop(step_id, None)
         if step_id:
             # What the model was shown, same as the old road: an identical
             # fetch next cycle is the step waiting, not new work.
             _IDLE_STEP_MEMO[step_id] = fingerprint
         _breaker_reset(obligation)
         return payload
-    count = tried[1] + 1 if tried and tried[0] == fingerprint else 1
-    if step_id:
-        _STEP_ASK_FAILURES[step_id] = (fingerprint, count)
+    _refused = outcome.get("result")
+    if not isinstance(_refused, dict) or not _refusal_code(_refused):
+        _refused = {
+            "error": outcome.get("error") or "step_ask_refused",
+            "message": outcome.get("message"),
+        }
+    _refusal_note(step_id, fingerprint, _refused, road="ask", number=number)
     breaker = _breaker_record_failure(
         resources,
         obligation,

@@ -416,7 +416,7 @@ def test_a_returned_act_is_refiled_once_changed():
 # ---------------------------------------------------------------------------
 def _clean():
     cli._IDLE_STEP_MEMO.clear()
-    cli._STEP_ASK_FAILURES.clear()
+    cli._STEP_REFUSALS.clear()
     cli._OBLIGATION_FAILURES.clear()
 
 
@@ -521,7 +521,9 @@ def test_need_tools_takes_the_old_road_after_one_small_call():
     cli._IDLE_STEP_MEMO.clear()
 
 
-def test_two_refused_asks_on_one_state_hand_the_step_to_the_old_road():
+def test_three_refused_asks_on_one_state_hand_the_step_to_the_old_road():
+    # THREE, not two (Steven, 2026-09-11: "two seems odd, how about 3, in case
+    # of a mistake"), and the same three the old road's brake counts.
     _clean()
     refusal = {"ok": False, "error": "invalid_delivery_note", "message": "no"}
 
@@ -530,16 +532,48 @@ def test_two_refused_asks_on_one_state_hand_the_step_to_the_old_road():
             self.outcomes.append((target_id, outcome, key))
             return refusal
 
-    model = _model(CAFES, CAFES, CAFES, CAFES, CAFES, CAFES)
+    model = _model(*([CAFES] * 8))
     resources, observed = _resources(_payload(), model, bench=AlwaysRefuses())
-    first = cli._process_market_attention(resources, wait=20)
-    assert first["ok"] is False and first["dispatch"]["kind"] == "deal_step_step_ask"
+    for _ in range(3):
+        asked = cli._process_market_attention(resources, wait=20)
+        assert asked["ok"] is False and asked["dispatch"]["kind"] == "deal_step_step_ask"
+        cli._OBLIGATION_FAILURES.clear()
+    fourth = cli._process_market_attention(resources, wait=20)
+    assert fourth["dispatch"]["kind"] == "deal_step" and '"s-1"' in observed["goal"]
+    _clean()
+
+
+def test_the_benchs_refusal_rides_the_next_ask_and_the_next_dispatch():
+    # A refusal the model never sees is a refusal it earns again from a blank
+    # slate. The bench's own words ride the first ask of the next cycle, and
+    # the old road's goal when the step gets there.
+    _clean()
+    refusal = {
+        "ok": False,
+        "error": "stand_in",
+        "message": "card 1 reads a made-up address: a stand-in is not a value.",
+    }
+
+    class AlwaysRefuses(FakeBench):
+        def file_outcome(self, target_id, outcome, key):
+            self.outcomes.append((target_id, outcome, key))
+            return refusal
+
+    model = _model(*([CAFES] * 8))
+    resources, observed = _resources(_payload(), model, bench=AlwaysRefuses())
+    cli._process_market_attention(resources, wait=20)
     cli._OBLIGATION_FAILURES.clear()
-    second = cli._process_market_attention(resources, wait=20)
-    assert second["ok"] is False and second["dispatch"]["kind"] == "deal_step_step_ask"
+    model.invocations.clear()
+    cli._process_market_attention(resources, wait=20)
+    # The FIRST ask of the second cycle already carries the bench's sentence.
+    assert "the_bench_refused" in model.invocations[0]["messages"][0].content[0]["text"]
+    assert "a stand-in is not a value" in model.invocations[0]["messages"][0].content[0]["text"]
     cli._OBLIGATION_FAILURES.clear()
-    third = cli._process_market_attention(resources, wait=20)
-    assert third["dispatch"]["kind"] == "deal_step" and '"s-1"' in observed["goal"]
+    cli._process_market_attention(resources, wait=20)
+    cli._OBLIGATION_FAILURES.clear()
+    cli._process_market_attention(resources, wait=20)
+    assert '"the_bench_refused"' in observed["goal"]
+    assert "a stand-in is not a value" in observed["goal"]
     _clean()
 
 

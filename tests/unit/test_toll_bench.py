@@ -878,6 +878,152 @@ def test_the_deal_step_instruction_tells_the_agent_to_declare_the_wait():
     assert "Never sit silent at agent_working" in _DEAL_STEP_INSTRUCTION
 
 
+def test_a_stand_in_422_comes_back_structured_with_the_field_and_the_fix():
+    # WHAT FORCED IT (production, 2026-09-11): `stand_in` was not a file-door
+    # refusal, so a 422 the agent could have FIXED was raised. Down the old
+    # road the tool registry flattens an exception to {"error": "<english>"},
+    # and the model lost `field`, `reason` and `fix` -- the three keys that
+    # say what to change. It re-earned the same refusal every forty seconds.
+    class RefusingApi(FakeApi):
+        def file_outcome(self, target_id, outcome, idempotency_key):
+            raise BookOfHousesApiError(
+                422,
+                "stand_in",
+                "card 1 field email reads a made-up address: a stand-in is not a value.",
+                {
+                    "ok": False,
+                    "error": "stand_in",
+                    "message": (
+                        "card 1 field email reads a made-up address: a stand-in "
+                        "is not a value."
+                    ),
+                    "field": "cards[0].email",
+                    "reason": "it is a made-up address",
+                    "fix": "Write the real value from what the person said and picked.",
+                },
+            )
+
+    result = BookOfHousesTollBenchProvider(RefusingApi()).file_outcome(
+        "t1", {"note": "Three cafes.", "text": "a, b, c"}, "ik"
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "stand_in"
+    assert result["status"] == 422
+    assert result["field"] == "cards[0].email"
+    assert result["reason"] == "it is a made-up address"
+    assert result["fix"].startswith("Write the real value")
+    # A door refusal is not terminal: fix it and file again.
+    assert result["terminal"] is False
+
+
+def test_the_old_roads_tool_result_keeps_the_field_and_the_fix():
+    # The same refusal, through the tool the model actually calls. Nothing may
+    # be lost between the door and the tool result.
+    from toll_harness.tools.registry import (
+        ToolContext,
+        add_toll_bench_tools,
+        build_standard_registry,
+    )
+
+    class RefusingApi(FakeApi):
+        def file_outcome(self, target_id, outcome, idempotency_key):
+            raise BookOfHousesApiError(
+                422,
+                "stand_in",
+                "card 1 field email reads a made-up address: a stand-in is not a value.",
+                {
+                    "field": "cards[0].email",
+                    "reason": "it is a made-up address",
+                    "fix": "Write the real value from what the person said and picked.",
+                },
+            )
+
+    registry = add_toll_bench_tools(build_standard_registry())
+    context = ToolContext(
+        run_id="r1",
+        state_store=None,
+        event_store=None,
+        artifact_store=None,
+        event_cursor=0,
+        toll_bench_provider=BookOfHousesTollBenchProvider(RefusingApi()),
+    )
+    result = registry.execute(
+        context,
+        "call-1",
+        "toll_bench.file_outcome",
+        {
+            "target_id": "t1",
+            "outcome": {"note": "Three cafes.", "text": "a, b, c"},
+            "idempotency_key": "ik",
+        },
+    )
+
+    assert result.is_error is False
+    assert result.output["error"] == "stand_in"
+    assert result.output["field"] == "cards[0].email"
+    assert result.output["fix"].startswith("Write the real value")
+
+
+def test_every_structured_outcome_door_the_bench_publishes_is_a_result():
+    # A 4xx the agent can act on comes back as a result, with the bench's own
+    # keys on it; anything else still raises. These are the codes the outcome
+    # route and the walk gates behind it publish today.
+    from toll_harness.toll_bench.book_of_houses import FILE_DOOR_REFUSALS
+
+    for code in (
+        "stand_in",
+        "deliverable_empty",
+        "deliverable_missing",
+        "deliverable_type_mismatch",
+        "deliverable_fields_missing",
+        "deliverable_fields_blank",
+        "deliverable_count_short",
+        "reply_owed",
+        "acts_not_filed",
+        "outcome_promises_send",
+        "options_are_the_delivery",
+        "note_required",
+        "note_too_long",
+        "document_required",
+        "document_invalid",
+        "block_over_cap",
+        "prose_over_cap",
+        "outcome_text_too_long",
+        "link_in_outcome_text",
+        "credential_request_rejected",
+        "secret_rejected",
+        "off_platform_payment",
+        "out_of_turn_filing",
+        "deal_not_active",
+    ):
+        assert code in FILE_DOOR_REFUSALS, code
+
+
+def test_a_dead_deal_is_a_terminal_refusal_and_an_unknown_code_still_raises():
+    import pytest
+
+    class DeadDeal(FakeApi):
+        def file_outcome(self, target_id, outcome, idempotency_key):
+            raise BookOfHousesApiError(
+                409, "deal_not_active", "Countersign the active deal before filing outcomes."
+            )
+
+    dead = BookOfHousesTollBenchProvider(DeadDeal()).file_outcome(
+        "t1", {"note": "Three cafes.", "text": "a, b, c"}, "ik"
+    )
+    assert dead["terminal"] is True
+
+    class Surprise(FakeApi):
+        def file_outcome(self, target_id, outcome, idempotency_key):
+            raise BookOfHousesApiError(500, "server_on_fire", "boom")
+
+    with pytest.raises(BookOfHousesApiError):
+        BookOfHousesTollBenchProvider(Surprise()).file_outcome(
+            "t1", {"note": "Three cafes.", "text": "a, b, c"}, "ik"
+        )
+
+
 def test_check_in_returns_ask_not_open_as_structured_move():
     # The walk refuses a flat-progress no-blocker pulse on an unopened
     # person-held ask (422 ask_not_open, 2026-09-01). The wrapper returns the
