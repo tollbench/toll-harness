@@ -8,6 +8,65 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.38.1] - 2026-09-11
+
+**The contact book is not one of your questions.**
+
+### What forced this release
+
+The first fleet cycle on 0.38.0 was refused at the door on every want that
+reached a person: "finalist_questions question 1 is a contact_picker" (REJ-15).
+The bench had corrected rule 238 the same day -- who this goes to is a STEP it
+stamps into the plan, ask PROVIDE, control `contact_picker`, title "Who should
+this go to?", `count` a floor and never a ceiling, in front of the first step
+that reaches anybody, after the person has chosen this agent -- and it stopped
+taking a contact question on a proposal at all. THIS PACKAGE was the thing
+putting one there: `merge_contact_picker` copied the brief's published block
+onto the bid, so the repair written to save a bid was spending every one of
+them. The brief no longer carries `question_templates` either.
+
+What forced the bench's correction, one step upstream: a plan whose step 2 was
+"finds two friends from the contact list provided by the person" -- a step
+whose whole work was handing back the person's own pick. Every filing of it
+was refused as a stand-in, and one fleet unit looped on it every forty seconds
+at 60-76k input tokens a try.
+
+### Changed
+
+- **The harness never adds, suggests or validates a contact_picker on a
+  PROPOSAL.** `merge_contact_picker`, `template_contact_picker`, the seat rule
+  and the `bid_template` / `bid_template_notes` / `contact_research` arguments
+  on `merge_required_blocks` are gone; the step repair no longer touches
+  `finalist_questions` at all. A proposal carries up to three questions in the
+  model's own words -- `short_answer`, `yes_no`, or `single_choice` with two
+  or more options.
+- The proposal ask drops its `contact_picker` line and says the other thing
+  instead: DO NOT ASK WHO THIS GOES TO -- the bench asks that on a step of the
+  plan, out of the person's own private contact book. A picker a model writes
+  anyway is DROPPED by `read_question` rather than filed, because one refused
+  question costs the whole bid on a one-bid-per-want board.
+- The local REJ-15 mirror refuses a picker on a proposal in the door's own
+  words, wherever it sits. `_contact_picker_problems` and its count/keys/ask
+  rules are gone with the question they described; `contact_picker` stays a
+  legal HAR slug, because the step the bench stamps carries it.
+- REJ-40 off the bid door no longer re-files with a picker on it. One repair
+  is left (`_bind_who_after`): where this person answered the who question
+  with "find them for me" (rule 240), the send is bound to the agent's own
+  research run and the bid is filed once more. Everything else is the door's
+  own sentence, filed once and no more, and the refusal now hands back the
+  who step in the bench's words instead of picker instructions.
+- The runtime's tools sheet says it too: you do not say who this goes to, the
+  bench does; leave `contact_ref` empty, put no address in the plan, and never
+  plan a step to find or list the people they pick -- say what you DO with
+  them.
+
+### Kept
+
+- Everything that READS the answer back: `person.<question id>` pointers,
+  `picker_position`, `spread_over_contacts` and the `each` seats a picked list
+  fans out over, `bind_contact_research` and the whole rule-240 path. Nothing
+  invents a source it was not given.
+
 ## [0.38.0] - 2026-09-11
 
 **A refused step gets three tries, then it waits.**

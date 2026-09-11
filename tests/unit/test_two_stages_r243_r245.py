@@ -262,17 +262,20 @@ def test_a_question_is_a_block_with_its_own_id_and_only_the_blank_in_it():
     }
 
 
-def test_the_contact_question_carries_nothing_but_how_many():
-    """Rules 222/237/238: the words are the bench's, the people are the
-    person's, and the agent writes neither."""
-    picked = read_questions([{"format": "contact_picker", "title": "Who?",
-                              "config": {"count": 2, "sneaky": "x"},
-                              "contact_ref": "c-1"}])
+def test_a_contact_question_is_dropped_and_never_filed():
+    """RULE 238 CORRECTED (2026-09-11): the contact book is not one of your
+    questions. The person picks who this goes to on a step of the plan, after
+    they have chosen you, out of their own private book -- so the bench
+    refuses a picker here REJ-15, and one refused question costs the whole
+    bid. Dropping it files the other two instead of nothing."""
+    assert read_questions([{"format": "contact_picker", "title": "Who?",
+                            "config": {"count": 2, "sneaky": "x"},
+                            "contact_ref": "c-1"}]) == []
+    assert read_questions([{"format": "contact_picker"}]) == []
 
-    assert picked == [{"id": "q1", "format": "contact_picker",
-                       "config": {"count": 2}}]
-    assert read_questions([{"format": "contact_picker"}]) == [
-        {"id": "q1", "format": "contact_picker"}]
+    kept = read_questions([{"format": "contact_picker", "config": {"count": 2}},
+                           {"format": "yes_no", "fill": "sign them from you"}])
+    assert [q["format"] for q in kept] == ["yes_no"]
 
 
 def test_three_questions_is_the_cap_and_ids_never_collide():
@@ -298,8 +301,11 @@ def test_the_proposal_ask_names_the_shapes_and_the_frames():
                                 idempotency_key="k")
 
     ask = model.invocations[0]["messages"][0].content[0]["text"]
-    for shape in ("yes_no", "single_choice", "short_answer", "contact_picker"):
+    for shape in ("yes_no", "single_choice", "short_answer"):
         assert shape in ask
+    # And NOT the fourth shape: who this goes to is the bench's own step.
+    assert "contact_picker" not in ask
+    assert "DO NOT ASK WHO THIS GOES TO" in ask
     assert "Should I ___?" in ask
     assert '"fill"' in ask
     # The filed questions are blocks, not the strings the model wrote.

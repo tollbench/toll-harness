@@ -264,15 +264,12 @@ HAR_FORMAT_SLUGS = frozenset(
         "communication",
         "yes_no",
         "number",
-        # RULE 237/238 (2026-09-08/09). QUESTION-ONLY, and never a step format:
-        # the person picks people out of their own private Contacts and each
-        # pick arrives as a reference for `acts[].contact_ref`. It is on the
-        # brief's own `bid_template.finalist_questions` and on
-        # `question_templates.contact_picker`, so a mirror that did not know
-        # the slug answered "`contact_picker` is not a HAR format slug" about
-        # the very question the bench handed out -- and with the validate door
-        # unreachable that is `local_validation_failed` and a legal plan buried
-        # at home.
+        # RULE 238 CORRECTED (2026-09-11). A STEP format, and never a
+        # question: the bench stamps the who step into the plan itself, with
+        # the person's own contact book on it, and each pick arrives as a
+        # reference for `acts[].contact_ref`. It stays a legal HAR slug here
+        # because the step carries it; `_finalist_block_problems` refuses it
+        # on a PROPOSAL in the door's own words.
         "contact_picker",
     }
 )
@@ -290,18 +287,9 @@ FINALIST_REFUSED_FORMATS = frozenset(
     }
 )
 FINALIST_TEXT_FORMATS = frozenset({"short_answer", "written_response"})
-# RULE 237 (Steven, 2026-09-07): ONE picker, and it may ask for as many people
-# as the want needs -- two for an introduction, eighty for a wedding list.
-# `count` is the ONLY thing it may carry; the people themselves are always the
-# person's to choose, so a picker that names one is not a picker. The ceiling
-# is the person's own Contacts book (private_contacts.MAX_SLOTS), a sanity
-# bound on one JSON field rather than a product limit. A picker is not a text
-# box, so it never counts against the two-text cap.
+# RULE 238 CORRECTED (Steven, 2026-09-11): no picker belongs on a proposal at
+# all. The bench refuses one REJ-15 and asks who on a step of the plan.
 CONTACT_PICKER_FORMAT = blocks.CONTACT_PICKER_FORMAT
-CONTACT_PICKER_COUNT_MAX = 500
-CONTACT_PICKER_KEYS = frozenset(
-    {"id", "format", "title", "description", "required", "config", "ask"}
-)
 # Rule 170: a choice control must offer real options, not an empty dropdown that
 # forces a type-in. Same minimums the step blocks carry.
 FINALIST_CHOICE_MIN_OPTIONS = {"single_choice": 2, "multiple_choice": 3, "rank": 3}
@@ -363,64 +351,6 @@ def _has_other_sentinel(options: Any) -> bool:
     return False
 
 
-def _contact_picker_problems(block: dict[str, Any], pos: str) -> list[dict[str, str]]:
-    """RULE 237's shape for the one picker, mirrored off the bid door.
-
-    Three things, and nothing else: `count` is all the config may hold, it is
-    a whole number from 1 to the person's own book, and the block carries no
-    contact of its own. The words are the agent's; the people are the
-    person's.
-    """
-    problems: list[dict[str, str]] = []
-    config = block.get("config")
-    if config not in (None, {}):
-        if not isinstance(config, dict) or set(config) - {"count"}:
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        "`contact_picker` takes only config.count; the person "
-                        "chooses who (rule 237, REJ-15)"
-                    ),
-                }
-            )
-        else:
-            wanted = config.get("count")
-            if (
-                isinstance(wanted, bool)
-                or not isinstance(wanted, int)
-                or not 1 <= wanted <= CONTACT_PICKER_COUNT_MAX
-            ):
-                problems.append(
-                    {
-                        "path": pos,
-                        "message": (
-                            "`contact_picker` config.count must be a whole number "
-                            f"from 1 to {CONTACT_PICKER_COUNT_MAX} -- how many "
-                            "people this plan reaches, one picker however many "
-                            "that is (rule 237, REJ-15)"
-                        ),
-                    }
-                )
-    if any(key not in CONTACT_PICKER_KEYS for key in block):
-        problems.append(
-            {
-                "path": pos,
-                "message": (
-                    "`contact_picker` cannot carry a contact or an address of "
-                    "its own; the person picks them from their private book and "
-                    "each pick arrives as a reference for acts[].contact_ref "
-                    "(rule 238, REJ-15)"
-                ),
-            }
-        )
-    if block.get("ask") not in (None, "PROVIDE"):
-        problems.append(
-            {"path": pos, "message": "`contact_picker` is a PROVIDE question (REJ-15)"}
-        )
-    return problems
-
-
 def _finalist_block_problems(block: dict[str, Any], pos: str) -> list[dict[str, str]]:
     problems: list[dict[str, str]] = []
     for key in ("id", "title"):
@@ -479,7 +409,8 @@ def _finalist_block_problems(block: dict[str, Any], pos: str) -> list[dict[str, 
         )
         return problems
     if fmt == CONTACT_PICKER_FORMAT:
-        problems.extend(_contact_picker_problems(block, pos))
+        # RULE 238 CORRECTED (2026-09-11): the book is not a question.
+        problems.append({"path": pos, "message": blocks.CONTACT_QUESTION_REFUSED})
         return problems
     config = block.get("config") if isinstance(block.get("config"), dict) else {}
     if fmt in FINALIST_CHOICE_MIN_OPTIONS:
@@ -531,25 +462,6 @@ def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
             {"path": path, "message": "must contain exactly one array of four questions"}
         ]
     problems: list[dict[str, str]] = []
-    # RULE 237: ONE picker, however many people it asks for. Two of them is
-    # two books opened for one plan, and the bid door refuses it in one line.
-    pickers = sum(
-        1
-        for question in questions[0]
-        if isinstance(question, dict)
-        and str(question.get("format") or "").strip() == CONTACT_PICKER_FORMAT
-    )
-    if pickers > 1:
-        problems.append(
-            {
-                "path": path,
-                "message": (
-                    "use one contact_picker question for the people this plan "
-                    "contacts; `config.count` is how many of them there are "
-                    "(rule 237, REJ-15)"
-                ),
-            }
-        )
     text_questions = 0
     for index, question in enumerate(questions[0]):
         pos = f"{path}[1][{index + 1}]"
@@ -1209,15 +1121,17 @@ class BookOfHousesTollBenchProvider:
             ),
         }
 
-    def _ask_who_after(
+    def _bind_who_after(
         self, target_id: str, error: Any, proposal: dict[str, Any], brief: dict[str, Any]
     ) -> tuple[dict[str, Any], str | None]:
-        """RULE 238 / REJ-40: the door refused a plan that asked nobody who.
+        """RULE 240 / REJ-40: the door refused a plan that says nobody who.
 
-        The repair is one question and the brief published it. Logged verbatim
-        like REJ-38, filed ONCE more, and when the brief carries no picker --
-        an older bench, or a want nothing on it can reach a person for -- the
-        door's own sentence is the answer and nothing is re-filed.
+        ONE repair is left here since rule 238 was corrected (2026-09-11).
+        Adding a contact question is not it -- the who step is the BENCH's, and
+        a picker on a proposal is refused REJ-15 -- so the only bid worth
+        filing again is the one where this person answered "find them for me":
+        the send is bound to a research run of the agent's own. Anything else
+        and the door's own sentence is the answer, filed once and no more.
         """
         _LOGGER.warning(
             "Target %s refused the bid %s -- the plan reaches a person and "
@@ -1227,49 +1141,32 @@ class BookOfHousesTollBenchProvider:
             error.message,
         )
         research = blocks.contact_research_of(brief)
-        if research is not None:
-            # The person already said they have nobody to pick. The answer is
-            # not a question, it is the binding: the send reads its recipient
-            # off a research run.
-            fixed, bound = blocks.bind_contact_research(proposal, research)
-            if bound:
-                _LOGGER.warning(
-                    "Target %s: bound the outreach to the research the person "
-                    "asked for (%s); re-filing once",
-                    target_id,
-                    "; ".join(bound),
-                )
-                return fixed, "; ".join(bound)
+        if research is None:
             _LOGGER.warning(
-                "Target %s: this person asked us to find the recipient and "
-                "nothing in this plan can be bound to it; the door's own "
-                "refusal is the answer",
+                "Target %s: who this goes to is the bench's own step, so there "
+                "is nothing to add here; the door's own refusal is the answer",
                 target_id,
             )
             return proposal, None
-        fixed, asked = blocks.merge_contact_picker(
-            proposal,
-            proposal.get("steps"),
-            brief.get("bid_template"),
-            brief.get("bid_template_notes"),
-            # The door has just said this plan reaches a person. It reads the
-            # lane table this package does not have, so it is not asked again.
-            reaches_a_person=True,
+        # The person already said they have nobody to pick. The answer is not
+        # a question, it is the binding: the send reads its recipient off a
+        # research run.
+        fixed, bound = blocks.bind_contact_research(proposal, research)
+        if bound:
+            _LOGGER.warning(
+                "Target %s: bound the outreach to the research the person "
+                "asked for (%s); re-filing once",
+                target_id,
+                "; ".join(bound),
+            )
+            return fixed, "; ".join(bound)
+        _LOGGER.warning(
+            "Target %s: this person asked us to find the recipient and "
+            "nothing in this plan can be bound to it; the door's own "
+            "refusal is the answer",
+            target_id,
         )
-        if asked:
-            _LOGGER.warning(
-                "Target %s: put the brief's own contact_picker on the bid (%s); "
-                "re-filing once",
-                target_id,
-                asked,
-            )
-        else:
-            _LOGGER.warning(
-                "Target %s: this brief publishes no contact_picker to add, so "
-                "the door's own refusal is the answer; not re-filed",
-                target_id,
-            )
-        return fixed, asked
+        return proposal, None
 
     def _bind_the_research_after(
         self, target_id: str, error: Any, proposal: dict[str, Any], brief: dict[str, Any]
@@ -1353,15 +1250,15 @@ class BookOfHousesTollBenchProvider:
             "rej": error.rej,
             "detail": error.message,
             "terminal": False,
-            "fix": blocks.CONTACT_PICKER_SENTENCE,
+            "fix": blocks.CONTACT_STEP_SENTENCE,
             "message": (
                 "Nothing was filed. The bench refused this plan REJ-40: an act "
                 "that runs on the person's own account names nobody to send it "
                 "to, or a plan field holds a raw address. `detail` carries the "
-                "door's own words. THE FOUR QUESTIONS ARE FROZEN AT BID TIME, so "
-                "on a plan revision the picker cannot be added now: what this "
-                "plan must carry is the `contact_ref` the person's own pick "
-                "filled in, or a `found_contact` {name, email, source_url} the "
+                "door's own words. YOU DO NOT ADD A CONTACT QUESTION -- the "
+                "bench stamps the who step into the plan itself. What this plan "
+                "must carry is an empty `contact_ref` for the person's pick to "
+                "fill, or a `found_contact` {name, email, source_url} the "
                 "person approves beside the exact message."
             ),
         }
@@ -2163,15 +2060,6 @@ class BookOfHousesTollBenchProvider:
             want=brief.get("want"),
             needs=self._grant_requirements(),
             block_templates=brief.get("block_templates"),
-            # RULES 237/238: the form is not only steps. When the plan reaches
-            # a person and the four questions ask nobody who, the brief's own
-            # contact_picker goes on the bid -- REJ-40 otherwise, and on a
-            # one-bid-per-want board that is the whole round.
-            bid_template=brief.get("bid_template"),
-            bid_template_notes=brief.get("bid_template_notes"),
-            # "FIND THEM FOR ME": this person declined to pick, so no picker
-            # goes on the bid however much the plan reaches a person.
-            contact_research=brief.get("contact_research"),
         )
         if inserted:
             _LOGGER.warning(
@@ -2477,12 +2365,15 @@ class BookOfHousesTollBenchProvider:
                         proposal,
                         f"{idempotency_key}-{_retry_tag(first.rej)}",
                     )
-                # RULE 238 / REJ-40: the plan reaches a person and asked nobody
-                # who. The answer is the QUESTION, and the brief published it,
-                # so it goes on and the bid is filed ONCE more.
+                # RULE 238 CORRECTED / REJ-40: the plan reaches a person and
+                # says nobody. A contact question is NOT the repair any more --
+                # the who step is the bench's own. The one bid worth filing
+                # again is "find them for me", bound to a research run.
                 elif first.rej == REJ_CONTACT_ROUTE:
-                    proposal, asked = self._ask_who_after(target_id, first, proposal, brief)
-                    if not asked:
+                    proposal, bound = self._bind_who_after(
+                        target_id, first, proposal, brief
+                    )
+                    if not bound:
                         raise
                     result = self.api.submit_proposal(
                         target_id,
@@ -2516,8 +2407,6 @@ class BookOfHousesTollBenchProvider:
                         first.plan_template,
                         want=brief.get("want"),
                         needs=self._grant_requirements(),
-                        bid_template=brief.get("bid_template"),
-                        bid_template_notes=brief.get("bid_template_notes"),
                     )
                     if not repaired:
                         raise

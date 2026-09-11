@@ -662,24 +662,18 @@ def test_no_research_answer_binds_nothing():
     assert blocks.contact_research_of({}) is None
 
 
-def test_a_want_the_person_asked_us_to_research_never_gets_a_picker():
-    bid_template = {
-        "finalist_questions": [
-            [{"id": "who", "format": "contact_picker", "title": "", "config": {"count": 1}}]
-        ]
-    }
+def test_no_bid_ever_gets_a_picker_research_answer_or_not():
+    # Rule 238 corrected (2026-09-11): the contact book is not a question at
+    # all, so there is nothing here for a research answer to turn off. The
+    # step repair leaves the questions exactly as the model wrote them.
     plan = _proposal(_step("Send it", {"kind": "email", "runs_on": "person"}))
     plan["finalist_questions"] = [
         [{"id": "q1", "format": "yes_no", "title": "Ok?", "config": {}}]
     ]
-    merged, inserted = blocks.merge_required_blocks(
-        plan, [], [], bid_template=bid_template, contact_research=RESEARCH
-    )
-    assert inserted == []
-    assert blocks.picker_position(merged["finalist_questions"]) is None
-    # ...and without the research answer the same bid does get the question.
-    merged, inserted = blocks.merge_required_blocks(plan, [], [], bid_template=bid_template)
-    assert blocks.picker_position(merged["finalist_questions"]) is not None
+    for _ in range(2):
+        merged, inserted = blocks.merge_required_blocks(plan, [], [])
+        assert inserted == []
+        assert blocks.picker_position(merged["finalist_questions"]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -893,28 +887,33 @@ def test_a_rej41_on_a_want_with_no_research_repairs_nothing():
     assert fixed is plan
 
 
-def test_a_rej40_on_a_research_want_binds_instead_of_asking_again():
-    bid_template = {
-        "finalist_questions": [
-            [{"id": "who", "format": "contact_picker", "title": "", "config": {"count": 1}}]
-        ]
-    }
+def test_a_rej40_on_a_research_want_binds_to_the_research_run():
+    # The ONE repair left on REJ-40 since rule 238 was corrected: this person
+    # said "find them for me", so the send reads its recipient off a research
+    # run of the agent's own. No question is added, ever.
     provider = _provider(_Api())
     error = _refusal("REJ-40", "an act on the person's own account names nobody")
     plan = _proposal(_step("Send it", {"kind": "email", "runs_on": "person"}))
     plan["finalist_questions"] = [
         [{"id": "q1", "format": "yes_no", "title": "Ok?", "config": {}}]
     ]
-    fixed, asked = provider._ask_who_after(
-        "t-1",
-        error,
-        plan,
-        _brief(contact_research=RESEARCH, bid_template=bid_template),
+    fixed, bound = provider._bind_who_after(
+        "t-1", error, plan, _brief(contact_research=RESEARCH)
     )
-    assert asked
+    assert bound
     assert fixed["steps"][0]["acts"][0][blocks.CONTACT_FROM_FIELD] == "research"
-    # The person declined to pick. Asking again is the one thing not to do.
     assert blocks.picker_position(fixed["finalist_questions"]) is None
+
+
+def test_a_rej40_with_no_research_answer_adds_nothing_and_is_not_re_filed():
+    # It used to put the brief's own picker on and file again. That line is
+    # what the bench refused on every person-reaching want on 2026-09-11.
+    provider = _provider(_Api())
+    error = _refusal("REJ-40", "an act on the person's own account names nobody")
+    plan = _proposal(_step("Send it", {"kind": "email", "runs_on": "person"}))
+    fixed, bound = provider._bind_who_after("t-1", error, plan, _brief())
+    assert bound is None
+    assert fixed is plan
 
 
 def test_a_rej40_with_research_and_nothing_to_bind_is_not_re_filed():
@@ -922,10 +921,10 @@ def test_a_rej40_with_research_and_nothing_to_bind_is_not_re_filed():
     error = _refusal("REJ-40", "an act on the person's own account names nobody")
     plan = _proposal(_step("Send it", {"kind": "email", "runs_on": "person",
                                        "contact_from": "research"}))
-    fixed, asked = provider._ask_who_after(
+    fixed, bound = provider._bind_who_after(
         "t-1", error, plan, _brief(contact_research=RESEARCH)
     )
-    assert asked is None
+    assert bound is None
     assert fixed is plan
 
 

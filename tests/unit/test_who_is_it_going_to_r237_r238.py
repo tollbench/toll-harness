@@ -1,26 +1,26 @@
-"""RULES 237 + 238 (Steven, 2026-09-08/09) -- WHO IS IT GOING TO.
+"""RULE 238 CORRECTED (Steven Ochs, 2026-09-11) -- WHO IS IT GOING TO IS A STEP.
 
-A person is contacted through their own private Contacts and never through a
-loose address. The brief hands the question out already: when anything it
-publishes can reach a person, `bid_template.finalist_questions[0]` ships a
-`contact_picker` as the THIRD of the four -- {"id": "who", "format":
-"contact_picker", "title": "", "config": {"count": 1}} -- in place of the
-second of the two identical yes/no questions, because four is the whole cap.
-An act on the person's own lane that names nobody, with no picker anywhere in
-the bid, is refused REJ-40 (contact_route).
+A person is contacted through their own contact book and never through a loose
+address. THE BOOK CAME OUT OF THE QUESTIONS. Who this goes to is a STEP the
+BENCH stamps into the plan -- ask PROVIDE, control `contact_picker`, title
+"Who should this go to?", `count` a floor and never a ceiling -- in front of
+the first step that reaches anybody, after the person has chosen this agent.
+The agent never writes that step and never sees a picker on the proposal form.
 
-WHAT FORCED THIS FILE, in two halves.
+WHAT FORCED THE CORRECTION, and this rewrite. One fleet unit filed a plan whose
+step 2 was "finds two friends from the contact list provided by the person" --
+a step whose whole work was to hand back the person's own pick. Every filing
+of it was refused as a stand-in, and it looped every forty seconds at 60-76k
+tokens a try. The ask was in the wrong place. So the bench stopped taking a
+contact question on a proposal at all (REJ-15: "The contact book is not one of
+your questions...") -- and on the first fleet cycle after that, EVERY bid that
+reached a person was refused, because THIS PACKAGE was the thing adding the
+picker: `merge_contact_picker` copied the brief's published block onto the bid.
 
-  1. `HAR_FORMAT_SLUGS` did not carry `contact_picker`, so the local mirror
-     answered "`contact_picker` is not a HAR format slug (REJ-15)" about the
-     very question the bench hands out -- and with the validate door
-     unreachable that is `local_validation_failed`, a legal plan buried at
-     home and the round spent with nothing filed.
-  2. Nothing in this package ever copied the brief's questions.
-     `merge_required_blocks` inserted the email step out of `block_templates`
-     and left `finalist_questions` alone, so the harness's OWN repair created
-     the REJ-40 condition it was then refused for: a plan that reaches a
-     person, filed beside four questions that ask nobody who.
+These tests now hold the other law: the harness never adds, suggests or
+validates a contact_picker on a PROPOSAL, and what it keeps is reading the
+answer back -- `person.<id>` pointers and the seats a picked list fans out
+over.
 
 The third subject is the provider key. `composio:<toolkit slug>` and
 `key:<service slug>` are lanes the PLATFORM resolves; the harness carries them
@@ -30,7 +30,7 @@ bench matches a row by FAMILY and that table lives on the server.
 import copy
 
 from toll_harness.email.book_of_houses import BookOfHousesApiError
-from toll_harness.toll_bench import blocks
+from toll_harness.toll_bench import blocks, draft
 from toll_harness.toll_bench.book_of_houses import (
     BookOfHousesTollBenchProvider,
     finalist_question_problems,
@@ -40,7 +40,8 @@ from toll_harness.toll_bench.book_of_houses import (
 # The bench's own shapes, as a live brief hands them out.
 # --------------------------------------------------------------------------
 
-# `_finalist_form(contacts=True)` in want_blocks: the picker is question three.
+# The block the bench used to publish as question three, and now stamps onto
+# a STEP of the plan instead. Kept here as the shape nothing may put on a bid.
 PUBLISHED_PICKER = {
     "id": "who",
     "format": "contact_picker",
@@ -265,82 +266,133 @@ def _messages(problems):
 
 
 # ---------------------------------------------------------------------------
-# 1. The mirror knows the slug the bench hands out
+# 1. THE MIRROR REFUSES A CONTACT QUESTION ON A PROPOSAL
 # ---------------------------------------------------------------------------
-def test_contact_picker_is_a_har_format_slug():
-    # The exact question off `bid_template`, with the agent's words in it.
+def test_a_contact_picker_on_a_proposal_is_refused():
+    # The bench's REJ-15, mirrored at home so the bid is never spent on it.
     problems = finalist_question_problems(
         _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], _picker(),
                    MODEL_QUESTIONS[3])
     )
-    assert problems == []
+    assert "the contact book is not one of your questions" in _messages(problems)
+    assert "on a step of the plan" in _messages(problems)
 
 
-def test_the_picker_is_not_a_text_box():
-    # Two text boxes AND the picker: legal, because a picker is a tap and the
-    # two-text cap counts boxes the person types into.
+def test_a_picker_is_refused_however_it_is_dressed():
+    # A count, a contact of its own, an ask of its own: none of it matters any
+    # more. The shape is refused, not its fields.
+    for dressed in (
+        _picker(config={"count": 80}),
+        _picker(config={"count": 5, "options": []}),
+        _picker(email="ruby@example.com"),
+        _picker(ask="APPROVE"),
+    ):
+        problems = finalist_question_problems(
+            _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], dressed,
+                       MODEL_QUESTIONS[3])
+        )
+        assert "the contact book is not one of your questions" in _messages(problems)
+
+
+def test_the_three_shapes_that_are_still_questions_pass():
     problems = finalist_question_problems(
         _questions(
             MODEL_QUESTIONS[0],
             {"id": "q2", "format": "short_answer", "title": "Anything to add?"},
-            _picker(),
+            MODEL_QUESTIONS[2],
             {"id": "q4", "format": "short_answer", "title": "Anything to avoid?"},
         )
     )
     assert problems == []
 
 
-def test_a_second_picker_is_refused():
+def test_a_picker_is_refused_wherever_it_sits():
+    # Not a seat rule. The brief used to keep the third seat for it; there is
+    # no seat now, so every position is the same refusal.
+    for seat in range(4):
+        group = [
+            MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
+            MODEL_QUESTIONS[2], MODEL_QUESTIONS[3],
+        ]
+        group[seat] = _picker()
+        problems = finalist_question_problems(_questions(*group))
+        assert "the contact book is not one of your questions" in _messages(problems), seat
+
+
+def test_two_pickers_are_two_refusals_not_a_count_rule():
+    # "Use one contact_picker" was the old sentence. One is no longer a legal
+    # number, so each of them is refused where it stands.
     problems = finalist_question_problems(
         _questions(MODEL_QUESTIONS[0], _picker(id="who"),
                    _picker(id="who2", title="And who else?"), MODEL_QUESTIONS[3])
     )
-    assert "one contact_picker" in _messages(problems)
+    said = _messages(problems)
+    assert said.count("the contact book is not one of your questions") == 2
+    assert "use one contact_picker" not in said
 
 
-def test_the_picker_carries_only_a_count():
+def test_the_refusal_names_the_question_that_carries_it():
     problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                   _picker(config={"count": 5, "options": []}), MODEL_QUESTIONS[3])
+        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], _picker(),
+                   MODEL_QUESTIONS[3])
     )
-    assert "only config.count" in _messages(problems)
+    assert [problem["path"] for problem in problems] == ["finalist_questions[1][3]"]
 
 
-def test_a_count_of_eighty_is_one_picker():
+def test_the_two_text_box_cap_still_stands():
+    # The correction took one shape off the form; it changed no other rule.
     problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                   _picker(config={"count": 80}), MODEL_QUESTIONS[3])
-    )
-    assert problems == []
-
-
-def test_a_count_outside_the_book_is_refused():
-    for bad in (0, 501, True, "5", 2.5):
-        problems = finalist_question_problems(
-            _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                       _picker(config={"count": bad}), MODEL_QUESTIONS[3])
+        _questions(
+            {"id": "q1", "format": "short_answer", "title": "One?"},
+            {"id": "q2", "format": "short_answer", "title": "Two?"},
+            {"id": "q3", "format": "short_answer", "title": "Three?"},
+            MODEL_QUESTIONS[1],
         )
-        assert "config.count must be a whole number" in _messages(problems), bad
-
-
-def test_the_picker_may_not_carry_a_contact_of_its_own():
-    problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                   _picker(email="ruby@example.com"), MODEL_QUESTIONS[3])
     )
-    assert "cannot carry a contact" in _messages(problems)
+    assert problems != []
 
 
-def test_the_picker_is_a_provide_question():
-    problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                   _picker(ask="APPROVE"), MODEL_QUESTIONS[3])
+def test_a_bid_shaped_wrong_is_still_the_door_s_to_say_so():
+    # Not one group of questions. The repair touches the steps and leaves the
+    # shape alone, so the door's own sentence is what the model reads.
+    plan = {"steps": [EMAIL_STEP], "finalist_questions": MODEL_QUESTIONS}
+    merged, inserted = blocks.merge_required_blocks(plan, [], [])
+    assert inserted == []
+    assert merged is plan
+
+
+def test_this_package_writes_no_who_step_of_its_own():
+    # The bench stamps it. A harness that wrote one would be writing the step
+    # whose whole work is handing back the person's own pick -- the thing that
+    # forced the correction.
+    plan = _plan(WORK_STEP)
+    merged, _inserted = blocks.merge_required_blocks(
+        plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
+        block_templates={"email": [EMAIL_STEP]},
     )
-    assert "PROVIDE question" in _messages(problems)
+    for step in merged["steps"]:
+        formats = [b.get("format") for b in (step.get("har_blocks") or [])]
+        assert "contact_picker" not in formats
+
+
+def test_the_runtime_sheet_says_the_bench_asks_who():
+    from toll_harness.core.runtime import TOLL_BENCH_SYSTEM_INSTRUCTION
+
+    assert "THE BENCH DOES" in TOLL_BENCH_SYSTEM_INSTRUCTION
+    assert "never plan a step to find or list the" in TOLL_BENCH_SYSTEM_INSTRUCTION
+    assert "Never add a picker they already declined" not in TOLL_BENCH_SYSTEM_INSTRUCTION
+
+
+def test_contact_picker_is_still_a_har_slug_because_the_who_step_carries_it():
+    # The bench stamps it onto a step. A mirror that called the slug unknown
+    # would refuse the bench's own plan at home.
+    from toll_harness.toll_bench.book_of_houses import HAR_FORMAT_SLUGS
+
+    assert "contact_picker" in HAR_FORMAT_SLUGS
 
 
 # ---------------------------------------------------------------------------
-# 2. The swap: the brief's own picker, onto a plan that reaches a person
+# 2. Nothing puts a picker on a bid
 # ---------------------------------------------------------------------------
 def test_an_act_on_the_persons_lane_reaches_a_person():
     assert blocks.steps_reach_a_person([EMAIL_STEP]) is True
@@ -349,115 +401,74 @@ def test_an_act_on_the_persons_lane_reaches_a_person():
     assert blocks.act_reaches_a_person({"kind": "meeting", "with": ""}) is True
 
 
-def test_the_inserted_block_brings_the_brief_s_question_with_it():
+def test_the_inserted_block_brings_no_question_with_it():
+    # The step repair still runs. The questions are not touched -- this is the
+    # line that spent every bid on the first fleet cycle after the bench
+    # stopped taking a contact question.
     plan = _plan(WORK_STEP)
     merged, inserted = blocks.merge_required_blocks(
         plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
         block_templates={"email": [EMAIL_STEP]},
-        bid_template=BID_TEMPLATE, bid_template_notes=BID_TEMPLATE_NOTES,
     )
-    assert any("contact_picker:who" in line for line in inserted)
-    # The picker replaces the SECOND yes/no -- the one shape the form was
-    # offering twice -- and the group is still exactly four.
-    assert _formats(merged) == ["single_choice", "yes_no", "contact_picker",
-                                "short_answer"]
-    assert len(_group(merged)) == 4
-    picker = _group(merged)[2]
-    assert picker["id"] == "who"
-    assert picker["config"] == {"count": 1}
-    # The brief published the title blank; `bid_template_notes` published the
-    # words beside it.
-    assert picker["title"] == "Who should these go to?"
-    # And what came out passes the gate that would have refused it.
+    assert inserted and not any("contact_picker" in line for line in inserted)
+    assert _formats(merged) == ["single_choice", "yes_no", "yes_no", "short_answer"]
     assert finalist_question_problems(merged["finalist_questions"]) == []
 
 
-def test_the_model_s_own_picker_is_never_touched():
-    mine = _picker(id="who", title="Which colleagues get one?",
-                   config={"count": 12})
-    plan = _plan(WORK_STEP, questions=[MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-                                       mine, MODEL_QUESTIONS[3]])
-    merged, inserted = blocks.merge_required_blocks(
-        plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
-        block_templates={"email": [EMAIL_STEP]},
-        bid_template=BID_TEMPLATE, bid_template_notes=BID_TEMPLATE_NOTES,
-    )
-    assert not any("contact_picker" in line for line in inserted)
-    assert _group(merged)[2]["title"] == "Which colleagues get one?"
-    assert _group(merged)[2]["config"] == {"count": 12}
+def test_merge_required_blocks_takes_no_bid_template_any_more():
+    # The door that used to let a picker in is gone, not merely unused.
+    import inspect
+
+    taken = inspect.signature(blocks.merge_required_blocks).parameters
+    assert "bid_template" not in taken
+    assert "bid_template_notes" not in taken
+    assert not hasattr(blocks, "merge_contact_picker")
+    assert not hasattr(blocks, "template_contact_picker")
 
 
 def test_a_plan_that_reaches_nobody_is_asked_nothing():
     plan = _plan(WORK_STEP)
-    merged, inserted = blocks.merge_required_blocks(
-        plan, [], [], bid_template=BID_TEMPLATE,
-        bid_template_notes=BID_TEMPLATE_NOTES,
-    )
+    merged, inserted = blocks.merge_required_blocks(plan, [], [])
     assert inserted == []
     assert merged is plan
 
 
-def test_a_brief_with_no_picker_adds_none():
-    # An older bench, or a want nothing on it can reach a person for.
-    no_picker = copy.deepcopy(BID_TEMPLATE)
-    no_picker["finalist_questions"][0][2] = {
-        "id": "q3", "format": "yes_no", "title": "", "required": True, "config": {}
-    }
-    plan = _plan(WORK_STEP)
-    merged, inserted = blocks.merge_required_blocks(
-        plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
-        block_templates={"email": [EMAIL_STEP]},
-        bid_template=no_picker, bid_template_notes=[],
+# ---------------------------------------------------------------------------
+# 3. The proposal ask never mentions a picker
+# ---------------------------------------------------------------------------
+def test_the_proposal_ask_does_not_ask_the_model_for_a_picker():
+    assert "contact_picker" not in draft.PROPOSAL_INSTRUCTION
+    assert "DO NOT ASK WHO THIS GOES TO" in draft.PROPOSAL_INSTRUCTION
+    assert "on a step of the plan" in draft.PROPOSAL_INSTRUCTION
+
+
+def test_a_picker_the_model_writes_anyway_is_dropped_not_filed():
+    # One refused question costs the whole bid on a one-bid-per-want board, so
+    # the other two are filed rather than nothing.
+    read = draft.read_questions(
+        [
+            {"format": "yes_no", "fill": "sign them from you"},
+            {"format": "contact_picker", "config": {"count": 2}},
+            {"format": "short_answer", "fill": "anything to mention"},
+        ]
     )
-    assert not any("contact_picker" in line for line in inserted)
-    assert _formats(merged) == ["single_choice", "yes_no", "yes_no",
-                                "short_answer"]
-
-
-def test_with_no_second_yes_no_the_picker_takes_the_seat_the_brief_keeps():
-    plan = _plan(EMAIL_STEP, questions=[
-        MODEL_QUESTIONS[0],
-        {"id": "q2", "format": "number", "title": "How many?",
-         "config": {"unit": "people"}},
-        {"id": "q3", "format": "rank", "title": "Order them",
-         "config": {"options": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}},
-        MODEL_QUESTIONS[3],
-    ])
-    merged, note = blocks.merge_contact_picker(
-        plan, plan["steps"], BID_TEMPLATE, BID_TEMPLATE_NOTES
-    )
-    assert note and "replaced question 3" in note
-    assert _formats(merged) == ["single_choice", "number", "contact_picker",
-                                "short_answer"]
-
-
-def test_the_title_falls_back_to_plain_words_with_no_notes():
-    picker = blocks.template_contact_picker(BID_TEMPLATE, None)
-    assert picker["title"] == blocks.CONTACT_PICKER_TITLE
-
-
-def test_a_bid_shaped_wrong_is_left_for_the_door_to_say_so():
-    # Not one group of questions: the door refuses that in its own sentence,
-    # and filling a question in would only hide it.
-    plan = {"steps": [EMAIL_STEP], "finalist_questions": MODEL_QUESTIONS}
-    merged, note = blocks.merge_contact_picker(
-        plan, plan["steps"], BID_TEMPLATE, BID_TEMPLATE_NOTES
-    )
-    assert note is None and merged is plan
+    assert [q["format"] for q in read] == ["yes_no", "short_answer"]
+    assert all("contact" not in q["format"] for q in read)
+    # And an id apiece, so the answers still come back matched.
+    assert [q["id"] for q in read] == ["q1", "q3"]
 
 
 # ---------------------------------------------------------------------------
-# 3. End to end: the filed bid, and the door's REJ-40
+# 4. End to end: the filed bid, and the door's REJ-40
 # ---------------------------------------------------------------------------
-def test_the_filed_bid_asks_who():
+def test_the_filed_bid_asks_nobody_who():
     api = _Api()
     result = _provider(api).submit_proposal("t-1", _plan(WORK_STEP), "idem-1")
     assert result["ok"] is True
     _target, filed, _key = api.submissions[0]
     assert [q.get("format") for q in filed["finalist_questions"][0]] == [
-        "single_choice", "yes_no", "contact_picker", "short_answer"
+        "single_choice", "yes_no", "yes_no", "short_answer"
     ]
-    assert filed["finalist_questions"][0][2]["title"] == "Who should these go to?"
 
 
 # A kind whose person lane is declared some way this package's mirror does not
@@ -474,50 +485,41 @@ FUTURE_STEP = {
 }
 
 
-def test_a_rej40_off_the_door_is_repaired_once():
+def test_a_rej40_is_the_door_s_own_answer_and_never_re_filed():
+    # There is nothing left to add. The who step is the BENCH'S, and a contact
+    # question of ours is refused REJ-15 -- so a second filing would only
+    # spend the round. It used to re-file with the picker on it.
     api = _Api(required=[], refuse=_refusal(
         "REJ-40",
         "step 1, acts[0] (sms) sends from the person's own account and names "
-        "nobody to send it to: no `contact_ref`, no `found_contact`, and no "
-        "contact_picker question anywhere in this bid.",
+        "nobody to send it to: no `contact_ref` and no `found_contact`.",
     ))
     plan = _plan(FUTURE_STEP)
-    # The harness could not see it: nothing was added before filing.
+    # The harness could not see it: nothing was added before filing either.
     assert blocks.steps_reach_a_person(plan["steps"]) is False
     result = _provider(api).submit_proposal("t-1", plan, "idem-2")
-    assert result["ok"] is True
-    # Filed twice: the refusal, then the same bid carrying the question.
-    assert len(api.submissions) == 2
-    assert api.submissions[0][1]["finalist_questions"][0][2]["format"] == "yes_no"
-    assert api.submissions[1][2] == "idem-2-rej40"
-    refiled = api.submissions[1][1]
-    assert [q.get("format") for q in refiled["finalist_questions"][0]] == [
-        "single_choice", "yes_no", "contact_picker", "short_answer"
-    ]
-    assert refiled["finalist_questions"][0][2]["title"] == "Who should these go to?"
-
-
-def test_a_rej40_with_no_question_to_add_is_the_door_s_own_answer():
-    no_picker = copy.deepcopy(BID_TEMPLATE)
-    no_picker["finalist_questions"][0][2] = {
-        "id": "q3", "format": "yes_no", "title": "", "required": True, "config": {}
-    }
-    api = _Api(required=[], bid_template=no_picker, notes=[],
-               refuse=_refusal("REJ-40", "names nobody to send it to"))
-    result = _provider(api).submit_proposal("t-1", _plan(FUTURE_STEP), "idem-3")
     assert result["ok"] is False
     assert result["error"] == "contact_route"
     assert result["terminal"] is False
+    assert len(api.submissions) == 1
+    assert "contact_picker" not in api.submissions[0][1]["finalist_questions"][0][2]["format"]
+
+
+def test_the_rej40_refusal_hands_back_the_who_step_in_the_door_s_words():
+    api = _Api(required=[], refuse=_refusal("REJ-40", "names nobody to send it to"))
+    result = _provider(api).submit_proposal("t-1", _plan(FUTURE_STEP), "idem-3")
+    assert result["ok"] is False
     assert result["detail"] == "names nobody to send it to"
-    assert "contact_picker" in result["fix"]
+    assert "THE BENCH DOES" in result["fix"]
+    assert "do not plan a step to find or list the people" in result["fix"]
+    assert "contact_picker" not in result["fix"]
     # Filed ONCE. A harness that kept bouncing the same plan spends the run.
     assert len(api.submissions) == 1
 
 
 def test_a_raw_address_is_the_door_s_to_refuse_and_not_re_filed():
-    """REJ-40's other half: an address typed into the plan. The picker is
-    already on the bid, so there is nothing to add and nothing to re-file --
-    the door's own sentence is the whole answer."""
+    """REJ-40's other half: an address typed into the plan. Nothing here is
+    the harness's to repair -- the door's own sentence is the whole answer."""
     api = _Api(refuse=_refusal(
         "REJ-40",
         "step 1, acts[0] (email) carries an email address in `to`.",

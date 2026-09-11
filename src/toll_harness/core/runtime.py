@@ -71,13 +71,19 @@ heads and no fifth -- {"$from": "person.<question id>"}, {"$from": "<a run ABOVE
 "item[.field]"} inside a run that declares `each`. `$from` is the whole argument or none of it. An
 argument from anywhere else, a run reading a run below it, or a tool whose row is not on its step
 is refused REJ-41, and a recipient is never a typed address.
-WHEN THE PERSON HANDS THE QUESTION BACK (rule 240): they may answer the contact question with
+YOU DO NOT SAY WHO THIS GOES TO: THE BENCH DOES (rule 238, corrected 2026-09-11). The contact
+book is not one of your questions and never goes on a proposal. The bench stamps a step of its own
+-- "Who should this go to?", the person's own contact book on it -- in front of your first step
+that reaches somebody, and each pick arrives as a reference for acts[].contact_ref. Leave
+contact_ref empty, never put an address in the plan, and never plan a step to find or list the
+people they pick: say what you DO with them.
+WHEN THE PERSON HANDS THE QUESTION BACK (rule 240): they may answer that step with
 {"research": true, "brief": "..."} instead of picking anybody, and the brief carries it as
 `contact_research` {question_id, brief} -- always present, null when they picked or said nothing.
 Then the recipient comes from your OWN research: `to`: {"$from": "<a platform.research run above
 it>.contact"} in a `calls` act, or `contact_from`: "research" beside an empty `contact_ref` on an
 email act, and you file the person you found as `found_contact` {name, email, source_url} when you
-send. Never add a picker they already declined, and never write an address of your own.
+send. Never write an address of your own.
 THE TEMPLATE IS A FORM, NOT A PLAN. The want is a posting; you decide what a plan for it is
 made of. The brief hands over the SHAPE of a legal bid and not one word of yours: plan_template
 is a blank SKELETON (the fewest steps this band allows, mechanics filled, every agent-owned field

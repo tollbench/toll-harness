@@ -1165,35 +1165,37 @@ def _align_grant_steps(
 
 
 # --------------------------------------------------------------------------
-# RULES 237 + 238 (Steven, 2026-09-08/09) -- WHO IS IT GOING TO.
+# RULE 238 CORRECTED (Steven Ochs, 2026-09-11) -- WHO IS IT GOING TO IS A STEP.
 #
-# A person is contacted through their own Contacts and never through a loose
-# address. The brief hands out the question already: when anything it
-# publishes can reach a person, `bid_template.finalist_questions[0]` ships a
-# `contact_picker` -- {"id": "who", "format": "contact_picker", "title": "",
-# "config": {"count": 1}} -- as the THIRD of the four, in place of the second
-# of the two identical yes/no questions. Four is the whole cap, so the picker
-# is a replacement and never an addition. A bid whose act runs on the person's
-# own account, names nobody, and carries no picker anywhere is refused REJ-40.
+# A person is contacted through their own contact book and never through a
+# loose address. THE BOOK CAME OUT OF THE QUESTIONS: who this goes to is a
+# STEP the BENCH stamps into the plan -- ask PROVIDE, control `contact_picker`,
+# title "Who should this go to?", `count` a FLOOR and never a ceiling -- in
+# front of the first step that reaches anybody, after the person has chosen
+# this agent. The agent never writes that step and never sees a picker on the
+# proposal form.
 #
-# WHAT FORCED THIS. Nothing in this package ever copied the brief's questions:
-# `merge_required_blocks` inserted the email/meeting step out of
-# `block_templates` and left `finalist_questions` alone, so the model's own
-# four stood -- and the model does not know about a question the form was
-# holding for it. The harness's own repair therefore CREATED the REJ-40
-# condition it then got refused for, on a live thank-you-emails walk that
-# ended with the person saying "I never got a chance to give the emails so the
-# address book did not work".
+# WHAT FORCED THE CORRECTION. One fleet unit filed a plan whose step 2 was
+# "finds two friends from the contact list provided by the person" -- a step
+# whose whole work was to hand back the person's own pick. Every filing of it
+# was refused as a stand-in, and it looped every forty seconds at 60-76k
+# tokens a try. The ask was in the wrong place: a question on the proposal,
+# answered before anyone had written a plan, that the plan then had to reach
+# backwards for.
+#
+# SO THIS PACKAGE NEVER ADDS, SUGGESTS OR VALIDATES A PICKER ON A PROPOSAL.
+# It was this harness that put one there -- `merge_contact_picker` copied the
+# brief's published block onto the bid -- and on 2026-09-11 the bench stopped
+# taking it: every bid that reached a person was refused "finalist_questions
+# question 1 is a contact_picker" (REJ-15). What is kept is the other
+# direction: reading the answer back, `person.<who>` pointers and the seats a
+# picked list fans out over.
 # --------------------------------------------------------------------------
 
 CONTACT_PICKER_FORMAT = "contact_picker"
-# The whole cap on finalist questions -- `book_of_houses` reads this one so
-# there is a single four -- and where the brief puts the picker inside it.
+# The whole cap on finalist questions on the old whole-plan bid -- read by
+# `book_of_houses` so there is a single four.
 FINALIST_QUESTIONS_CAP = 4
-CONTACT_PICKER_INDEX = 2
-# The words when the brief published its picker blank and its notes carried no
-# example either. Plain, and about the person's own people.
-CONTACT_PICKER_TITLE = "Who should these go to?"
 # The act fields that name a human being. Read off the DECLARATION, exactly as
 # the bench reads it, and never off a list of kind names: a kind that grows
 # either shape tomorrow is covered the day it ships.
@@ -1201,19 +1203,21 @@ CONTACT_ACT_FIELDS = ("contact_ref", "with", "with_name")
 # Rule 235's own word for "the person's own account".
 PERSON_LANE = "person"
 
-CONTACT_PICKER_SENTENCE = (
-    "WHO IS IT GOING TO. An act that runs on the person's own account is a "
-    "message to the person's own people, so the recipient comes out of their "
-    "private Contacts and never out of an address in the plan. The question is "
-    "ALREADY ON YOUR FORM: `bid_template.finalist_questions` ships one "
-    "`contact_picker` -- {\"id\": \"who\", \"format\": \"contact_picker\", "
-    "\"title\": \"<your words>\", \"config\": {\"count\": 1}}. Write its title "
-    "out of the want, set `config.count` to how many people this plan reaches "
-    "(2 for an introduction, 80 for a guest list), leave the act's "
-    "`contact_ref` blank, and the person's picks arrive as the references that "
-    "fill it. ONE picker however many that is; a second is refused, `count` is "
-    "the only thing it may carry, and an act on the person's own lane with no "
-    "picker anywhere in the bid is refused REJ-40."
+# The door's own words when it refuses a plan for not saying who (REJ-40), and
+# the words the mirror says about a picker on a proposal (REJ-15).
+CONTACT_STEP_SENTENCE = (
+    "YOU DO NOT SAY WHO THIS GOES TO: THE BENCH DOES. It stamps a step of its "
+    "own -- \"Who should this go to?\", the person's own contact book on it -- "
+    "in front of your first step that reaches somebody, and each pick arrives "
+    "as a reference for acts[].contact_ref. Leave `contact_ref` empty, never "
+    "put an address in the plan, and do not plan a step to find or list the "
+    "people: say what you DO with the people they pick."
+)
+CONTACT_QUESTION_REFUSED = (
+    "the contact book is not one of your questions: the person picks who this "
+    "goes to on a step of the plan, after they have chosen you, out of their "
+    "own private book. Ask something else here, or ask one question fewer "
+    "(rule 238, REJ-15)"
 )
 
 
@@ -1267,120 +1271,6 @@ def _note_example(notes: Any, path: str) -> str:
         if isinstance(example, str) and example.strip():
             return example.strip()
     return ""
-
-
-def template_contact_picker(bid_template: Any, notes: Any = None) -> dict[str, Any] | None:
-    """The picker the BRIEF published, with words in the title.
-
-    The block is the platform's, copied whole -- the id, the `required` flag
-    and `config.count` are not the harness's to write. Only the title is
-    filled, and only when the brief left it blank: `bid_template_notes`
-    publishes the example beside it ("Who should these go to?"), which is the
-    words the model was going to be shown anyway.
-    """
-    if not isinstance(bid_template, dict):
-        return None
-    at = picker_position(bid_template.get("finalist_questions"))
-    if at is None:
-        return None
-    gi, qi = at
-    group = bid_template["finalist_questions"][gi]
-    entries = group if isinstance(group, list) else [group]
-    picker = copy.deepcopy(entries[qi])
-    title = picker.get("title")
-    if not (isinstance(title, str) and title.strip()):
-        picker["title"] = (
-            _note_example(notes, f"finalist_questions[{gi}][{qi}].title")
-            or CONTACT_PICKER_TITLE
-        )
-    return picker
-
-
-def _picker_slot(group: list[Any]) -> int:
-    """Which of the four the picker replaces.
-
-    The brief's own choice, and for the brief's own reason: the second of the
-    two identical yes/no questions is the only shape the form was offering
-    twice. When the model wrote no pair, the picker takes the seat the brief
-    keeps for it. A picker is not a text box, so the two-text cap cannot be
-    broken by either answer.
-    """
-    yes_nos = [i for i, q in enumerate(group) if _question_format(q) == "yes_no"]
-    if len(yes_nos) > 1:
-        return yes_nos[1]
-    if len(group) > CONTACT_PICKER_INDEX:
-        return CONTACT_PICKER_INDEX
-    return len(group) - 1
-
-
-def merge_contact_picker(
-    proposal: dict[str, Any],
-    steps: Any,
-    bid_template: Any,
-    notes: Any = None,
-    *,
-    reaches_a_person: bool | None = None,
-    research_asked: bool = False,
-) -> tuple[dict[str, Any], str | None]:
-    """Put the brief's own picker on a bid whose plan reaches a person.
-
-    Two gates, and both must be open. The BRIEF decides whether this want can
-    reach anybody at all -- it publishes the picker only when something it
-    hands out can -- and the PLAN decides whether this bid does. Neither is
-    the harness's opinion. Nothing happens when the model already asked the
-    question: one picker is the law, and the model's words beat the form's.
-
-    ``reaches_a_person`` overrides the second gate for the one caller that
-    does not need to ask: the DOOR, which has just refused this plan REJ-40
-    and is the authority on a lane table that lives on the server.
-
-    ``research_asked`` closes both gates: this person answered the contact
-    question with "find them for me" (``contact_research`` on the brief), so
-    putting a picker on the bid would ask them again for the one thing they
-    have already said they do not have. The recipient is bound to a research
-    run instead -- ``bind_contact_research`` below.
-    """
-    if research_asked:
-        return proposal, None
-    if not (
-        steps_reach_a_person(steps)
-        if reaches_a_person is None
-        else reaches_a_person
-    ):
-        return proposal, None
-    questions = proposal.get("finalist_questions")
-    if (
-        not isinstance(questions, list)
-        or len(questions) != 1
-        or not isinstance(questions[0], list)
-    ):
-        # A shape the bid door refuses on its own terms. Filling in a question
-        # would only hide the sentence that says so.
-        return proposal, None
-    if picker_position(questions) is not None:
-        return proposal, None
-    picker = template_contact_picker(bid_template, notes)
-    if picker is None:
-        return proposal, None
-    group = list(questions[0])
-    if len(group) < FINALIST_QUESTIONS_CAP:
-        group.append(picker)
-        note = (
-            f"contact_picker:{picker.get('id') or 'who'} (added; this plan "
-            "reaches a person and asked nobody who)"
-        )
-    else:
-        slot = _picker_slot(group)
-        replaced = _question_format(group[slot]) or "question"
-        group[slot] = picker
-        note = (
-            f"contact_picker:{picker.get('id') or 'who'} (replaced question "
-            f"{slot + 1}, a {replaced}; this plan reaches a person and asked "
-            "nobody who)"
-        )
-    merged = dict(proposal)
-    merged["finalist_questions"] = [group]
-    return merged, note
 
 
 def _merge_step_form(
@@ -1465,9 +1355,6 @@ def merge_required_blocks(
     want: str | None = None,
     needs: Any = None,
     block_templates: Any = None,
-    bid_template: Any = None,
-    bid_template_notes: Any = None,
-    contact_research: Any = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Fill in the brief's form: every template step the plan is missing.
 
@@ -1484,13 +1371,11 @@ def merge_required_blocks(
     _account` ROW, onto the step that uses it -- never a GRANT step of the
     harness's own making, which is exactly what REJ-38 refuses.
 
-    RULES 237/238. The form is not only steps. When the plan that comes out of
-    the step repair reaches a PERSON and the four questions ask nobody who,
-    the brief's own `contact_picker` goes on the bid -- because a step this
-    method inserted is exactly how a plan comes to reach a person that the
-    model's questions never expected to. Passing no ``bid_template`` leaves
-    the questions alone, so an older brief and every other caller are
-    unchanged.
+    RULE 238 CORRECTED (2026-09-11). THE QUESTIONS ARE NOT TOUCHED. This used
+    to put the brief's own `contact_picker` on a bid whose repaired steps
+    reached a person; the bench now refuses a contact question on a proposal
+    outright (REJ-15) and stamps the who STEP into the plan itself, so the
+    repair that was meant to save a bid was spending every one of them.
     """
     steps, inserted = _merge_step_form(
         proposal,
@@ -1500,22 +1385,9 @@ def merge_required_blocks(
         needs=needs,
         block_templates=block_templates,
     )
-    merged = proposal if steps is None else {**proposal, "steps": steps}
-    final = steps if steps is not None else proposal.get("steps")
-    merged, question = merge_contact_picker(
-        merged,
-        final,
-        bid_template,
-        bid_template_notes,
-        # The person already answered this question with "find them for me".
-        research_asked=contact_research_of({"contact_research": contact_research})
-        is not None,
-    )
-    if question:
-        inserted.append(question)
     if not inserted:
         return proposal, []
-    return merged, inserted
+    return (proposal if steps is None else {**proposal, "steps": steps}), inserted
 
 
 # --------------------------------------------------------------------------
@@ -2296,7 +2168,7 @@ ARGUMENT_PROVENANCE_SENTENCE = (
 
 CONTACT_RESEARCH_SENTENCE = (
     "THE PERSON MAY HAND THE QUESTION BACK (rule 240). Instead of picking "
-    "anybody out of their Contacts they may answer the contact question with "
+    "anybody out of their contact book they may answer the who step with "
     '{"research": true, "brief": "..."}, and the brief carries it as '
     "`contact_research` {question_id, brief} -- always present, null when they "
     "picked or said nothing. Then the recipient is not on the form and never "
@@ -2304,8 +2176,7 @@ CONTACT_RESEARCH_SENTENCE = (
     '"<a platform.research run above it>.contact"} in a `calls` act, or '
     '`contact_from`: "research" beside an empty `contact_ref` on an email act '
     "-- and file the person you found as `found_contact` {name, email, "
-    "source_url} when you send. Do not add a contact_picker (they have already "
-    "declined to pick) and do not write an address of your own."
+    "source_url} when you send. Never write an address of your own."
 )
 
 
@@ -2727,8 +2598,7 @@ def calls_problems(steps: Any, questions: Any = None) -> list[dict[str, str]]:
 # nothing. The recipient is not on the form and never will be, so the outreach
 # is bound to the agent's OWN research instead.
 #
-# WHAT THIS FUNCTION WILL NOT DO. It will not add a contact_picker (they have
-# already declined to pick), it will not keep an address (on a want where
+# WHAT THIS FUNCTION WILL NOT DO. It will not keep an address (on a want where
 # nobody has been found yet, an address in the plan can only be invented), and
 # it will NOT write a `platform.research` run that the plan does not have:
 # that run's own arguments are the research the agent has not done, and a run

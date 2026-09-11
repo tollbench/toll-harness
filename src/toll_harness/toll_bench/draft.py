@@ -954,8 +954,11 @@ FINALIST_FRAMES = {
 # A question with no shape of its own is a text box: legal, and one of the
 # three the door allows.
 FINALIST_DEFAULT_FORMAT = "short_answer"
-# The one control whose words are the bench's own ("Who should this go to?"),
-# and whose only field is how many people the plan reaches (rule 237).
+# RULE 238 CORRECTED (Steven, 2026-09-11): THE CONTACT BOOK IS NOT A QUESTION.
+# Who this goes to is a STEP of the plan that the BENCH stamps, after the
+# person has chosen this agent, out of their own private book -- so a
+# `contact_picker` on a PROPOSAL is refused REJ-15 at the door. The slug is
+# kept here for one reason: to recognise it and DROP it if a model writes one.
 CONTACT_PICKER_FORMAT = "contact_picker"
 
 PROPOSAL_FIELDS = (
@@ -1000,10 +1003,10 @@ PROPOSAL_INSTRUCTION = (
     '"config": {"options": ["Warm", "Straight to the point"]}}\n'
     '  short_answer -- "Anything to add about ___?": {"format": '
     '"short_answer", "fill": "what you want them to do next"}\n'
-    "  contact_picker -- who the plan should reach. The platform writes the "
-    "words and the person picks from their own Contacts; you write nothing "
-    'but how many: {"format": "contact_picker", "config": {"count": 2}}.\n'
-    "Never ask a person to type an address or a phone number into a box.\n"
+    "DO NOT ASK WHO THIS GOES TO. The bench asks that itself, on a step of the "
+    "plan, after this person has chosen you, out of their own private contact "
+    "book -- a contact question here is refused. Never ask a person to type an "
+    "address or a phone number into a box.\n"
     "`tools_needed` -- the tools you will need, by slug, from the list on the "
     "want. Name none if the want offers none.\n"
     "A long title or paragraph is TRIMMED by the bench, not refused, so write "
@@ -1075,9 +1078,14 @@ def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
     The door takes a HAR block -- {id, format, fill, config} -- or a plain
     string (a text box, legacy). This builds the block: the shape the model
     picked, its blank on `fill`, its options where it is a choice, and an id
-    of its own so the answers can be matched back to it. A `contact_picker`
-    carries only `config.count`: its words and its people are never the
-    agent's (rules 222, 237, 238).
+    of its own so the answers can be matched back to it.
+
+    A `contact_picker` is DROPPED (rule 238 corrected, 2026-09-11). The bench
+    refuses one here -- "The contact book is not one of your questions: the
+    person picks who this goes to on a step of the plan, after they have
+    chosen you, out of their own private book" -- and one refused question
+    costs the agent the whole bid on a one-bid-per-want board. Better to file
+    the other two than to file nothing.
     """
     if isinstance(entry, str):
         entry = {"format": FINALIST_DEFAULT_FORMAT, "fill": entry}
@@ -1087,11 +1095,8 @@ def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
     identifier = str(entry.get("id") or "").strip() or f"q{ordinal}"
     out: dict[str, Any] = {"id": identifier, "format": fmt}
     if fmt == CONTACT_PICKER_FORMAT:
-        count = (entry.get("config") or {}).get("count") if isinstance(
-            entry.get("config"), dict) else None
-        if isinstance(count, int) and not isinstance(count, bool) and count > 1:
-            out["config"] = {"count": int(count)}
-        return out
+        # Not ours to ask. The who step is the bench's (rule 238 corrected).
+        return None
     fill = entry.get("fill")
     if not (isinstance(fill, str) and fill.strip()):
         fill = (
@@ -1116,7 +1121,8 @@ def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
 def read_questions(rows: Any) -> list[dict[str, Any]]:
     """Up to three questions, each a block with an id of its own. ALWAYS A
     LIST, including empty: a proposal that asks nothing and a proposal that
-    asked and the harness dropped it must be tellable apart."""
+    asked and the harness dropped it must be tellable apart. A contact
+    question is dropped here rather than filed and refused."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for ordinal, entry in enumerate(rows if isinstance(rows, list) else [], start=1):
