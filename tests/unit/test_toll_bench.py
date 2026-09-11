@@ -347,10 +347,24 @@ def test_reachability_completes_exact_two_ping_handshake_and_is_idempotent():
 
 
 def test_submit_proposal_validates_current_schema_before_writing():
+    """The local mirror guards the WHOLE-PLAN road (a proposal that carries
+    steps). Since rule 243 (2026-09-11) the proposal this harness writes is
+    seven fields with no steps at all, and every check the mirror runs is
+    keyed off steps[] -- so that road skips it and the bench's own free
+    validate door is the only check before filing."""
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
 
-    rejected = provider.submit_proposal("t1", {"pitch_title": ""}, "key-1")
+    rejected = provider.submit_proposal(
+        "t1",
+        dict(
+            _valid_proposal(),
+            pitch_title="",
+            steps=[{"title": "Walk the shortlist", "ask": "APPROVE",
+                    "outcome_promise": "A shortlist of five stops."}],
+        ),
+        "key-1",
+    )
     accepted = provider.submit_proposal("t1", _valid_proposal(), "key-2")
 
     assert rejected["error"] == "local_validation_failed"

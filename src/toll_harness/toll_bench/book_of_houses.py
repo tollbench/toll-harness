@@ -9,7 +9,7 @@ from typing import Any
 from toll_harness.core.budget import measure
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks, programs
+from toll_harness.toll_bench import blocks, draft, programs
 from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
@@ -2056,30 +2056,60 @@ class BookOfHousesTollBenchProvider:
                 "message": error.message,
             }
 
-    def submit_proposal(
-        self, target_id: str, proposal: dict[str, Any], idempotency_key: str
-    ) -> dict[str, Any]:
-        # RULE 228 (contract 2.44). The brief NAMES the blocks this want cannot
-        # be delivered without, and publishes the step to file for each one. A
-        # plan missing one is REJ-32 -- and a refused filing on a one-bid-per
-        # -target board is the whole round. So the form is filled here, from
-        # the model's own plan, BEFORE the door sees it. What forced it: three
-        # agents bid a meeting want, none declared a meeting act, and none of
-        # them got a meeting booked.
-        try:
-            brief = self._brief_for(target_id)
-        except BookOfHousesApiError as error:
-            if error.status == 404:
-                return {
-                    "ok": False,
-                    "error": "target_not_open",
-                    "terminal": True,
-                    "message": (
-                        "Production reports this target is not open. "
-                        "No proposal was filed; do not retry it."
-                    ),
-                }
-            raise
+    def _trims_of_the_small_proposal(
+        self, target_id: str, proposal: dict[str, Any]
+    ) -> list[Any]:
+        """ONE FREE CALL AT THE DOOR, and what it says is logged, not retried.
+
+        `POST .../proposals/validate` writes nothing, counts against nothing
+        and answers with every problem at once plus `trimmed` -- each entry
+        {path, from, to, from_chars, to_chars}, exactly what would be stored
+        if this proposal were filed as it stands. A TRIM IS NOT A REFUSAL
+        (rule 244): the door takes the words and shortens what is over a cap.
+        So the trims come back to be logged, the problems are written to the
+        run log, and the proposal is filed either way -- the door's own
+        refusal is the record, and there is no second model call in a stage
+        that is one call by law.
+        """
+        door = self.validate_at_the_door(target_id, proposal)
+        if not isinstance(door, dict):
+            return []
+        trims = [row for row in (door.get("trimmed") or []) if row]
+        problems = [p for p in (door.get("problems") or []) if isinstance(p, dict)]
+        if problems:
+            _LOGGER.warning(
+                "Validate door named %d problem(s) on the proposal for target "
+                "%s (%s); filing it anyway so the door's own answer is the "
+                "record",
+                len(problems),
+                target_id,
+                ", ".join(str(p.get("code") or "?") for p in problems),
+            )
+        if trims:
+            _LOGGER.info(
+                "Validate door will trim %d field(s) of the proposal for "
+                "target %s: %s",
+                len(trims),
+                target_id,
+                ", ".join(str(row.get("path") or "?") for row in trims),
+            )
+        return trims
+
+    def _repair_the_plan_shaped_proposal(
+        self, target_id: str, proposal: dict[str, Any], brief: Any
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """EVERY REPAIR THAT READS `steps`, in one place. (proposal, refusal).
+
+        This is the road a plan-shaped proposal takes: the brief's required
+        blocks merged in, the contact research bound, one outreach spread over
+        the picked contacts, a grant step retired into its action, the blank
+        form dropped, the local mirror and the free validate door consulted,
+        and the deliverable placeholder cleared. It is kept whole and
+        unchanged for a bench that still takes a whole plan at the proposal
+        door; since rule 243 (2026-09-11) the proposal this harness writes is
+        seven fields with no steps, and every one of these repairs would run
+        over a document that is not there.
+        """
         proposal, inserted = blocks.merge_required_blocks(
             proposal,
             brief.get("required_blocks"),
@@ -2172,7 +2202,7 @@ class BookOfHousesTollBenchProvider:
                 "nothing filed",
                 target_id,
             )
-            return {
+            return proposal, {
                 "ok": False,
                 "error": "plan_is_still_the_blank_form",
                 "dropped": dropped,
@@ -2197,7 +2227,11 @@ class BookOfHousesTollBenchProvider:
         door = self.validate_at_the_door(target_id, proposal)
         if door is None:
             if not local["ok"]:
-                return {"ok": False, "error": "local_validation_failed", **local}
+                return proposal, {
+                    "ok": False,
+                    "error": "local_validation_failed",
+                    **local,
+                }
         elif not door.get("ok"):
             corrected = door.get("corrected_plan")
             if door.get("corrected_ok") and isinstance(corrected, dict):
@@ -2216,7 +2250,7 @@ class BookOfHousesTollBenchProvider:
                     self._door_repairs[target_id] = passes + 1
                     payload = self._door_problem_payload(door, local)
                     self._log_refusal("filing", target_id, door)
-                    return {
+                    return proposal, {
                         "ok": False,
                         "error": "plan_has_problems",
                         "terminal": False,
@@ -2258,6 +2292,50 @@ class BookOfHousesTollBenchProvider:
         # program this brief handed over. Nothing is refused on it -- the
         # foreman grades the run, the door judges the plan.
         self._log_program_diff(target_id, proposal, brief)
+        return proposal, None
+
+    def submit_proposal(
+        self, target_id: str, proposal: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """FILE ONE PROPOSAL. Two roads, and the proposal itself says which.
+
+        A PROPOSAL IS SEVEN FIELDS (rule 243, 2026-09-11): a title, a
+        paragraph, one odds number, a price, one to three research links, up
+        to three questions for the person, and the tools it needs. It carries
+        no steps, so it takes the small road -- one free call at the validate
+        door, then the filing door. A proposal that carries steps is the old
+        whole-plan shape and takes the repair road, unchanged, for a bench
+        that still wants one.
+        """
+        try:
+            brief = self._brief_for(target_id)
+        except BookOfHousesApiError as error:
+            if error.status == 404:
+                return {
+                    "ok": False,
+                    "error": "target_not_open",
+                    "terminal": True,
+                    "message": (
+                        "Production reports this target is not open. "
+                        "No proposal was filed; do not retry it."
+                    ),
+                }
+            raise
+        if draft.is_small_proposal(proposal):
+            # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
+            # There are no steps to repair, no blocks to merge and no local
+            # step validator to run -- the bench's own door is the only check,
+            # it is free, and what it says it TRIMMED rides back on the
+            # receipt as `bench_fixed` so the runtime logs the cut instead of
+            # asking the model to make the same sentence shorter.
+            trims = self._trims_of_the_small_proposal(target_id, proposal)
+        else:
+            trims = []
+            proposal, refusal = self._repair_the_plan_shaped_proposal(
+                target_id, proposal, brief
+            )
+            if refusal is not None:
+                return refusal
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
             return {
@@ -2504,7 +2582,15 @@ class BookOfHousesTollBenchProvider:
                     target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
-        return self._filing_receipt(result)
+        receipt = self._filing_receipt(result)
+        if trims and isinstance(receipt, dict):
+            # WHAT THE BENCH FIXED ON THE WAY IN rides the receipt, because
+            # the filing door answers with ids and a status and says nothing
+            # about the cut. The runtime logs it and carries on; it is never
+            # a reason to ask the model again.
+            receipt = dict(receipt)
+            receipt["bench_fixed"] = list(trims)
+        return receipt
 
     # A filing answer is ids and status. Some benches echo the plan back with
     # it, and the model already has the plan -- it just wrote it. Echoing it

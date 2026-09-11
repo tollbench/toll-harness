@@ -61,9 +61,17 @@ BRIEF = {
     "want": "I want three quiet cafes near Alberta St with their hours",
     "block_templates": {"meeting": [], "research": []},
     "tools": [
-        {"tool": "platform.research", "provider": "", "one_line": "the platform looks something up"},
+        {
+            "tool": "platform.research",
+            "provider": "",
+            "one_line": "the platform looks something up",
+        },
         {"tool": "gmail.message.send", "provider": "google-gmail", "one_line": "send an email"},
-        {"tool": "composio:<service>/<TOOL>", "provider": "composio", "one_line": "any of 1,500 services"},
+        {
+            "tool": "composio:<service>/<TOOL>",
+            "provider": "composio",
+            "one_line": "any of 1,500 services",
+        },
     ],
 }
 
@@ -71,21 +79,37 @@ BRIEF = {
 def _payload(**over):
     base = {
         "ok": True,
-        "deal": {"id": "d1", "proposal_id": "p1", "target_goal_id": "t1", "status": "signed", "is_free": True},
+        "deal": {
+            "id": "d1",
+            "proposal_id": "p1",
+            "target_goal_id": "t1",
+            "status": "signed",
+            "is_free": True,
+        },
         "current_step": {
             "id": "s-1", "number": 2, "state": "agent_working", "ask": "APPROVE",
             "title": "Find three quiet cafes with their hours",
             "outcome_promise": "A short list: name, address, hours, why it is quiet.",
-            "deliverable": {"channel": "text", "fields": ["name", "address", "hours"], "min_count": 3},
+            "deliverable": {
+                "channel": "text",
+                "fields": ["name", "address", "hours"],
+                "min_count": 3,
+            },
             "file_receipts": [],
         },
         "person_sees_control": False,
         "open_ask_move": "File the outcome to open the APPROVE.",
         "latest_work_pulse": None,
-        "step_thread": {"messages": [], "unread_from_person": 0, "unanswered_elsewhere": [], "post_reply": "/x"},
+        "step_thread": {
+            "messages": [],
+            "unread_from_person": 0,
+            "unanswered_elsewhere": [],
+            "post_reply": "/x",
+        },
         "released_materials": [], "released_materials_count": 0,
         "access": {"grants": []},
-        "acts": [], "declared_acts": [], "drafts_sent_back": [], "owed_replies": [], "inbound_replies": [],
+        "acts": [], "declared_acts": [], "drafts_sent_back": [],
+        "owed_replies": [], "inbound_replies": [],
         "waiting_outside": None,
     }
     base.update(over)
@@ -96,7 +120,8 @@ class FakeBench:
     """The bench doors the step ask can knock on, recording every knock."""
 
     def __init__(self, *, refuse_first=None):
-        self.acts, self.replies, self.pulses, self.outcomes, self.waits, self.dismissals = [], [], [], [], [], []
+        self.acts, self.replies, self.pulses = [], [], []
+        self.outcomes, self.waits, self.dismissals = [], [], []
         self.refuse_first = refuse_first
         self.briefs = 0
 
@@ -134,7 +159,13 @@ class FakeBench:
         return {"ok": True, "outcome_id": "o-1"}
 
 
-OBLIGATION = {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1", "target_id": "t1"}
+OBLIGATION = {
+    "kind": "deal_step",
+    "deal_id": "d1",
+    "proposal_id": "p1",
+    "step_id": "s-1",
+    "target_id": "t1",
+}
 
 CAFES = {
     "call": "file_outcome",
@@ -157,9 +188,18 @@ CAFES = {
 # ---------------------------------------------------------------------------
 def test_the_move_is_read_off_the_step_in_the_persons_order():
     assert the_move(_payload(owed_replies=[{"id": "r1"}]))["move"] == "answer_reply"
-    spoke = _payload(step_thread={"messages": [{"id": "m1", "who": "person", "text": "hi"}], "unread_from_person": 1, "unanswered_elsewhere": []})
+    spoke = _payload(step_thread={
+            "messages": [{"id": "m1", "who": "person", "text": "hi"}],
+            "unread_from_person": 1,
+            "unanswered_elsewhere": [],
+        })
     assert the_move(spoke)["move"] == "answer_person"
-    back = _payload(acts=[{"act_id": "a1", "kind": "email", "state": "sent_back", "note": "wrong time"}])
+    back = _payload(acts=[{
+                "act_id": "a1",
+                "kind": "email",
+                "state": "sent_back",
+                "note": "wrong time",
+            }])
     assert the_move(back)["move"] == "refile_act"
     declared = _payload(declared_acts=[{"kind": "email", "filed": 0, "held": 0, "executed": 0}])
     assert the_move(declared)["move"] == "file_act"
@@ -168,18 +208,30 @@ def test_the_move_is_read_off_the_step_in_the_persons_order():
 
 def test_the_moves_the_ask_cannot_shape_name_the_old_road():
     bytes_step = _payload()
-    bytes_step["current_step"]["deliverable"] = {"channel": "file", "family": "video", "types": ["mp4"]}
+    bytes_step["current_step"]["deliverable"] = {
+        "channel": "file",
+        "family": "video",
+        "types": ["mp4"],
+    }
     assert the_move(bytes_step)["road"] == ROAD_AGENTIC
     outside = _payload(acts=[{"act_id": "a1", "kind": "outside", "state": "approved"}])
     assert the_move(outside)["road"] == ROAD_AGENTIC
-    elsewhere = _payload(step_thread={"messages": [], "unread_from_person": 0, "unanswered_elsewhere": [{"step_id": "s-0", "unread_from_person": 1}]})
+    elsewhere = _payload(step_thread={
+            "messages": [],
+            "unread_from_person": 0,
+            "unanswered_elsewhere": [{"step_id": "s-0", "unread_from_person": 1}],
+        })
     assert "not on this payload" in the_move(elsewhere)["why"]
 
 
 def test_what_changed_names_the_new_words_and_the_moved_acts():
     before = json.loads(cli._deal_step_fingerprint(_payload()))
     after = json.loads(cli._deal_step_fingerprint(_payload(
-        step_thread={"messages": [{"id": "m1", "who": "person"}], "unread_from_person": 1, "unanswered_elsewhere": []},
+        step_thread={
+            "messages": [{"id": "m1", "who": "person"}],
+            "unread_from_person": 1,
+            "unanswered_elsewhere": [],
+        },
         acts=[{"act_id": "a1", "kind": "email", "state": "sent_back", "note": "no"}],
     )))
     lines = what_changed(before, after)
@@ -197,7 +249,13 @@ def test_a_hand_back_is_one_small_ask_and_one_call_with_nothing_carried():
     model = _model(CAFES)
     ask = StepAsk(model, bench)
 
-    out = ask.run(OBLIGATION, _payload(), brief=BRIEF, act_kinds=bench.list_act_kinds(), changed=["first look"])
+    out = ask.run(
+        OBLIGATION,
+        _payload(),
+        brief=BRIEF,
+        act_kinds=bench.list_act_kinds(),
+        changed=["first look"],
+    )
 
     assert out["ok"] is True and out["road"] == "step_ask" and out["call"] == "file_outcome"
     assert out["model_calls"] == 1
@@ -206,7 +264,8 @@ def test_a_hand_back_is_one_small_ask_and_one_call_with_nothing_carried():
     assert invocation["tools"] == []
     assert len(invocation["messages"]) == 1
     assert all(block.get("type") == "text" for block in invocation["messages"][0].content)
-    prompt_chars = len(invocation["system"]) + sum(len(b["text"]) for b in invocation["messages"][0].content)
+    prompt_chars = len(invocation["system"]) + sum(
+        len(b["text"]) for b in invocation["messages"][0].content)
     assert prompt_chars < 8_000, prompt_chars
     # The bench got the 100% pulse and then the outcome, on this step.
     assert bench.pulses[0][1]["progress_percent"] == 100
@@ -241,7 +300,10 @@ def test_the_tail_carries_only_this_step():
 
 def test_a_pulse_already_at_100_is_not_repeated():
     bench = FakeBench()
-    payload = _payload(latest_work_pulse={"progress_percent": 100, "next_due_at": "2999-01-01T00:00:00Z"})
+    payload = _payload(latest_work_pulse={
+            "progress_percent": 100,
+            "next_due_at": "2999-01-01T00:00:00Z",
+        })
     StepAsk(_model(CAFES), bench).run(OBLIGATION, payload, brief=BRIEF)
     assert bench.pulses == [] and len(bench.outcomes) == 1
 
@@ -266,19 +328,27 @@ def test_two_refusals_end_the_ask_with_the_benchs_error():
             return refusal
 
     out = StepAsk(_model(CAFES, CAFES), AlwaysRefuses()).run(OBLIGATION, _payload(), brief=BRIEF)
-    assert out["ok"] is False and out["error"] == "invalid_delivery_note" and out["model_calls"] == 2
+    assert out["ok"] is False and out["error"] == "invalid_delivery_note"
+    assert out["model_calls"] == 2
 
 
 def test_a_call_that_is_not_the_move_is_refused_before_the_bench_sees_it():
     bench = FakeBench()
     wrong = {"call": "file_outcome", "outcome": CAFES["outcome"]}
-    out = StepAsk(_model(wrong, wrong), bench).run(OBLIGATION, _payload(owed_replies=[{"id": "r1", "from": "ruby@x"}]), brief=BRIEF)
+    out = StepAsk(_model(wrong, wrong), bench).run(
+        OBLIGATION,
+        _payload(owed_replies=[{"id": "r1", "from": "ruby@x"}]),
+        brief=BRIEF,
+    )
     assert out["ok"] is False and out["error"] == "call_not_the_move"
     assert bench.outcomes == []
 
 
 def test_need_tools_hands_the_step_to_the_old_road():
-    out = StepAsk(_model({"call": NEED_TOOLS, "why": "I need to search the web"}), FakeBench()).run(OBLIGATION, _payload(), brief=BRIEF)
+    out = StepAsk(
+        _model({"call": NEED_TOOLS, "why": "I need to search the web"}),
+        FakeBench(),
+    ).run(OBLIGATION, _payload(), brief=BRIEF)
     assert out["road"] == ROAD_AGENTIC and "search the web" in out["why"]
 
 
@@ -287,25 +357,53 @@ def test_need_tools_hands_the_step_to_the_old_road():
 # ---------------------------------------------------------------------------
 def test_answering_the_person_is_one_reply_call():
     bench = FakeBench()
-    spoke = _payload(step_thread={"messages": [{"id": "m1", "who": "person", "text": "Tuesday works?"}], "unread_from_person": 1, "unanswered_elsewhere": []})
-    out = StepAsk(_model({"call": "reply_step_message", "reply": "Tuesday works, I'll book it."}), bench).run(OBLIGATION, spoke, brief=BRIEF)
+    spoke = _payload(step_thread={
+            "messages": [{"id": "m1", "who": "person", "text": "Tuesday works?"}],
+            "unread_from_person": 1,
+            "unanswered_elsewhere": [],
+        })
+    out = StepAsk(
+        _model({"call": "reply_step_message", "reply": "Tuesday works, I'll book it."}),
+        bench,
+    ).run(OBLIGATION, spoke, brief=BRIEF)
     assert out["ok"] and out["move"] == "answer_person"
     assert bench.replies[0][:3] == ("d1", "s-1", "Tuesday works, I'll book it.")
 
 
 def test_an_owed_reply_is_answered_in_its_thread():
     bench = FakeBench()
-    owed = _payload(owed_replies=[{"id": "r1", "from": "ruby@studio.example", "text": "Which day?"}])
-    out = StepAsk(_model({"call": "propose_act", "act": {"in_reply_to": "r1", "body_text": "Tuesday at 2."}}), bench).run(OBLIGATION, owed, brief=BRIEF)
+    owed = _payload(owed_replies=[{
+                "id": "r1",
+                "from": "ruby@studio.example",
+                "text": "Which day?",
+            }])
+    out = StepAsk(
+        _model({"call": "propose_act", "act": {"in_reply_to": "r1", "body_text": "Tuesday at 2."}}),
+        bench,
+    ).run(OBLIGATION, owed, brief=BRIEF)
     assert out["ok"] and out["move"] == "answer_reply"
     assert bench.acts[0][2] == {"in_reply_to": "r1", "body_text": "Tuesday at 2."}
 
 
 def test_a_returned_act_is_refiled_once_changed():
     bench = FakeBench()
-    back = _payload(acts=[{"act_id": "a1", "kind": "email", "state": "sent_back", "note": "make it 11-11:30"}])
-    act = {"kind": "email", "to": "ruby@x", "subject": "11-11:30?", "body_text": "Does 11 work?", "purpose": "book"}
-    out = StepAsk(_model({"call": "propose_act", "act": act}), bench).run(OBLIGATION, back, brief=BRIEF)
+    back = _payload(acts=[{
+                "act_id": "a1",
+                "kind": "email",
+                "state": "sent_back",
+                "note": "make it 11-11:30",
+            }])
+    act = {
+        "kind": "email",
+        "to": "ruby@x",
+        "subject": "11-11:30?",
+        "body_text": "Does 11 work?",
+        "purpose": "book",
+    }
+    out = StepAsk(
+        _model({"call": "propose_act", "act": act}),
+        bench,
+    ).run(OBLIGATION, back, brief=BRIEF)
     assert out["ok"] and out["move"] == "refile_act"
     assert bench.acts[0][2] == act
     # The tail carried the person's own words on the dead act.
@@ -324,7 +422,14 @@ def _clean():
 
 def _completed_run(goal, mode):
     return RunResult(run_id="run-x", status=RunStatus.COMPLETED, result={"summary": "Handled."},
-                     checkpoint=Checkpoint(run_id="run-x", goal=goal, data={}, event_cursor=0, revision=0, updated_at="2026-09-09T00:00:00Z"),
+                     checkpoint=Checkpoint(
+                         run_id="run-x",
+                         goal=goal,
+                         data={},
+                         event_cursor=0,
+                         revision=0,
+                         updated_at="2026-09-09T00:00:00Z",
+                     ),
                      usage=ModelUsage(total_tokens=10), iterations=1, observed_mode=mode)
 
 
@@ -347,7 +452,14 @@ def _resources(payload, model, *, bench=None, attention=None):
     runtime = SimpleNamespace(
         model=model,
         email_provider=SimpleNamespace(client=_MailClient()),
-        enabled_tools=["state.load", "state.save", "result.complete", "result.fail", "toll_bench.current_step", "toll_bench.file_outcome"],
+        enabled_tools=[
+            "state.load",
+            "state.save",
+            "result.complete",
+            "result.fail",
+            "toll_bench.current_step",
+            "toll_bench.file_outcome",
+        ],
     )
 
     def start(goal, mode):
@@ -369,7 +481,8 @@ def test_the_dispatch_files_a_hand_back_through_the_step_ask(caplog):
 
     assert result["ok"] is True and result["run"] is None
     assert result["dispatch"]["kind"] == "deal_step_step_ask"
-    assert result["dispatch"]["move"] == "hand_back" and result["dispatch"]["call"] == "file_outcome"
+    assert result["dispatch"]["move"] == "hand_back"
+    assert result["dispatch"]["call"] == "file_outcome"
     assert "goal" not in observed  # the old road never ran
     assert len(bench.outcomes) == 1
     assert cli._IDLE_STEP_MEMO["s-1"] == cli._deal_step_fingerprint(_payload())
@@ -380,7 +493,11 @@ def test_the_dispatch_files_a_hand_back_through_the_step_ask(caplog):
 def test_a_file_deliverable_takes_the_old_road_without_a_model_call(caplog):
     _clean()
     payload = _payload()
-    payload["current_step"]["deliverable"] = {"channel": "file", "family": "video", "types": ["mp4"]}
+    payload["current_step"]["deliverable"] = {
+        "channel": "file",
+        "family": "video",
+        "types": ["mp4"],
+    }
     model = _model(CAFES)
     resources, observed = _resources(payload, model)
 
@@ -446,13 +563,24 @@ def test_the_step_ask_is_a_fraction_of_the_old_roads_opening_prompt(capsys):
     # The old road: instruction + goal JSON + the system sheet + every tool's schema.
     resources, observed = _resources(payload, None)
     cli._process_market_attention(resources, wait=20)
-    tools = build_standard_registry().definitions(cli._OBLIGATION_DISPATCH["deal_step"]["tools"] & set(build_standard_registry()._tools))
+    tools = build_standard_registry().definitions(
+        cli._OBLIGATION_DISPATCH["deal_step"]["tools"]
+        & set(build_standard_registry()._tools))
     old_chars = len(observed["goal"]) + len(TOLL_BENCH_SYSTEM_INSTRUCTION) + sum(
-        len(json.dumps({"name": t.name, "description": t.description, "input_schema": t.input_schema})) for t in tools
+        len(json.dumps({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })) for t in tools
     )
     # The step ask: prefix + tail, one call.
     model = _model(CAFES)
-    StepAsk(model, FakeBench()).run(OBLIGATION, payload, brief=BRIEF, act_kinds={"kinds": {"meeting": {"declaration": {}}}})
+    StepAsk(model, FakeBench()).run(
+        OBLIGATION,
+        payload,
+        brief=BRIEF,
+        act_kinds={"kinds": {"meeting": {"declaration": {}}}},
+    )
     [invocation] = model.invocations
     new_chars = len(invocation["system"]) + len(invocation["messages"][0].content[0]["text"])
     print(f"\nfile-outcome move, opening prompt: old road ~{old_chars // 4} tokens "

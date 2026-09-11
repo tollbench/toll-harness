@@ -68,7 +68,7 @@ class FakeDraftBench:
     fleet = None
     fleet_proposal_limit = 4
 
-    def __init__(self, *, fixes=None, cap=20, owned_steps=None):
+    def __init__(self, *, fixes=None, cap=20, owned_steps=None, asks_outline=True):
         self.puts: list[tuple[str, dict, str]] = []
         self.patch_calls: list[list[dict]] = []
         self.filed: tuple | None = None
@@ -81,9 +81,39 @@ class FakeDraftBench:
         self.reads = 0
         self.owned_steps = owned_steps or [{"title": "The step already filed"}]
         self.briefs = 0
+        # THE PLAN DOOR ASKS FIRST. A plan draft opens EMPTY (rule 113) and
+        # the door answers with a round of its own -- the form on this bench,
+        # the outline on the older one -- before anything is expanded. This
+        # fake plays the outline road; `asks_outline=False` is the door that
+        # has nothing to ask and expands the steps already filed.
+        self.asks_outline = asks_outline
+        self.proposals: list[tuple[str, dict, str]] = []
+        self.opens: list[tuple[str, dict, str]] = []
 
     # -- the three doors ------------------------------------------------
     def put_draft(self, target_id, outline, *, kind="bid"):
+        if kind == "plan" and self.asks_outline and not (outline or {}).get("steps"):
+            # The empty open. It costs a round and answers with the ask; the
+            # outline that answers it is the PUT that expands (see `puts`).
+            self.opens.append((target_id, dict(outline or {}), kind))
+            self.kind = kind
+            self.rounds = 1
+            return {
+                "ok": True,
+                "kind": "plan",
+                "next": "outline",
+                "steps_you_bid": [dict(step) for step in self.owned_steps],
+                "the_person_answered": [],
+                "send": "PUT this door again with the outline.",
+                "draft": {},
+                "blanks": [],
+                "next_fix": {"path": "outline"},
+                "problems": [],
+                "remaining": 1,
+                "ready": False,
+                "rounds": {"used": 1, "left": self.cap - 1, "cap": self.cap},
+                "closed": None,
+            }
         self.puts.append((target_id, dict(outline or {}), kind))
         self.kind = kind
         self.rounds = 0
@@ -126,7 +156,9 @@ class FakeDraftBench:
         return self.answer()
 
     def submit_proposal(self, target_id, proposal, idempotency_key):
-        # The single-shot road, for a bench with no draft door.
+        # STAGE ONE (rule 243): the seven fields, filed in one call.
+        self.proposals.append((target_id, json.loads(json.dumps(proposal)),
+                               idempotency_key))
         return {"ok": True, "proposal_id": "old-road-1"}
 
     # -- filing ----------------------------------------------------------
@@ -136,7 +168,10 @@ class FakeDraftBench:
 
     def file_plan_from_draft(self, target_id, proposal_id, idempotency_key=""):
         self.plan_filed = (target_id, proposal_id, idempotency_key)
-        return {"ok": True, "plan_revised": True}
+        # The document that reached the door, exactly as `file_from_draft`
+        # records it: what was filed is what the bench was holding.
+        self.filed = (target_id, idempotency_key, json.loads(json.dumps(self.document)))
+        return {"ok": True, "plan_revised": True, "proposal_id": proposal_id}
 
     # -- the bench's own bookkeeping -------------------------------------
     def read_brief(self, target_id):
@@ -259,16 +294,17 @@ def test_the_outline_goes_in_the_blanks_come_back_and_the_bench_files_what_it_he
     model = _happy_path_model()
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table for four"}, idempotency_key="key-1"
+        "t-1", kind="plan", proposal_id="p-9",
+        brief={"want": "Book a table for four"}, idempotency_key="key-1"
     )
 
     assert outcome["ok"] is True
     assert outcome["filed"] is True
-    assert outcome["proposal_id"] == "proposal-1"
+    assert outcome["proposal_id"] == "p-9"
     # One outline in, then a round per piece: two steps, the bid's own fields,
     # and the one problem the bench named.
     assert len(bench.puts) == 1
-    assert bench.puts[0][2] == "bid"
+    assert bench.puts[0][2] == "plan"
     assert len(bench.patch_calls) == 4
     assert bench.filed[0] == "t-1"
     assert bench.filed[2]["pitch_title"] == "A table for four"
@@ -282,7 +318,7 @@ def test_the_outline_call_asks_for_an_outline_and_nothing_else():
     model = _happy_path_model()
 
     DraftLoop(model, bench).run(
-        "t-1",
+        "t-1", kind="plan", proposal_id="p-9",
         brief={
             "want": "Book a table for four",
             "want_in_own_words": "somewhere quiet",
@@ -305,7 +341,8 @@ def test_a_blanks_call_shows_one_step_and_that_step_alone():
     bench = FakeDraftBench()
     model = _happy_path_model()
 
-    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
 
     step_one = model.invocations[1]["messages"][0].content[0]["text"]
     assert '"step_number":1' in step_one
@@ -327,7 +364,8 @@ def test_a_fix_call_carries_one_problem_and_the_step_around_it():
     )
     model = _happy_path_model()
 
-    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
 
     fix_call = model.invocations[-1]["messages"][0].content[0]["text"]
     assert "REJ-34" in fix_call
@@ -344,7 +382,7 @@ def test_a_closed_draft_ends_the_run_and_never_puts_twice():
     model = _model(_OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]})
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert outcome["ok"] is False
@@ -367,13 +405,14 @@ def test_a_standing_draft_is_resumed_not_replaced():
                {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}]},
                {"patches": [{"path": "pitch_title", "value": "C"}]}),
         bench,
-    ).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    ).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
     puts_after_one = len(bench.puts)
 
     # Cycle two, same want: nothing is re-outlined, and no round is spent
     # re-asking for what is already answered.
     second = DraftLoop(_model(), bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert puts_after_one == 1
@@ -391,13 +430,14 @@ def test_a_closed_standing_draft_is_never_put_over():
     DraftLoop(
         _model(_OUTLINE, {"patches": [{"path": "pitch_title", "value": "A"}]}),
         bench,
-    ).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    ).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
     assert len(bench.puts) == 1
 
     # A model with nothing scripted: if the loop asked for an outline here it
     # would raise, and if it PUT one the count would move.
     second = DraftLoop(_model(), bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert len(bench.puts) == 1
@@ -414,7 +454,7 @@ def test_the_plan_kind_reads_its_own_draft_before_opening_one():
             reads.append(kind)
             return super().read_draft(target_id, kind=kind)
 
-    bench = Watching(owned_steps=[{"title": "Deliver the list"}])
+    bench = Watching(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     model = _model(
         {"patches": [{"path": "steps.0.outcome_promise", "value": "The list."}]},
         {"patches": [{"path": "pitch_title", "value": "The list"}]},
@@ -437,7 +477,7 @@ def test_a_draft_that_will_not_read_is_never_put_over():
     bench = Unreadable()
 
     outcome = DraftLoop(_model(), bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert outcome["ok"] is False
@@ -448,7 +488,7 @@ def test_the_plan_kind_opens_empty_and_files_at_the_plan_door():
     # RULE 113 through 241: a `plan` draft starts from the steps already filed,
     # so the loop sends NO outline -- an outline here would replace the plan
     # the person picked.
-    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}])
+    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     model = _model(
         {"patches": [{"path": "steps.0.outcome_promise", "value": "The list, delivered."}]},
         {"patches": [{"path": "pitch_title", "value": "The list"}]},
@@ -462,7 +502,9 @@ def test_the_plan_kind_opens_empty_and_files_at_the_plan_door():
     assert bench.puts[0][1] == {}
     assert bench.puts[0][2] == "plan"
     assert bench.plan_filed == ("t-1", "p-9", "plan-key")
-    assert bench.filed is None
+    # One PUT and it was empty: no outline was written over the plan the
+    # person picked.
+    assert len(bench.puts) == 1
 
 
 class _AnsweredPlanBench(FakeDraftBench):
@@ -587,7 +629,7 @@ def test_a_plan_door_with_no_answers_is_not_asked_for_an_outline():
     # The person skipped every question: the door answers the template
     # straight away and no outline ask is made (the first model call is a
     # blanks round).
-    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}])
+    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     model = _model(
         {"patches": [{"path": "steps.0.outcome_promise", "value": "The list."}]},
         {"patches": [{"path": "pitch_title", "value": "The list"}]},
@@ -613,24 +655,30 @@ def test_identical_no_progress_stops_before_the_bench_cap():
         {"path": "steps.0.title", "current": "", "code": "REJ-34",
          "fix": "Say how.", "detail": None}
     ]
+    # Two patches each, so none is re-aimed, and none of them ever touches
+    # the path the bench keeps naming.
+    def _wide(path, value):
+        return {"patches": [{"path": path, "value": value},
+                            {"path": "pitch_body", "value": "and more"}]}
+
     model = _model(
         _OUTLINE,
-        {"patches": [{"path": "steps.0.outcome_promise", "value": "A."}, {"path": "pitch_body", "value": "and more"}]},
-        {"patches": [{"path": "steps.1.outcome_promise", "value": "B."}, {"path": "pitch_body", "value": "and more"}]},
-        {"patches": [{"path": "pitch_title", "value": "C"}, {"path": "pitch_body", "value": "and more"}]},
-        # Answers (two patches each, so none is re-aimed) that never touch the path the bench named. The old three
-        # strike rule stopped here; now the bench's rounds do.
-        *[{"patches": [{"path": "steps.1.outcome_promise", "value": "B."}, {"path": "pitch_body", "value": "and more"}]}
-          for _ in range(20)],
+        _wide("steps.0.outcome_promise", "A."),
+        _wide("steps.1.outcome_promise", "B."),
+        _wide("pitch_title", "C"),
+        *[_wide("steps.1.outcome_promise", "B.") for _ in range(20)],
     )
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert outcome["ok"] is False
     assert outcome["error"] == "draft_stalled"
-    assert len(bench.patch_calls) == 6
+    # Three blanks, then two answers to the one problem the bench kept
+    # naming: the THIRD naming of that (path, code) ends the draft, so no
+    # third patch is spent on it.
+    assert len(bench.patch_calls) == 5
     assert len(bench.puts) == 1
     assert bench.filed is None
 
@@ -648,7 +696,8 @@ def test_a_thirty_step_plan_gets_thirty_steps_worth_of_rounds():
     )
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "A thirty step job"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9",
+        brief={"want": "A thirty step job"}, idempotency_key="k"
     )
 
     assert outcome["ok"] is True
@@ -676,7 +725,7 @@ def test_the_loop_stops_when_the_bench_says_it_has_no_rounds_left():
     )
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     assert outcome["ok"] is False
@@ -689,7 +738,8 @@ def test_a_dry_run_walks_the_whole_loop_and_files_nothing():
     model = _happy_path_model()
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k", file=False
+        "t-1", kind="plan", proposal_id="p-9",
+        brief={"want": "Book a table"}, idempotency_key="k", file=False
     )
 
     assert outcome["ok"] is True
@@ -790,7 +840,7 @@ def test_the_outline_never_reads_a_worked_program():
     model = _happy_path_model()
 
     DraftLoop(model, bench).run(
-        "t-1",
+        "t-1", kind="plan", proposal_id="p-9",
         brief={
             "want": "Book a table for four",
             "tools": [{"provider": "google-gmail", "tool": "gmail.message.send",
@@ -827,25 +877,45 @@ def _resources(bench, model):
     )
 
 
-def test_the_market_scan_bids_through_the_draft_loop():
+_PROPOSAL = {
+    "pitch_title": "A table for four, booked this week",
+    "pitch_body": "I call the three places that take a booking for four, offer "
+                  "your times, and confirm the one that takes it.",
+    "odds": 0.6,
+    "total_ask_cents": 4_000,
+    "research_links": [{"url": "https://example.test/places", "note": "The three."}],
+    "finalist_questions": ["Which night?"],
+    "tools_needed": ["gmail.message.send"],
+}
+
+
+def test_the_market_scan_answers_a_want_with_one_proposal():
+    """RULE 243 (2026-09-11): a proposal is the agent's short answer to a want
+    and it is ONE call. It opens no draft: the draft door is the PLAN's now,
+    and the plan is owed by the agent the person picked."""
     bench = FakeDraftBench()
-    resources = _resources(bench, _happy_path_model())
+    model = _model(_PROPOSAL)
+    resources = _resources(bench, model)
 
     result = cli._process_market_opportunities(resources, {"ok": True})
 
     assert result["ok"] is True
     assert result["proposal_filed"] is True
     assert result["dispatch"]["kind"] == "market_scan_draft_loop"
-    assert bench.filed is not None
+    assert result["dispatch"]["model_calls"] == 1
+    assert result["dispatch"]["rounds"] == 0
+    # One model call, no draft, and the seven fields went to the filing door.
+    assert len(model.invocations) == 1
+    assert bench.puts == [] and bench.opens == []
+    assert bench.proposals and bench.proposals[0][1]["pitch_title"] == _PROPOSAL["pitch_title"]
+    assert "steps" not in bench.proposals[0][1]
     # The single-shot road was not taken: no runtime run happened at all.
     assert result["run"] is None
 
 
-def test_a_bench_with_no_draft_door_still_bids_the_old_way():
+def test_a_bench_that_cannot_file_a_proposal_still_bids_the_old_way():
     class NoDoor(FakeDraftBench):
-        def put_draft(self, target_id, outline, *, kind="bid"):
-            return {"ok": False, "error": "http_error", "status": 404,
-                    "message": "no such route"}
+        submit_proposal = None
 
     started = {}
 
@@ -854,14 +924,14 @@ def test_a_bench_with_no_draft_door_still_bids_the_old_way():
         raise AssertionError("stop here: the old road was taken")
 
     bench = NoDoor()
-    resources = _resources(bench, _model(_OUTLINE))
+    resources = _resources(bench, _model(_PROPOSAL))
     resources.runtime.start = start
 
     try:
         cli._process_market_opportunities(resources, {"ok": True})
     except AssertionError as error:
         assert "the old road was taken" in str(error)
-    assert "making and submitting one concrete" in started["goal"]
+    assert "ONE PROPOSAL" in started["goal"]
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +1033,7 @@ def test_filing_the_plan_from_the_draft_carries_the_signature():
 
 
 def test_the_informed_plan_obligation_walks_the_same_loop():
-    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}])
+    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     bench.attention = lambda wait=0: {"attention": []}
     resources = _resources(
         bench,
@@ -991,7 +1061,7 @@ def test_the_informed_plan_obligation_walks_the_same_loop():
 
 
 def test_an_informed_plan_that_never_files_trips_the_breaker():
-    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}])
+    bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     resources = _resources(
         bench, _model(*[{"nothing": "patchable"} for _ in range(6)])
     )
@@ -1070,7 +1140,7 @@ def test_a_repeated_fix_hands_back_what_was_sent_and_what_is_there_now():
     )
 
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
 
     first_ask = model.invocations[4]["messages"][0].content[0]["text"]
@@ -1092,7 +1162,8 @@ def test_a_fix_named_once_is_asked_plainly():
     )
     model = _happy_path_model()
 
-    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
 
     last = model.invocations[-1]["messages"][0].content[0]["text"]
     assert "THE BENCH IS NAMING THE SAME THING AGAIN" not in last
@@ -1110,7 +1181,8 @@ def test_every_patch_body_is_logged_with_a_preview(caplog):
 
     with caplog.at_level("INFO", logger="toll_harness.draft"):
         DraftLoop(model, bench).run(
-            "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+            "t-1", kind="plan", proposal_id="p-9",
+            brief={"want": "Book a table"}, idempotency_key="k"
         )
 
     patch_lines = [line for line in caplog.text.splitlines() if " patch " in line]
@@ -1134,7 +1206,8 @@ def test_a_round_is_never_sent_without_a_model_call():
     )
 
     loop = DraftLoop(model, bench)
-    loop.run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    loop.run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
 
     # Every PATCH that went out had its own model call in front of it.
     assert len(bench.patch_calls) == loop.rounds
@@ -1186,7 +1259,8 @@ def test_the_prefix_is_byte_identical_on_every_call_of_a_run():
     )
     model = CachingModel(_happy_path_model().responses)
 
-    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=_BIG_BRIEF, idempotency_key="k")
 
     systems = {call["system"] for call in model.invocations}
     assert len(model.invocations) >= 4
@@ -1207,7 +1281,8 @@ def test_a_provider_that_caches_nothing_gets_the_tools_once_not_every_round():
     bench = FakeDraftBench()
     model = _happy_path_model()   # the honest default: caches nothing
 
-    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=_BIG_BRIEF, idempotency_key="k")
 
     prefix = model.invocations[0]["system"]
     outline_tail = model.invocations[0]["messages"][0].content[0]["text"]
@@ -1235,7 +1310,8 @@ def test_a_fix_round_on_a_thirty_step_draft_stays_under_four_thousand_tokens():
         {"patches": [{"path": "steps.17.title", "value": "Book the table by email"}]},
     )
 
-    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=_BIG_BRIEF, idempotency_key="k")
 
     fix_call = model.invocations[-1]
     tail = fix_call["messages"][0].content[0]["text"]
@@ -1260,7 +1336,8 @@ def test_a_blanks_round_carries_one_step_and_no_document():
         {"patches": [{"path": "pitch_title", "value": "Thirty pieces"}]},
     )
 
-    DraftLoop(model, bench).run("t-1", brief=_BIG_BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=_BIG_BRIEF, idempotency_key="k")
 
     # The tenth step's round: its own blank, and not its neighbours'.
     tenth = model.invocations[10]["messages"][0].content[0]["text"]
@@ -1330,7 +1407,8 @@ def test_the_blanks_and_fix_tails_carry_what_the_person_said_under_one_line():
     from toll_harness.toll_bench.draft import PERSON_SAID_INSTRUCTION
     bench = _TalkativeBench(fixes=[_fix()])
     model = _happy_path_model()
-    DraftLoop(model, bench).run("t-1", brief={"want": "Book a table"}, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Book a table"}, idempotency_key="k")
     texts = [inv["messages"][0].content[0]["text"] for inv in model.invocations]
     blanks_call, fix_call = texts[1], texts[-1]
     for text in (blanks_call, fix_call):
@@ -1338,7 +1416,7 @@ def test_the_blanks_and_fix_tails_carry_what_the_person_said_under_one_line():
         assert '"contact_ref":"c-1"' in text and "Jane Real" in text
         # the block is the tail's, not the prefix's
         assert text.count(PERSON_SAID_INSTRUCTION) == 1
-    assert bench.plan_filed is None and bench.filed is not None
+    assert bench.plan_filed is not None and bench.filed is not None
 
 
 _HAPPY = [
@@ -1354,12 +1432,12 @@ def test_the_prefix_is_byte_identical_with_and_without_it():
     from toll_harness.toll_bench.draft import PERSON_SAID_INSTRUCTION
     said = _caching_model(*_HAPPY)
     DraftLoop(said, _TalkativeBench(fixes=[_fix()])).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k")
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k")
     plain = _caching_model(*_HAPPY)
     DraftLoop(plain, FakeDraftBench(fixes=[_fix()])).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k")
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k")
     assert len(said.invocations) == len(plain.invocations)
-    for a, b in zip(said.invocations, plain.invocations):
+    for a, b in zip(said.invocations, plain.invocations, strict=False):
         assert a["system"] == b["system"]
     plain_blanks = plain.invocations[1]["messages"][0].content[0]["text"]
     assert PERSON_SAID_INSTRUCTION not in plain_blanks

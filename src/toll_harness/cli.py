@@ -1044,7 +1044,12 @@ _OBLIGATION_FAILURES: dict[tuple[str, ...], dict[str, Any]] = {}
 # round, so a repost -- a new round -- is a new want to this memo.
 # Process-local like the memos above: a restart costs one extra ask per key.
 _CLOSED_TARGET_MEMO: set[str] = set()
-_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed", "draft_stalled"})
+# `plan_failed` joins them on 2026-09-11 (rule 245): the plan door gives up
+# out loud now -- three content tries and it closes with that reason, the
+# bench scores "selected, could not present a plan", and the person is told
+# in red and asked to pick another. Coming back to that target cannot change
+# any of it.
+_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed", "draft_stalled", "plan_failed"})
 
 
 def _remember_closed(target: dict[str, Any], error: Any) -> bool:
@@ -1666,6 +1671,22 @@ def _market_scan_candidates(
 # the bench holds the document in between. The long single-shot prompt below
 # is kept for a bench that publishes no draft door: an older bench must still
 # be biddable from this package.
+def _the_proposal_road_is_open(resources: Any) -> bool:
+    """A PROPOSAL NEEDS NO DRAFT DOOR (rule 243, 2026-09-11).
+
+    It is one model call and one `POST .../proposals`, so the only things it
+    needs are a model to ask and a bench to file with. The draft door is the
+    PLAN's door now.
+    """
+    provider = getattr(resources, "toll_bench", None)
+    model = getattr(getattr(resources, "runtime", None), "model", None)
+    return bool(
+        provider is not None
+        and model is not None
+        and callable(getattr(provider, "submit_proposal", None))
+    )
+
+
 def _draft_door_available(resources: Any) -> bool:
     provider = getattr(resources, "toll_bench", None)
     model = getattr(getattr(resources, "runtime", None), "model", None)
@@ -1732,7 +1753,8 @@ def _bid_through_the_draft_loop(
     )
     if _remember_closed(target, outcome.get("error") if isinstance(outcome, dict) else None):
         _LOGGER.info(
-            "paused bidding on want %s for this round (%s); not asked again until it is posted again or the worker is restarted",
+            "paused bidding on want %s for this round (%s); not asked again "
+            "until it is posted again or the worker is restarted",
             target_id,
             outcome.get("error"),
         )
@@ -1809,6 +1831,22 @@ def _file_the_informed_plan_from_draft(
             target_id,
         )
         return None
+    # RULE 245: THE PLAN DOOR GIVES UP OUT LOUD, AND THAT IS THE END. A
+    # `plan_failed` close is scored on the bench ("selected, could not present
+    # a plan"), the person is shown a red card and asked to choose another
+    # agent, and the other proposals are already under it. Coming back to the
+    # target next cycle cannot change any of that, so it is memoized exactly
+    # like `bidding_closed` and `draft_stalled` and never asked again.
+    if _remember_closed(
+        {"target_id": target_id, "round": brief.get("round")},
+        outcome.get("error") if isinstance(outcome, dict) else None,
+    ):
+        _LOGGER.warning(
+            "the plan door closed target %s (%s); this agent is done with that "
+            "want and will not be asked for a plan on it again",
+            target_id,
+            outcome.get("error"),
+        )
     ok = bool(outcome.get("filed"))
     postcondition_error = None
     if ok:
@@ -1990,7 +2028,7 @@ def _process_market_opportunities(
     mode = identity.autonomy_mode if identity else AutonomyMode.AUTONOMOUS
     # RULE 241: the outline, then the blanks, then one fix at a time. The
     # single-shot road below runs only for a bench with no draft door.
-    if _draft_door_available(resources):
+    if _the_proposal_road_is_open(resources):
         scanned = _bid_through_the_draft_loop(
             resources,
             candidates[0],
@@ -2001,104 +2039,51 @@ def _process_market_opportunities(
         )
         if scanned is not None:
             return scanned
+    # THE OLD ROAD IS A PROPOSAL TOO (rule 243, 2026-09-11). This runs only
+    # for a bench or a runtime the one-call road above cannot use, and what it
+    # asks for is the SAME SEVEN FIELDS. It used to ask for a whole plan --
+    # steps, blocks, connect rows, deliverables, grant requests, four question
+    # formats, a finish line -- for a want nobody had picked this agent for.
+    # Over seven days the validate door refused that 8,813 times and passed
+    # 1,209; the strongest model on the fleet died on two length caps five
+    # problems from filing. The plan is owed by the one who was chosen, and it
+    # is a form the bench hands over then.
     goal = (
-        "Respond to the single open Toll Bench want below by making and submitting one concrete, "
-        "honest proposal. Existing obligations were checked first and none are pending. Do not "
-        "merely review or summarize the want. Call toll_bench.guide(topic='bidding'), read the "
-        "target "
-        "brief, read the current proposal schema, validate the exact final proposal, and submit it "
-        "once with a stable idempotency key. Never bid on a target whose brief reports your_bid. "
-        "Do not inspect targets outside this candidate set. Do not request human input. Save a "
-        "compact checkpoint and call result.complete only after submission succeeds. If no honest "
-        "executable proposal is possible or production refuses it, call result.fail with the exact "
-        "blocker so the next cycle can retry with that context. ACT (rule 212): whenever the want "
-        "needs something to leave the platform -- an email, an invitation, a calendar event -- the "
-        "plan's execution step is YOURS (actor: agent, ask: APPROVE) and declares the acts on it: "
-        "\"acts\": [{\"kind\": \"email\", \"to\": <who>, \"purpose\": <why>}]. You file the exact "
-        "email as an act, the person approves it word for word, Book of Houses sends it from your "
-        "mailbox. To arrange a TIME (a call, a meeting, a visit) the act is kind meeting, NOT "
-        "an email, and the plan carries the calendar grant with it (rule 230). Step 1 connects "
-        "the person's Google Calendar (a GRANT step). Step 2 is the meeting block: Book of Houses"
-        " reads the open times, shows the person the email and the three times, and sends on "
-        "their tap. Never plan a step where the person types their own times, and never ask the "
-        "person for their availability (REJ-28). Declare the meeting act with the "
-        "invitee, a "
-        "duration, a window and a message you "
-        "write to open the invite. Never email someone to ask their times. "
-        "For work the platform has no hands for -- a phone call, a purchase, a "
-        "visit, a form on somebody else's site -- the block is kind `outside`: "
-        "declare in it what you will do yourself, who it is with, how, when and "
-        "what evidence you will file, and a witness email if there is one. Never "
-        "say a want cannot be done because the platform cannot do it for you. "
-        "The person never sends anything: a step that asks "
-        "them to Send, or a plan where "
-        "every step is the person's and you do nothing yourself, is refused (REJ-26). Say in the "
-        "pitch what you will do yourself. Never a separate compose step and never a separate "
-        "confirm-it-was-sent step. THE FOUR QUESTIONS ARE TAPS (rules 168 and 170): every "
-        "entry of finalist_questions[0] is a HAR block -- the same {id, format, title, "
-        "config} shape a step's har_blocks carries -- and AT MOST TWO of the four may be a "
-        "text box (short_answer, written_response, or a bare string). Four bare strings are "
-        "refused REJ-15. A two-way question is single_choice with both answers spelled out; "
-        "a yes/no is yes_no; several related facts are ONE structured_form with named "
-        "fields; dates are date_time or schedule. Pre-fill the options from the brief. "
-        "Approve, grant and payment formats are refused on a question. "
-        "FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS (2026-09-09). The brief carries "
-        "`plan_examples`: worked programs, each a COMPLETE proposal that already passes the "
-        "validate door, and `wants_like` says which wants each is for. Do not compose a plan out "
-        "of parts. `nearest_program` on the brief is the pick, inline, with one sentence in "
-        "`program_to_copy`: copy its `proposal` WHOLE, change only what this want makes different "
-        "-- the words, the recipient, the numbers -- keep its shape (its steps, its acts, its "
-        "connect_account rows, its question formats), validate, file once. A program's work is a "
-        "`calls` act: runs of name, tool, row, args, each, wait -- where `tool` is a registry "
-        "verb, composio:<slug>/<TOOL_SLUG>, key:<slug>/<action>, mcp:<server>/<tool> or "
-        "platform.notify/draft/contact/research, `row` names the `connect_account` row on that "
-        "same step, `each` runs the call once per picked contact, and `wait` carries event, of and"
-        " timeout_hours. SAY WHERE EVERY ARGUMENT CAME FROM: it is a literal you wrote, or a "
-        "declared $from source -- person.<question id>, an EARLIER run[.field], or draft.<name>. "
-        "There is no fourth source, a run may not quote a run that has not happened, a tool needs "
-        "its row on the step that runs it, and a recipient is never a literal address (REJ-41). If"
-        " the person answered the contact question with a research brief (`contact_research` on "
-        "the brief), bind the send to a research run -- the recipient reads $from find.contact -- "
-        "or set contact_from research on a legacy email act; never add a picker they declined and "
-        "never invent an address. "
-        "THE TEMPLATE IS A FORM, NOT A PLAN (contract 3.0, rule 228 amended). The brief "
-        "carries plan_template (a BLANK skeleton: mechanics filled, every agent-owned "
-        "word an empty string or null), block_templates ({kind: [steps]}, the catalog to "
-        "pull from), bid_template and bid_template_notes (one line per blank -- that is "
-        "your to-do list). Fill every blank you keep IN YOUR OWN WORDS; a step still "
-        "carrying an empty title or outcome_promise is dropped before filing and nothing "
-        "is written in its place. Never file the form as handed to you. required_blocks "
-        "is [] and that means YOU decide which blocks this want needs. When you need one, "
-        "pull it out of block_templates IN FULL and in its order -- the connection is a "
-        "`connect_account` ROW inside the step that uses it (rule 236), except a "
-        "connection the agent needs to WORK, which is a connect step RIGHT BEFORE the "
-        "step that uses it (rule 242: the meeting plan is TWO steps, calendar connect "
-        "step then the card; the calendar row on the card itself is refused REJ-43); "
-        "any other registry connector in a GRANT step of its own is refused REJ-38 -- "
-        "and do not "
-        "rewrite a block step's title, outcome_promise or har_blocks, which the platform "
-        "writes at signing. NAME WHAT YOU HAND BACK (rule 230): a step that hands back "
-        "a thing carries `deliverable` -- {\"channel\": \"file\", \"family\": \"video\", "
-        "\"types\": [\"mp4\"]} -- channel is text, file or link, and a file names "
-        "its "
-        "family (video, image, audio, document, code) and its exact types. Write it in "
-        "your own words; never file the blank you were handed, and if you cannot make "
-        "that kind of file, do not promise it: a file step will not close until bytes of "
-        "that type reach the platform. WORDS HAVE A SHAPE TOO (rule 233): when a text "
-        "step hands back a set of things, name the parts of each in `fields` "
-        "([\"address\", \"hours\"]) and how many in `min_count`; the work goes back as "
-        "a cards block with every named field filled, and a heading with nothing under "
-        "it is refused. THE PERSON'S CONNECTIONS (rule 231): the brief "
-        "carries `person_connected` and a plain sentence in `person_already_connected`. "
-        "Plan around it -- storage connected, plan a hand-back into it; nothing "
-        "connected, plan the download path -- and remember an access step the person has "
-        "already connected is one tap. On a meeting act put the person's context in "
-        "message, with no "
-        "dates and no times in it, and leave `with` out unless the invitee's address is "
-        "actually known; read a kind's fields with toll_bench.list_act_kinds. Before you "
-        "file, call toll_bench.validate_proposal with this target_id: it is free, files "
-        "nothing and returns EVERY problem at once with a plain-words fix. Fix what it "
-        "names, then submit.\n\n"
+        "Respond to the single open Toll Bench want below with ONE PROPOSAL and "
+        "submit it once with a stable idempotency key. Existing obligations were "
+        "checked first and none are pending. Do not merely review or summarize the "
+        "want. Never bid on a target whose brief reports your_bid, and do not "
+        "inspect targets outside this candidate set. Do not request human input.\n"
+        "A PROPOSAL IS SEVEN FIELDS AND NOTHING ELSE. It is your short answer to "
+        "what this person wants, and it is what they choose between. Read the "
+        "brief, read the want's own words and the stance line in `strategy` -- "
+        "how they want it done -- and answer with exactly these:\n"
+        "  `pitch_title` -- what you are offering, up to 120 characters.\n"
+        "  `pitch_body` -- ONE paragraph, up to 600 characters: what they get and "
+        "roughly how. THIS IS YOUR STRATEGY; there is no other place for it.\n"
+        "  `odds` -- your honest chance this person ends up with the thing, 0 to 1.\n"
+        "  `total_ask_cents` -- what you charge, in whole cents, inside the "
+        "want's budget.\n"
+        '  `research_links` -- one to three, each {"url": ..., "note": "one line"}. '
+        "No plan_use sentence.\n"
+        "  `finalist_questions` -- up to three questions for this person. The plan "
+        "gets built from their answers, so ask what you actually need.\n"
+        "  `tools_needed` -- the tools you will need, by slug, from the list on "
+        "the want. Name none if the want offers none.\n"
+        "NO PLAN HERE. No steps, no odds per step, no blocks, no connect_account "
+        "rows, no grant requests, no deliverables, no finish line, no separate "
+        "strategy block, no wins, no capabilities, no skill research, no cost "
+        "allocation. If this person picks you, the bench hands you a FORM and you "
+        "write the plan then -- picks and short lines, and the code writes every "
+        "mechanic from your picks.\n"
+        "A LONG TITLE OR PARAGRAPH IS TRIMMED, NOT REFUSED. The door cuts it to "
+        "the cap and says what it cut; that is not a problem to fix and not a "
+        "reason to file again. Only content can be refused: no title, no "
+        "paragraph, a paragraph that does not address the want, or a price above "
+        "the want's budget. Save a compact checkpoint and call result.complete "
+        "only after submission succeeds. If no honest proposal is possible or "
+        "production refuses it, call result.fail with the exact blocker so the "
+        "next cycle can retry with that context.\n\n"
         + json.dumps(
             {
                 "candidate_targets": candidates,

@@ -30,9 +30,16 @@ from toll_harness.tools.registry import build_standard_registry
 def _call(name, arguments, call_id):
     call = ToolCall(call_id, name, arguments)
     return ModelResponse(
-        message=ModelMessage("assistant", [{"type": "tool_call", "id": call.id, "name": name, "arguments": arguments}]),
+        message=ModelMessage(
+            "assistant",
+            [{"type": "tool_call", "id": call.id, "name": name, "arguments": arguments}],
+        ),
         text="", tool_calls=[call],
-        usage=ModelUsage(input_tokens=100, output_tokens=8, total_tokens=108), stop_reason="tool_use",
+        usage=ModelUsage(
+            input_tokens=100,
+            output_tokens=8,
+            total_tokens=108,
+        ), stop_reason="tool_use",
     )
 
 

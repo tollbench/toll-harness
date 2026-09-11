@@ -147,7 +147,7 @@ def test_a_seeded_outline_reproduces_the_tools_and_the_step_count_of_the_win():
     )
 
     loop = DraftLoop(model, bench)
-    loop.run("t-1", brief=BRIEF, idempotency_key="k")
+    loop.run("t-1", kind="plan", proposal_id="p-9", brief=BRIEF, idempotency_key="k")
 
     ask = model.invocations[0]["messages"][0].content[0]["text"]
     assert "outline_you_ran" in ask
@@ -171,7 +171,7 @@ def test_no_seed_when_nothing_overlaps_and_the_outline_is_written_as_before():
     )
 
     loop = DraftLoop(model, bench)
-    loop.run("t-1", brief=BRIEF, idempotency_key="k")
+    loop.run("t-1", kind="plan", proposal_id="p-9", brief=BRIEF, idempotency_key="k")
 
     ask = model.invocations[0]["messages"][0].content[0]["text"]
     assert "outline_you_ran" not in ask
@@ -187,7 +187,8 @@ def test_the_shelf_costs_one_bench_call_a_run():
         {"patches": [{"path": "pitch_title", "value": "T"}]},
     )
 
-    DraftLoop(model, bench).run("t-1", brief=BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=BRIEF, idempotency_key="k")
 
     assert bench.proposal_reads == 1
 
@@ -203,7 +204,8 @@ def test_a_seed_the_model_will_not_adjust_still_goes_in():
         {"patches": [{"path": "pitch_title", "value": "T"}]},
     )
 
-    outcome = DraftLoop(model, bench).run("t-1", brief=BRIEF, idempotency_key="k")
+    outcome = DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=BRIEF, idempotency_key="k")
 
     assert outcome["ok"] is True
     assert len(bench.puts[0][1]["steps"]) == len(WIN["steps"])
@@ -217,7 +219,8 @@ def test_the_seeded_ask_stays_small():
         {"patches": [{"path": "pitch_title", "value": "T"}]},
     )
 
-    DraftLoop(model, bench).run("t-1", brief=BRIEF, idempotency_key="k")
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief=BRIEF, idempotency_key="k")
 
     call = model.invocations[0]
     tail = call["messages"][0].content[0]["text"]

@@ -313,7 +313,8 @@ def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():
     assert toll_bench.submit_calls == 1
     assert result["proposal_filed"] is True
     assert observed["goal"].count('"target_id"') == cli.MARKET_SCAN_CANDIDATE_LIMIT
-    assert "making and submitting one concrete" in observed["goal"]
+    # RULE 243: the old road asks for the same SEVEN FIELDS now.
+    assert "ONE PROPOSAL" in observed["goal"]
     assert "valid to submit no proposal" not in observed["goal"]
     assert runtime.enabled_tools == ["email.send", "toll_bench.attention"]
 

@@ -37,7 +37,8 @@ def test_a_single_patch_for_the_wrong_path_is_filed_at_the_asked_path():
         {"patches": [{"path": "steps.2.title", "value": "Send the introduction email"}]},
     )
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Connect two people"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9",
+        brief={"want": "Connect two people"}, idempotency_key="k"
     )
     assert outcome["ok"] is True, outcome
     # One patch, and it landed where the bench asked, not where the model aimed.
@@ -59,9 +60,11 @@ def test_two_patches_are_left_where_the_model_put_them():
     ]}
     model = _model(_OUTLINE, *_BLANKS, *[wide for _ in range(8)])
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
-    assert outcome["ok"] is False and outcome["error"] == "draft_closed"
+    # The bench names `steps.0.title` every round and the model never
+    # answers it; the third naming of that (path, code) ends the draft.
+    assert outcome["ok"] is False and outcome["error"] == "draft_stalled"
     # After the three blanks, every round went out as the model wrote it.
     assert all(len(call) == 2 for call in bench.patch_calls[3:])
     assert len(bench.patch_calls) > 3
@@ -83,7 +86,7 @@ def test_an_empty_answer_is_asked_once_more_before_the_draft_is_given_up():
         {"patches": [{"path": "steps.0.title", "value": "Email the venue and book it"}]},
     )
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
     assert outcome["ok"] is True, outcome
     again = model.invocations[-1]["messages"][0].content[0]["text"]
@@ -99,7 +102,7 @@ def test_two_empty_answers_end_the_draft():
     ]
     model = _model(_OUTLINE, *_BLANKS, "", "")
     outcome = DraftLoop(model, bench).run(
-        "t-1", brief={"want": "Book a table"}, idempotency_key="k"
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"}, idempotency_key="k"
     )
     assert outcome["ok"] is False
     assert bench.filed is None

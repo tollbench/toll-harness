@@ -37,10 +37,16 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`,
 `toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
 
+A PROPOSAL IS SEVEN FIELDS AND ONE CALL (rule 243, bench contract 3.15): `pitch_title`,
+`pitch_body`, `odds`, `total_ask_cents`, `research_links`, `finalist_questions`, `tools_needed`.
+Nothing below this line is asked before the person chooses. The PLAN is a form the chosen agent
+fills, and the keys below are the shape the bench expands that form into.
+
 The brief carries a FORM, not a plan (contract 3.0, rule 228 amended). `plan_template` is a blank
 skeleton at the band minimum, with the mechanics filled and every agent-owned word an explicit
 `""` or `null`; `block_templates` is the `{kind: [steps]}` catalog the agent pulls from;
-`bid_template` is the whole bid payload around that skeleton; and `bid_template_notes` lists every
+`bid_template` is the whole payload around that skeleton (the key keeps its old name); and
+`bid_template_notes` lists every
 blank with one line saying what belongs there. The platform writes the shape and the agent writes
 the words: a step still carrying an empty `title` or `outcome_promise` is dropped before filing
 and nothing is written in its place, and a plan that falls below the band floor once the blanks
@@ -49,29 +55,35 @@ decides which blocks the want needs; an older bench may still name a kind and re
 `REJ-32`. A block step is the exception to the strip: the platform writes its title, promise and
 blocks at signing.
 
-THE PLAN IS WRITTEN A PIECE AT A TIME (0.35.0, rule 241, bench contract 3.11). The runtime asks
-the intelligence for an OUTLINE (steps in order, each an `ask` and a `title`, and for a step that
-touches the world the `tool` and the service it runs `on`), sends it to
-`PUT /api/bench/targets/{id}/proposals/draft`, and the bench expands every mechanic it owns and
-names every field that is the agent's as an explicit blank with one sentence on each. Then it asks
-for ONE STEP's blanks at a time, and after that for the ONE `next_fix` each answer carries -- a
-path, its current value, a code and one sentence -- until `ready`, at which point
-`POST .../proposals {"from_draft": true}` files the document the bench has been holding. The
-informed plan walks the same loop with `kind: "plan"`, which opens empty; when the person answered
-questions at the pick the door answers `next: "outline"` with the bid's steps beside those answers,
-and the loop makes one outline ask and PUTs the outline back before the blanks -- the runtime never
-assumes the sequence, it does what the door's answer names next. A run READS the draft the bench is already holding before it opens one, and sends at
+THE PLAN IS A FORM, AND IT IS OWED ONLY AFTER THE PERSON CHOOSES (0.37.0, rule 244, bench
+contract 3.15). `PUT /api/bench/targets/{id}/proposals/draft` with `{"kind": "plan"}` and nothing
+else answers `next: "form"` and hands over everything at once: `your_proposal`,
+`the_person_answered`, `stance` (the person's own sentence about how they want it done, which opens
+the prompt), `example_plan` (one finished plan for a want like this, whole), the blank `form`, and
+`blanks` -- every question in plain words with its choices listed. The runtime fills it in ONE
+reply and PUTs it back as `{"kind": "plan", "form": {"span_days": N, "steps": [...]}}`. A step is a
+`verb` off the closed list, three short lines, one `declared_odds`, a `proof` pick and a `who`
+pick, plus the optional `only_if`, `do_ask`, `tool`, `repeats` and `bid_step`; a reorder is
+`PATCH ... {"move": {"step": 9, "before": 8}}` and never a rewritten form. THE BENCH DOES THE
+TYPING and reports every trim, every raised odds number and every stamped row on `bench_fixed`,
+none of which costs a round. Only four things come back as content questions -- nothing came back,
+the plan does not address the want, a step makes the person do the agent's work, a step names a
+tool the agent cannot reach -- and THREE MISSES close the draft `plan_failed`, which the bench
+scores as "selected, could not present a plan" and the runtime treats as terminal. Then
+`POST .../proposals/{proposal_id}/plan {"from_draft": true, "accept_rules": true}` files it.
+A run READS the draft the bench is already holding before it opens one, and sends at
 most ONE `PUT` -- a PUT replaces the standing draft and zeroes the rounds, so opening with one
 throws away every answer already given. For the same reason the PUT is not a tool: only the loop
 sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named
 for the bench's MCP twins.
-WHAT FORCED IT: handing a model every problem at once made it rewrite the whole document and break
-something new on each pass, and on 2026-09-09 a raw frontier model spent four whole-document passes
-on one want and never filed. The single-shot road below is kept only for a bench that publishes no
-draft door.
+WHAT FORCED IT: the agent was being asked to think up a plan AND type it into a 130-slot document
+under 44 refusal rules, one blank at a time, for a want nobody had picked it for. The strongest
+model on the fleet took one want from 139 problems down to 5 in 36 rounds and then died on two
+length caps; three smaller models burned the full 200-round ceiling and filed nothing. The
+single-shot road below is kept only for a bench that publishes no plan door.
 
-Before a bid is filed the provider calls the free validate door,
-`POST /api/bench/targets/{id}/proposals/validate` (call 3 of six): it runs the whole bid door,
+Before a proposal is filed the provider calls the free validate door,
+`POST /api/bench/targets/{id}/proposals/validate` (call 3 of six): it runs the whole proposal door,
 returns every problem at once as `{code, detail, step_index, field, fix}`, and writes nothing. The
 problems go back to the model for ONE repair pass; a `corrected_ok` plan is filed as it stands.
 `toll_bench.validate_proposal` takes an optional `target_id` and is that door when given one.
@@ -91,8 +103,8 @@ nobody can grade.
 
 Find the nearest program, then change what differs (Steven, 2026-09-09: "the test is can the AI
 use strategy to build the correct plan that can execute"). ONE PROGRAM RIDES THE BRIEF AND THE
-REST ARE AN INDEX (0.34.0): `nearest_program` is the chosen program in full -- a COMPLETE bid that
-already passes the validate door -- and `plan_examples` is the shelf, one row per program
+REST ARE AN INDEX (0.34.0): `nearest_program` is the chosen program in full -- a COMPLETE worked
+walk that already passes the door -- and `plan_examples` is the shelf, one row per program
 (`{key, title, wants_like, steps, approx_tokens}`, plus the bench's `url` where it publishes one).
 Twelve worked programs inline is about 19,000 tokens of a 131,072-token window spent before the
 model has read the want, and a program the run will not copy is a program it does not need to
@@ -121,12 +133,12 @@ none -- its `args`, and `each` when it runs once per item of a list it binds. A 
 `{event, of, timeout_hours}` and waits on a run ABOVE it. Every argument is a literal or a declared
 source, and there are four heads and no fifth: `{"$from": "person.<question id>"}`, `{"$from":
 "<a run ABOVE this one>[.field]"}`, `{"$from": "draft.<name>"}` declared in the act's own `drafts`,
-and `{"$from": "item[.field]"}` inside a run that declares `each`. The bid door's fourth question,
+and `{"$from": "item[.field]"}` inside a run that declares `each`. The plan door's fourth question,
 `REJ-41` (argument_provenance), refuses any other source and refuses a tool whose row is missing on
 the step. `blocks.calls_problems` mirrors those checks locally -- an unknown source, a run reading
 a run below it, an undeclared draft, `item` with no `each`, a missing or unknown row, a platform
 tool carrying a row, a typed address in a recipient field, a `{{ handlebars }}` binding, a wait
-that is also a call -- so a bad program is caught before the one bid this want allows is spent on
+that is also a call -- so a bad program is caught before the one proposal this want allows is spent on
 it. It judges no TOOL and never matches a row to one: `composio:`, `key:` and `mcp:` name somebody
 else's catalog, a plain verb names the bench's own, and which service carries which tool is a
 family table that lives on the server (0.31.0 learned that the hard way).
@@ -139,7 +151,7 @@ outreach to the plan's OWN research run -- a `platform.research` (or `platform.c
 `contact_from: "research"` beside an empty `contact_ref` and drops any address the act was
 carrying. It never WRITES a research run the plan does not have: that run's own arguments are the
 research nobody has done yet, and a run the harness filled in with the question instead of the
-answer is refused for arguments this package made up. No picker is added on such a want, at bid time or on a `REJ-40` repair: the person has
+answer is refused for arguments this package made up. No picker is added on such a want, at proposal time or on a `REJ-40` repair: the person has
 already said they have nobody to pick. `REJ-40` and `REJ-41` off the door are repaired once with
 that binding and re-filed once; with nothing to bind, the door's own sentence comes back
 non-terminal and nothing is re-filed.
@@ -164,7 +176,7 @@ and re-filed exactly once. `toll_bench.list_act_kinds` publishes each kind's `wa
 
 `toll_bench.withdraw_proposal` is the public exit. An agent that cannot produce the work it
 promised withdraws with `cause: cannot_deliver` and says why in its own words; the person
-learns why the pick failed and every bid held behind the selection returns to the table.
+learns why the pick failed and every proposal held behind the selection returns to the table.
 The market worker calls it on the agent's behalf when the same obligation fails identically
 up to `fleet.stall_threshold` times, so a model that cannot emit a valid plan leaves out
 loud instead of retrying forever.
@@ -196,7 +208,7 @@ verbatim as a plain result the model can act on.
 
 `toll_bench.file_evidence` closes an OUTSIDE act (Steven, 2026-09-05). The platform executes what
 it has hands for -- an email, a meeting, a post, a record, a calendar event -- and everything else
-is one generic block, `outside`: the agent declares at bid time what it will do itself, in its own
+is one generic block, `outside`: the agent declares in the plan what it will do itself, in its own
 name, with its own tools (who, what, how, when, the evidence, an optional witness email), the
 person taps Allow, and an act reading state `approved` on `current_step` is the cue to go and do
 it. The tool takes `deal_id`, `step_id`, a `summary` of 10 to 2000 plain words the person reads,

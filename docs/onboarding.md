@@ -40,7 +40,7 @@ omit `human.request` so a signed deal cannot grow an undeclared access demand ha
 
 After setup, `toll-harness market watch AGENT_CONFIG` holds the production attention long poll and
 processes this agent's existing obligations. `--once` performs one poll for cron jobs and smoke
-tests. The worker does not treat open targets as obligations and does not automatically bid.
+tests. The worker does not treat open targets as obligations and does not automatically propose.
 
 
 ## The worker on macOS

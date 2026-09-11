@@ -1,5 +1,21 @@
 """THE DRAFT LOOP — one plan, built up in pieces, at the bench's own door.
 
+TWO STAGES (rules 243-245, Steven Ochs, 2026-09-11). A PROPOSAL is the agent's
+short answer to a want -- seven fields, ONE call, no steps -- and it is what
+the person chooses between. A PLAN is owed by the agent that was CHOSEN, it is
+a FORM the bench hands over, and the loop below is how that form gets filled.
+So `run(kind="bid")` is one model call and one filing; `run(kind="plan")` is
+the loop. What forced the split: the agent was being asked to think up a plan
+AND type it into a 130-slot form under 44 rejection rules, one blank at a
+time, before anyone had picked it -- so most of that work was thrown away, and
+on 10-11 September the fleet spun. GPT-6 Astra took a want from 139 problems
+down to 5 in 36 rounds and died on two LENGTH CAPS (a line of 188 where the
+cap is 140). Llama, Nova and Mistral each burned the full 200-round ceiling
+and filed nothing. Over seven days the validate door refused 8,813 times and
+passed 1,209. The form now answers in picks and short lines, the door TRIMS
+what is long and says so on `bench_fixed` instead of refusing it, and a
+correction is never a round.
+
 RULE 241 (Steven Ochs, 2026-09-09; bench contract 3.11):
 
     "send the outline for the full plan, then we send back the template for
@@ -90,6 +106,16 @@ _LOGGER = logging.getLogger("toll_harness.draft")
 # to a token, so 8,000 characters is about 2,000 tokens of tail on top of a
 # cached prefix.
 PROMPT_CHAR_BUDGET = 8_000
+# THE FORM ASK GETS ITS OWN, AND IT IS BIGGER (2026-09-11). The budget above
+# was written for a loop of thirty small rounds; the form ask REPLACES those
+# rounds -- one call, the whole plan -- and what rides on it is the thing that
+# makes a weak model work: the bench's own finished example, whole. Steven's
+# test 4 is a seventeen-step plan, and a seventeen-step example is ~4KB on its
+# own, so at 8,000 the example was the first thing shed on exactly the wants
+# that need it most. 16,000 characters is about 4,000 input tokens for the one
+# call that writes the plan, against the 25,000-40,000 the old road spent
+# writing it thirty times.
+FORM_CHAR_BUDGET = 16_000
 # ONE STEP, and one step is not a document. A thirty-step draft has thirty of
 # these and the round is only ever shown the one it is about.
 STEP_CHAR_BUDGET = 3_000
@@ -150,17 +176,11 @@ SHORT_FRONT_DOOR = (
     "WITH JSON and no other words: no code fence, no explanation."
 )
 
-OUTLINE_INSTRUCTION = (
-    "Write the OUTLINE of your plan for the want below: the steps, in the order "
-    "they happen, and nothing else. No promises, no pitch, no questions, no "
-    "money, no odds, no arguments, no connection rows -- you are asked for each "
-    "of those, one at a time, after the bench hands back the form.\n"
-    'Answer: {"steps": [ ... ]}.'
-)
-
-# THE PLAN'S OUTLINE ROUND. The same shape as the bid road's outline ask
-# (the same stable prefix, so the provider cache is shared), with the two
-# things the bench put in front of us in the tail.
+# THE PLAN'S OUTLINE ROUND — the older plan door, before the form.
+#
+# The bid road's own outline instruction went with rule 243 on 2026-09-11: a
+# proposal is seven fields and one call, it opens no draft, and nothing asks a
+# model for the outline of a plan nobody has picked it for.
 PLAN_OUTLINE_INSTRUCTION = (
     "The person picked your bid and answered your questions. Below are "
     "`steps_you_bid` -- your own steps, one line each, numbered -- and "
@@ -203,7 +223,12 @@ def with_the_person_said(instruction: str, payload: dict, answer: Any) -> str:
 BLANKS_INSTRUCTION = (
     "Below is ONE step of your plan as the bench expanded it, and every blank on "
     "it that is yours to write, each with the bench's own sentence saying what "
-    "belongs there. Fill them in your own words; leave nothing you can answer "
+    "belongs there. A blank that carries `question` is asked in plain words: "
+    "ANSWER THAT QUESTION. A blank that carries `choices` is a PICK -- answer "
+    "with one of those words exactly as it is written and nothing else. A "
+    "blank that carries `up_to_characters` is trimmed to that length by the "
+    "bench if you go over, never refused, so write it short rather than "
+    "padding it. Fill them in your own words; leave nothing you can answer "
     "empty; change nothing else. A `you` blank is the person's own bullet for "
     "that part, pinned to it: write it as its note says (one line, starts with "
     "connect / approve / pick / answer, names the thing) rather than leaving "
@@ -342,7 +367,12 @@ def cached_input_tokens(usage: Any) -> int | None:
 # ---------------------------------------------------------------------------
 # THE PIECES — a step at a time, a fix at a time
 # ---------------------------------------------------------------------------
-_STEP_PATH = re.compile(r"^steps\.(\d+)(?:\.|$)")
+# A FORM PATH IS A STEP PATH TOO (2026-09-11). The plan door names the
+# form's own paths -- `form.steps.2.do_line`, `form.span_days` -- and a
+# blank that groups under no step is asked on its own, so a regex that
+# only knew `steps.N` put every step of a form plan in the plan-level
+# group and asked all seventeen at once.
+_STEP_PATH = re.compile(r"^(?:form\.)?steps\.(\d+)(?:\.|$)")
 
 
 def step_of(path: Any) -> int | None:
@@ -435,7 +465,19 @@ def block_grammar_summary(brief: Any, act_kinds: Any = None) -> str:
     kinds: list[str] = []
     catalog = (brief or {}).get("block_templates") if isinstance(brief, dict) else None
     if isinstance(catalog, dict):
-        kinds = [str(kind) for kind in catalog]
+        # PUBLISHED IS PUBLISHED, INCLUDING EMPTY (2026-09-11). `{}` is the
+        # bench saying this want has no blocks, and it is not the same thing as
+        # a brief that carries no catalog at all. Falling through to the act
+        # registry on an empty catalog offered the model kinds this want does
+        # not have -- the same bug as the empty tools index below, one line
+        # away from it.
+        return BLOCK_GRAMMAR + (
+            " The blocks this bench has: "
+            + ", ".join(sorted({str(kind) for kind in catalog})[:24])
+            + "."
+            if catalog
+            else " This want publishes no blocks, so a step is your own work."
+        )
     if not kinds and isinstance(act_kinds, dict):
         registry = act_kinds.get("act_kinds") or act_kinds.get("kinds") or act_kinds
         if isinstance(registry, dict):
@@ -491,9 +533,18 @@ def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, s
     <TOOL>, the door to ~1,500 other services -- so it is kept whatever the
     budget does to the rows above it: an index that silently ends at the
     budget would read as "these are all the tools there are".
+
+    AN EMPTY LIST IS AN ANSWER (2026-09-11). `tools: []` is the bench saying
+    this want offers NO tools; only a MISSING key (or a null) means "this
+    bench publishes no index". Until this fix an empty list fell through to
+    the platform fallback below, so every plan on a want with no tools was
+    offered GRANT_MIN_ACTIONS and PLATFORM_TOOLS and put a connection row it
+    could never use on the front of a step. That one line is why Jan, Alice
+    and Bobby each burned the full 200-round ceiling on the workshop want and
+    filed nothing.
     """
     published = (brief or {}).get("tools") if isinstance(brief, dict) else None
-    if isinstance(published, list) and published:
+    if isinstance(published, list):
         rows = [row for row in (_tool_row(entry) for entry in published) if row]
         if not rows:
             return []
@@ -796,6 +847,537 @@ SEEDED_OUTLINE_INSTRUCTION = (
 
 
 # ---------------------------------------------------------------------------
+# THE STANCE LINE — how the person wants it done, in the person's own words
+# ---------------------------------------------------------------------------
+# The three sliders on the want flow (Scrappy to Polished, Careful to
+# Aggressive, Proven path to Creative) reach the brief as `strategy`. The bench
+# renders them as ONE SENTENCE the person can read on their own want
+# ("Approach this like a master who is hyper-creative and moves fast"), and
+# that sentence opens the proposal ask and the plan ask, first line, before the
+# form. It is the person's own instruction about how, and it is the kind of
+# instruction models follow well. A bench that still publishes the raw sliders
+# is rendered here instead, unchanged in meaning and never summarised.
+STANCE_LABEL = "HOW THEY WANT IT DONE"
+STANCE_NOTE = (
+    "This is the person's own instruction about how, not what. Write to it."
+)
+
+
+def stance_line(brief: Any) -> str:
+    """The person's stance, one line, or "" when they said nothing.
+
+    `strategy` is the bench's rendered sentence when it publishes one. When
+    the brief still carries the raw sliders, they are printed as they stand --
+    name and value -- rather than turned into a sentence this module invented.
+    """
+    if not isinstance(brief, dict):
+        return ""
+    rendered = brief.get("strategy")
+    if isinstance(rendered, str):
+        return " ".join(rendered.split())
+    if isinstance(rendered, dict):
+        parts = [
+            f"{str(name).replace('_', ' ')}: {value}"
+            for name, value in rendered.items()
+            if value not in (None, "", [], {})
+        ]
+        return "; ".join(parts)
+    if isinstance(rendered, list):
+        return "; ".join(" ".join(str(entry).split()) for entry in rendered if entry)
+    return ""
+
+
+def stance_of(answer: Any) -> str:
+    """The stance line the DOOR carries on a plan answer, or "".
+
+    The bench renders the person's three sliders into one sentence and puts it
+    on `stance` (draft_routes._outline_ask, draft_door.form_answer). That
+    sentence is the person's, so where the door sends one it wins over the one
+    this module renders off the raw sliders.
+    """
+    if not isinstance(answer, dict):
+        return ""
+    value = answer.get("stance")
+    return " ".join(str(value).split()) if isinstance(value, str) else ""
+
+
+def example_plan(answer: Any) -> Any:
+    """The finished plan the BENCH chose to show beside the form, or None.
+
+    The example shelf is the bench's (one accepted plan per kind of want,
+    looked up, no model call), so the harness never picks one and never
+    invents one: it prints what the door's answer carries on `example` and
+    nothing else. For a weak model this is the single biggest lever there is,
+    which is also why it is the FIRST thing shed when a tail runs long -- the
+    question must always survive.
+    """
+    if not isinstance(answer, dict):
+        return None
+    # THE BENCH'S OWN KEY IS `example_plan` (draft_routes._outline_ask,
+    # draft_door.form_answer). `example` is the older name and is still read,
+    # because a bench that publishes it is publishing the same thing.
+    return answer.get("example_plan") or answer.get("example") or None
+
+
+# ---------------------------------------------------------------------------
+# STAGE ONE — THE PROPOSAL, ONE CALL (rule 243, 2026-09-11)
+# ---------------------------------------------------------------------------
+# A PROPOSAL IS THE AGENT'S SHORT ANSWER TO A WANT, AND THE PLAN IS OWED BY
+# THE ONE WHO WAS CHOSEN. Until 2026-09-11 this module wrote a whole plan for
+# a want nobody had picked it for: an 18-step, ~33KB document through 44
+# rejection rules, thrown away for every agent but one. Seven fields now, one
+# reply, and the plan comes after the person picks.
+#
+# THE HARNESS DOES NOT TRIM AND DOES NOT COUNT CHARACTERS. The caps below are
+# said out loud in the ask because a model writes better inside a stated cap,
+# but the DOOR owns them: it trims a long title or paragraph to the cap and
+# says what it trimmed on `bench_fixed`. A harness that trimmed too would cut
+# the same sentence twice and hide the bench's own answer.
+PROPOSAL_TITLE_MAX = 120
+PROPOSAL_BODY_MAX = 600
+PROPOSAL_LINKS_MIN = 1
+PROPOSAL_LINKS_MAX = 3
+PROPOSAL_QUESTIONS_MAX = 3
+# THE QUESTIONS ARE CONTROLS, NOT SENTENCES (contract 2.37, frames 2026-09-09).
+# A finalist question is a HAR block the person TAPS, and the bench owns the
+# sentence: each control shape carries a fixed frame and the agent writes only
+# the blank, on `fill`. What forced the frames: slot 2 of a live bid read "What
+# information about each person is most important to highlight?" over a Yes/No
+# box, and Steven asked "why is question #2 on these always wrong?". A title
+# the agent writes itself is taken only when it already fits the frame, so the
+# words go in `fill` and the bench composes the sentence.
+FINALIST_FRAMES = {
+    "yes_no": ("Should I ", "?"),
+    "single_choice": ("Which ", "?"),
+    "short_answer": ("Anything to add about ", "?"),
+}
+# A question with no shape of its own is a text box: legal, and one of the
+# three the door allows.
+FINALIST_DEFAULT_FORMAT = "short_answer"
+# The one control whose words are the bench's own ("Who should this go to?"),
+# and whose only field is how many people the plan reaches (rule 237).
+CONTACT_PICKER_FORMAT = "contact_picker"
+
+PROPOSAL_FIELDS = (
+    "pitch_title",
+    "pitch_body",
+    "odds",
+    "total_ask_cents",
+    "research_links",
+    "finalist_questions",
+    "tools_needed",
+)
+
+PROPOSAL_INSTRUCTION = (
+    "Answer the want below with a PROPOSAL: seven fields, ONE reply, nothing "
+    "else. A proposal is your short answer to what this person wants; it is "
+    "what they choose between. You do NOT write a plan here -- no steps, no "
+    "blocks, no account rows, no deliverables, no grant requests, no finish "
+    "line, no wins, no capabilities, no skill research, no separate strategy "
+    "block. If they pick you, the bench hands you a form and you write the "
+    "plan then.\n"
+    f"`pitch_title` -- what you are offering, up to {PROPOSAL_TITLE_MAX} "
+    "characters.\n"
+    f"`pitch_body` -- ONE paragraph, up to {PROPOSAL_BODY_MAX} characters: "
+    "what they get and roughly how. THIS IS YOUR STRATEGY; there is no other "
+    "place for it.\n"
+    "`odds` -- your honest chance this person ends up with the thing, between "
+    "0 and 1.\n"
+    "`total_ask_cents` -- what you charge, in whole cents, inside the want's "
+    "budget.\n"
+    f"`research_links` -- {PROPOSAL_LINKS_MIN} to {PROPOSAL_LINKS_MAX} of "
+    'them, each {"url": ..., "note": "one line"}. No "plan use" sentence.\n'
+    f"`finalist_questions` -- up to {PROPOSAL_QUESTIONS_MAX} questions for "
+    "this person, and `[]` if you need nothing. The plan gets built from "
+    "their answers, so ask what you actually need before you can plan. EACH "
+    "ONE IS A CONTROL THE PERSON TAPS, NOT A SENTENCE YOU WRITE: pick the "
+    "shape and write only the BLANK, on `fill`, and the platform writes the "
+    "sentence around it.\n"
+    '  yes_no -- "Should I ___?": {"format": "yes_no", "fill": "include '
+    'background on each person"}\n'
+    '  single_choice -- "Which ___?", and it needs at least two options: '
+    '{"format": "single_choice", "fill": "tone should the message have", '
+    '"config": {"options": ["Warm", "Straight to the point"]}}\n'
+    '  short_answer -- "Anything to add about ___?": {"format": '
+    '"short_answer", "fill": "what you want them to do next"}\n'
+    "  contact_picker -- who the plan should reach. The platform writes the "
+    "words and the person picks from their own Contacts; you write nothing "
+    'but how many: {"format": "contact_picker", "config": {"count": 2}}.\n'
+    "Never ask a person to type an address or a phone number into a box.\n"
+    "`tools_needed` -- the tools you will need, by slug, from the list on the "
+    "want. Name none if the want offers none.\n"
+    "A long title or paragraph is TRIMMED by the bench, not refused, so write "
+    "it well and do not pad it.\n"
+    'Answer: {"pitch_title": "...", "pitch_body": "...", "odds": 0.0, '
+    '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
+    '[...], "tools_needed": [...]}.'
+)
+
+# What a brief calls the money the person put up. Read in this order and
+# passed through as `budget_cents` so the ask names one number, not three.
+_BUDGET_KEYS = ("budget_ceiling_cents", "budget_cents", "budget")
+
+
+def budget_of(brief: Any) -> Any:
+    if not isinstance(brief, dict):
+        return None
+    for key in _BUDGET_KEYS:
+        value = brief.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _fill_for(fmt: str, text: Any) -> str:
+    """The BLANK inside a question, without the frame's own words.
+
+    A model handed a frame writes the whole sentence half the time ("Should I
+    include the background?"), and the bench composes frame + fill -- so the
+    prefix comes off here rather than reaching the person as "Should I Should
+    I include the background?". Nothing else is rewritten: what is left is the
+    model's own words.
+    """
+    words = " ".join(str(text or "").split())
+    prefix = (FINALIST_FRAMES.get(fmt) or ("", ""))[0]
+    if prefix and words[: len(prefix)].lower() == prefix.lower():
+        words = words[len(prefix):].strip()
+    while words and words[-1] in "?.!":
+        words = words[:-1].rstrip()
+    return words
+
+
+def _options_of(config: Any) -> list[dict[str, str]] | None:
+    """A choice's options as the door reads them: {id, label}.
+
+    A model writes them as plain strings as often as not. Turning a string
+    into a labelled option invents no words -- the label IS the string -- and
+    a choice whose options the door cannot read is a refused proposal.
+    """
+    rows = config.get("options") if isinstance(config, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return None
+    out: list[dict[str, str]] = []
+    for index, row in enumerate(rows, start=1):
+        if isinstance(row, dict):
+            label = str(row.get("label") or row.get("title") or "").strip()
+            identifier = str(row.get("id") or "").strip() or f"o{index}"
+        else:
+            label = str(row or "").strip()
+            identifier = f"o{index}"
+        if label:
+            out.append({"id": identifier, "label": label})
+    return out or None
+
+
+def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
+    """ONE finalist question as the door reads one, or None.
+
+    The door takes a HAR block -- {id, format, fill, config} -- or a plain
+    string (a text box, legacy). This builds the block: the shape the model
+    picked, its blank on `fill`, its options where it is a choice, and an id
+    of its own so the answers can be matched back to it. A `contact_picker`
+    carries only `config.count`: its words and its people are never the
+    agent's (rules 222, 237, 238).
+    """
+    if isinstance(entry, str):
+        entry = {"format": FINALIST_DEFAULT_FORMAT, "fill": entry}
+    if not isinstance(entry, dict):
+        return None
+    fmt = str(entry.get("format") or "").strip().lower() or FINALIST_DEFAULT_FORMAT
+    identifier = str(entry.get("id") or "").strip() or f"q{ordinal}"
+    out: dict[str, Any] = {"id": identifier, "format": fmt}
+    if fmt == CONTACT_PICKER_FORMAT:
+        count = (entry.get("config") or {}).get("count") if isinstance(
+            entry.get("config"), dict) else None
+        if isinstance(count, int) and not isinstance(count, bool) and count > 1:
+            out["config"] = {"count": int(count)}
+        return out
+    fill = entry.get("fill")
+    if not (isinstance(fill, str) and fill.strip()):
+        fill = (
+            entry.get("title")
+            or entry.get("question")
+            or entry.get("prompt")
+            or entry.get("text")
+        )
+    fill = _fill_for(fmt, fill)
+    if not fill:
+        return None
+    out["fill"] = fill
+    options = _options_of(entry.get("config"))
+    if options:
+        out["config"] = {"options": options}
+    description = entry.get("description")
+    if isinstance(description, str) and description.strip():
+        out["description"] = description.strip()
+    return out
+
+
+def read_questions(rows: Any) -> list[dict[str, Any]]:
+    """Up to three questions, each a block with an id of its own. ALWAYS A
+    LIST, including empty: a proposal that asks nothing and a proposal that
+    asked and the harness dropped it must be tellable apart."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ordinal, entry in enumerate(rows if isinstance(rows, list) else [], start=1):
+        if len(out) >= PROPOSAL_QUESTIONS_MAX:
+            break
+        block = read_question(entry, ordinal)
+        if block is None:
+            continue
+        if block["id"] in seen:
+            block["id"] = f"q{ordinal}"
+        seen.add(block["id"])
+        out.append(block)
+    return out
+
+
+def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
+    """The seven fields out of the model's answer, and nothing else.
+
+    FIELD NAMES ARE A CONTRACT. A field the door does not name is a field the
+    door will not read, so anything else the model volunteered is dropped here
+    rather than filed. Nothing is trimmed and nothing is invented: an `odds`
+    outside 0..1 is the one coercion, because a probability is the one field
+    whose range is arithmetic rather than an opinion.
+    """
+    if not isinstance(answer, dict):
+        return {}
+    holder = answer
+    for key in ("proposal", "bid"):
+        inner = answer.get(key)
+        if isinstance(inner, dict) and any(field in inner for field in PROPOSAL_FIELDS):
+            holder = inner
+            break
+    out: dict[str, Any] = {}
+    for field in ("pitch_title", "pitch_body"):
+        value = holder.get(field)
+        if isinstance(value, str) and value.strip():
+            out[field] = value.strip()
+    odds = holder.get("odds")
+    if isinstance(odds, (int, float)) and not isinstance(odds, bool):
+        out["odds"] = min(1.0, max(0.0, float(odds)))
+    cents = holder.get("total_ask_cents")
+    if isinstance(cents, (int, float)) and not isinstance(cents, bool):
+        out["total_ask_cents"] = int(cents)
+    links = []
+    for entry in holder.get("research_links") or []:
+        if isinstance(entry, dict) and str(entry.get("url") or "").strip():
+            links.append(
+                {
+                    "url": str(entry["url"]).strip(),
+                    "note": str(entry.get("note") or "").strip(),
+                }
+            )
+        elif isinstance(entry, str) and entry.strip():
+            links.append({"url": entry.strip(), "note": ""})
+    if links:
+        out["research_links"] = links[:PROPOSAL_LINKS_MAX]
+    # ALWAYS PRESENT, INCLUDING EMPTY (the law this bench keeps everywhere):
+    # a proposal that asks the person nothing says so with `[]`, and the door
+    # can tell that apart from a field that never arrived.
+    out["finalist_questions"] = read_questions(holder.get("finalist_questions"))
+    tools = [
+        str(entry.get("tool") if isinstance(entry, dict) else entry).strip()
+        for entry in (holder.get("tools_needed") or [])
+        if entry
+    ]
+    tools = [tool for tool in tools if tool]
+    if tools:
+        out["tools_needed"] = tools
+    return out
+
+
+def bench_fixed(answer: Any) -> list[Any]:
+    """What the DOOR corrected on the way in, in the door's own words.
+
+    A trim is not a refusal and never a reason to ask the model again: the
+    bench took the words, shortened what was over a cap, and said so. This
+    reads that list off any answer that carries one so the runtime can log it
+    and carry on.
+    """
+    if not isinstance(answer, dict):
+        return []
+    fixed = answer.get("bench_fixed")
+    if isinstance(fixed, list):
+        return list(fixed)
+    if isinstance(fixed, dict):
+        return [f"{name}: {value}" for name, value in fixed.items()]
+    if isinstance(fixed, str) and fixed.strip():
+        return [fixed.strip()]
+    return []
+
+
+def is_small_proposal(proposal: Any) -> bool:
+    """True when this is the rule-243 proposal: seven fields and no steps.
+
+    The filing road for a proposal that carries steps is the old plan-shaped
+    one -- required blocks merged in, contacts bound, the blank form dropped,
+    the local mirror consulted -- and every one of those repairs reads
+    `steps`. A seven-field proposal has none, so none of them can run over it,
+    and a harness that ran them anyway would file a plan the agent never
+    wrote on a want nobody had picked it for.
+    """
+    if not isinstance(proposal, dict):
+        return False
+    if proposal.get("steps"):
+        return False
+    return any(field in proposal for field in PROPOSAL_FIELDS)
+
+
+# ---------------------------------------------------------------------------
+# STAGE TWO — THE PLAN IS A FORM (rule 244, 2026-09-11)
+# ---------------------------------------------------------------------------
+# ONLY THE AGENT THE PERSON PICKED IS EVER ASKED FOR A PLAN, and what it is
+# asked for is a FORM: picks and short lines. The bench does the typing --
+# every connect row, grant request, block title, schedule row and pointer is
+# stamped from a pick by `plan_form.expand_form` -- so the form's whole
+# language is twelve field names, and the door publishes the question for each
+# one in plain words with its choices listed.
+#
+# THE FORM IS FILLED IN ONE REPLY. The blanks round and the fix round below
+# still exist for what the reply left open and for the four things that can
+# still be wrong about the CONTENT, but the shape of the plan arrives whole.
+FORM_STEP_FIELDS = (
+    "verb",
+    "do_line",
+    "hand_over_line",
+    "need_line",
+    "declared_odds",
+    "proof",
+    "who",
+    "only_if",
+    "do_ask",
+    "tool",
+    "repeats",
+    "bid_step",
+)
+
+FORM_INSTRUCTION = (
+    "The person PICKED you. Now write the plan, and the plan is a FORM you "
+    "fill in ONE reply.\n"
+    "`form` is the blank form, one entry per step. "
+    "`answer_these_on_every_step` is the bench's own question for each blank "
+    "of a step -- they are written for step 1 and the same questions are "
+    "asked of every step you write -- and `and_for_the_plan` is what the plan "
+    "itself asks. A question that lists `choices` is a PICK: answer with one "
+    "of those words exactly as it is written. A question that names a number "
+    "of characters is a CAP: the bench TRIMS a long line to it and tells you "
+    "what it trimmed, it never refuses one, so write short rather than "
+    "padding to fill it.\n"
+    "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
+    "this plan does not need; a step that carries none is a normal step.\n"
+    "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
+    "-- so add entries to the blank form or drop them freely. You never write "
+    "a connect row, a grant request, a block title, a room list, a schedule "
+    "row or a pointer: the bench writes every one of those from your picks.\n"
+    'Answer: {"span_days": 14, "steps": [{"verb": "finds", "do_line": "...", '
+    '"hand_over_line": "...", "need_line": "", "declared_odds": 0.4, '
+    '"proof": "text", "who": "agent"}, ...]}.'
+)
+
+
+def form_of(answer: Any) -> dict[str, Any] | None:
+    """The form the door is carrying on this answer, or None."""
+    if not isinstance(answer, dict):
+        return None
+    form = answer.get("form")
+    return form if isinstance(form, dict) else None
+
+
+def form_step(form: Any, index: int | None) -> Any:
+    """One step of a form, by its 0-based index, or None."""
+    steps = (form or {}).get("steps") if isinstance(form, dict) else None
+    if not isinstance(steps, list) or index is None or not 0 <= index < len(steps):
+        return None
+    return steps[index]
+
+
+def the_form_is_blank(answer: Any) -> bool:
+    """True when the door is ASKING for the form rather than holding one.
+
+    The outline round answers with `draft: {}` -- there is no document yet,
+    only the question. Once a form has been sent, every answer carries the
+    expanded plan on `draft`, and re-filling the form there would throw away
+    the one the bench is holding.
+    """
+    if not isinstance(answer, dict):
+        return True
+    document = answer.get("draft")
+    return not (isinstance(document, dict) and document)
+
+
+def read_form(answer: dict[str, Any]) -> dict[str, Any]:
+    """The FORM out of the model's answer: the steps and how long, no more.
+
+    FIELD NAMES ARE A CONTRACT, the same law `read_proposal` keeps: the form
+    has twelve fields and the door reads no others, so anything else the model
+    volunteered is dropped here rather than sent. Nothing is trimmed (the door
+    owns the caps and says what it cut) and nothing is invented.
+    """
+    if not isinstance(answer, dict):
+        return {}
+    holder = answer
+    for key in ("form", "plan"):
+        inner = answer.get(key)
+        if isinstance(inner, dict) and isinstance(inner.get("steps"), list):
+            holder = inner
+            break
+    rows = holder.get("steps")
+    if not isinstance(rows, list):
+        return {}
+    steps: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        step = {
+            name: row[name]
+            for name in FORM_STEP_FIELDS
+            if name in row and row[name] not in (None, "")
+        }
+        # `need_line` IS THE ONE BLANK WHOSE EMPTY ANSWER IS AN ANSWER: "I
+        # need nothing from you here". An empty string says that; a missing
+        # key leaves the question open and the door asks it again.
+        if isinstance(row.get("need_line"), str):
+            step["need_line"] = row["need_line"]
+        if step:
+            steps.append(step)
+    if not steps:
+        return {}
+    form: dict[str, Any] = {"steps": steps}
+    span = holder.get("span_days", answer.get("span_days"))
+    if isinstance(span, (int, float)) and not isinstance(span, bool):
+        form["span_days"] = int(span)
+    return form
+
+
+# THE PLAN THAT COULD NOT BE PRESENTED (rule 245, 2026-09-11)
+# ---------------------------------------------------------------------------
+# The plan door now gives up out loud. Three content tries, or a draft it
+# cannot take, and the answer closes with the reason `plan_failed`: the bench
+# scores the agent "selected, could not present a plan", tells the person in
+# red and asks them to pick another. THAT IS THE END OF THIS TARGET FOR THIS
+# AGENT -- re-opening the draft cannot change it and the person has already
+# moved on -- so the runtime memoizes it the way it memoizes a closed bid
+# (cli._TERMINAL_DOOR_ERRORS) and never comes back.
+PLAN_FAILED = "plan_failed"
+
+
+def closed_reason(answer: Any) -> str:
+    """The door's own word for why it closed, flattened to one string."""
+    closed = (answer or {}).get("closed") if isinstance(answer, dict) else None
+    if isinstance(closed, dict):
+        return str(closed.get("reason") or closed.get("error") or closed.get("message") or "")
+    return str(closed or "")
+
+
+def closed_error(answer: Any) -> str:
+    """`plan_failed` when the door named it, else the generic close."""
+    reason = closed_reason(answer)
+    return PLAN_FAILED if PLAN_FAILED in reason else "draft_closed"
+
+
+# ---------------------------------------------------------------------------
 # THE LOOP
 # ---------------------------------------------------------------------------
 def rounds_left(answer: dict[str, Any]) -> int | None:
@@ -847,22 +1429,92 @@ class DraftLoop:
         # outline, instead of in front of every round.
         self._tools_ride_the_outline = False
         self._act_kinds: Any = None
+        # The person's own sentence about HOW, read once off the brief in
+        # `run` and printed at the top of every ask that writes words.
+        self.stance: str = ""
+        # What the door said it corrected on the way in, over the whole run.
+        # A trim is never retried; it is logged and carried.
+        self.bench_fixed: list[Any] = []
 
     # -- the model ---------------------------------------------------------
-    def _ask(self, instruction: str, payload: dict[str, Any], what: str = "") -> dict[str, Any]:
+    # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER. The example goes first
+    # -- it is the biggest thing and the most helpful, and a model that loses
+    # it still has a question in front of it. The outline lines go next. THE
+    # QUESTION NEVER GOES: a tail that dropped the form would spend a call
+    # asking nothing.
+    SHED_ORDER = ("example", "outline_you_ran", "steps_you_bid", "plan")
+
+    def _tail(
+        self,
+        instruction: str,
+        payload: dict[str, Any],
+        head: Sequence[tuple[str, Any]] = (),
+    ) -> str:
+        """THE STANCE AND THE EXAMPLE RIDE ON TOP (2026-09-11).
+
+        The person's instruction about how they want this done, and the
+        finished plan the bench chose to show beside the form, are printed
+        ABOVE the form -- first thing in the tail, before the question -- and
+        never in the prefix, which stays byte for byte the same so the
+        provider cache still hits.
+        """
+        parts = [str(block) for _name, block in head if block]
+        parts.append(instruction)
+        parts.append(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
+        )
+        return "\n\n".join(parts)
+
+    def _ask(
+        self,
+        instruction: str,
+        payload: dict[str, Any],
+        what: str = "",
+        *,
+        head: Sequence[tuple[str, Any]] = (),
+        budget: int = PROMPT_CHAR_BUDGET,
+    ) -> dict[str, Any]:
         """One question: the stable prefix as the system, the variable tail as
         the message. Every call is measured, and what the cache did is logged
         where the provider reports it."""
-        body = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
-        tail = instruction + "\n\n" + body
-        if len(tail) > PROMPT_CHAR_BUDGET:
+        head = list(head)
+        tail = self._tail(instruction, payload, head)
+        if len(tail) > budget:
+            # THE QUESTION IS THE LAST THING STANDING. Shed in the published
+            # order -- the example, then the outline lines -- and say what
+            # went, rather than quietly spending a window on a prompt this
+            # loop was built to keep small.
+            payload = dict(payload)
+            for name in self.SHED_ORDER:
+                if len(tail) <= budget:
+                    break
+                before = len(tail)
+                shed_head = [row for row in head if row[0] != name]
+                shed = len(shed_head) != len(head)
+                head = shed_head
+                if name in payload:
+                    payload.pop(name)
+                    shed = True
+                if not shed:
+                    continue
+                tail = self._tail(instruction, payload, head)
+                self.log.info(
+                    "draft loop tail was %d characters (budget %d); dropped "
+                    "`%s` and it is now %d",
+                    before,
+                    budget,
+                    name,
+                    len(tail),
+                )
+        if len(tail) > budget:
             # A loop prompt should never come near this. Say so out loud
             # rather than quietly spending a window on it.
             self.log.warning(
-                "draft loop tail ran to %d characters (budget %d); the loop's "
-                "prompts are small by design, so this is worth reading",
+                "draft loop tail ran to %d characters (budget %d) with nothing "
+                "left to shed but the question; the loop's prompts are small "
+                "by design, so this is worth reading",
                 len(tail),
-                PROMPT_CHAR_BUDGET,
+                budget,
             )
         self.calls += 1
         self.prompt_chars += len(tail)
@@ -885,7 +1537,58 @@ class DraftLoop:
         )
         return read_json_object(getattr(response, "text", ""))
 
+    def _head(self, answer: Any = None) -> list[tuple[str, str]]:
+        """THE TWO THINGS THAT GO ABOVE THE FORM, in order.
+
+        The stance line -- the person's own sentence about how they want this
+        done -- then the bench's example plan when the door's answer carries
+        one. Both are the person's or the bench's words, printed as they
+        stand; neither is summarised here.
+        """
+        head: list[tuple[str, str]] = []
+        # THE DOOR'S OWN STANCE LINE WINS. The bench renders the person's
+        # three sliders into one sentence and sends it on every plan answer;
+        # the one built off the raw sliders here is what an older bench gets.
+        stance = stance_of(answer) or self.stance
+        if stance:
+            head.append(("stance", f"{STANCE_LABEL}: {stance}\n{STANCE_NOTE}"))
+        example = example_plan(answer)
+        if example:
+            head.append(
+                (
+                    "example",
+                    "A FINISHED PLAN FOR A WANT LIKE THIS, accepted, as the "
+                    "bench filled it in. Yours is for THIS want, in your own "
+                    "words -- copy the shape, never the sentences.\n"
+                    + json.dumps(example, separators=(",", ":"), default=str),
+                )
+            )
+        return head
+
     # -- the log -----------------------------------------------------------
+    def _note_bench_fixed(self, target_id: str, kind: str, answer: Any) -> list[Any]:
+        """A CORRECTION IS NOT A REFUSAL (2026-09-11).
+
+        The door trims a long title or paragraph, raises an odds line that
+        falls, and says what it did on `bench_fixed`. The runtime writes that
+        to the log and carries on -- it never asks the model again over it.
+        Asking again is what the old door did by refusing a cap, and it is why
+        the strongest model on the fleet died five problems from filing.
+        """
+        fixed = bench_fixed(answer)
+        if not fixed:
+            return []
+        self.bench_fixed.extend(fixed)
+        self.log.info(
+            "draft loop %s target=%s: the bench corrected %d thing(s) on the "
+            "way in and took it anyway: %s",
+            kind,
+            target_id,
+            len(fixed),
+            "; ".join(self._preview(entry) for entry in fixed),
+        )
+        return fixed
+
     def _record(self, target_id: str, kind: str, answer: dict[str, Any], what: str) -> None:
         """ONE LINE PER ROUND. Round, what is left, and the one thing the
         bench named -- so a stuck loop is readable in the run log without
@@ -905,6 +1608,9 @@ class DraftLoop:
             "code": fix.get("code"),
             "closed": answer.get("closed"),
         }
+        fixed = self._note_bench_fixed(target_id, kind, answer)
+        if fixed:
+            line["bench_fixed"] = fixed
         self.trail.append(line)
         self.log.info(
             "draft loop %s target=%s round=%d on=%s remaining=%s rounds=%s/%s "
@@ -929,6 +1635,9 @@ class DraftLoop:
         return answer
 
     PREVIEW = 120
+    # The third consecutive round on the SAME (path, code) ends the draft.
+    # Two is the better prompt (see `_answer_the_fixes`); three is an answer.
+    SAME_PROBLEM_ROUNDS = 3
 
     def _last_sent_for(self, path: str) -> dict[str, Any] | None:
         """The last patch that TOUCHED this path, whatever it was addressed to.
@@ -1030,6 +1739,14 @@ class DraftLoop:
             return self.NOTHING_STANDING, answer
         if not answer.get("ok"):
             return self.OVER, answer
+        if answer.get("next"):
+            # THE DOOR IS ASKING FOR SOMETHING AND A ROW STANDS BEHIND THE
+            # QUESTION. The outline round carries an empty `draft` on purpose
+            # -- there is no document yet, only the ask -- and PUTting over it
+            # would spend a round to be asked the same thing again.
+            self.rounds = int((answer.get("rounds") or {}).get("used") or 0)
+            self._record(target_id, kind, answer, "resume")
+            return self.STANDING, answer
         document = answer.get("draft")
         if not isinstance(document, dict) or not document:
             # An answer with no document is not a draft to carry on with, and
@@ -1098,63 +1815,265 @@ class DraftLoop:
             payload["tools"] = tools_index(brief)
         return payload
 
-    def _open(
-        self, target_id: str, kind: str, want: Any, strategy: Any, brief: Any, act_kinds: Any
-    ) -> dict[str, Any] | None:
-        """THE ONE PUT. None when the model was asked for an outline and gave
-        none."""
-        if kind == "plan":
-            # THE PLAN STARTS FROM THE STEPS ALREADY FILED (rule 113). An
-            # outline here would replace the bid the person picked, so the
-            # draft is opened empty. The bench answers with the owned plan
-            # expanded -- or, when the person answered questions at the pick,
-            # with `next: "outline"` and the answers beside the bid's steps;
-            # `run` follows whichever it names (see `_follow`).
-            return self._put(target_id, kind, {})
-        # AN AGENT'S OWN WINS ARE ITS SHELF. A want that needs the tools of a
-        # job this agent already won is that job again in other words, so the
-        # outline starts as that plan's shape and the one call asks only what
-        # changes.
-        seed, _score = self._seed(brief)
-        outline = read_outline(
+    # -- stage two: the form -----------------------------------------------
+    def _the_form_ask(
+        self, answer: dict[str, Any], want: Any, strategy: Any, brief: Any
+    ) -> dict[str, Any]:
+        """THE QUESTIONS ONCE, NOT ONCE PER STEP.
+
+        The door names every blank of every step -- seven a step, so a
+        seventeen-step form asks 120 questions and they are the same seven
+        questions seventeen times. They go in ONCE, in the bench's own words,
+        with the form beside them; sending all 120 would spend the whole
+        prompt budget saying one thing.
+        """
+        groups = group_blanks(answer.get("blanks"))
+        plan_rows = [row for index, rows in groups if index is None for row in rows]
+        step_rows: list[Any] = []
+        for index, rows in groups:
+            if index is not None:
+                step_rows = rows
+                break
+        payload: dict[str, Any] = {
+            "want": want,
+            "what_the_person_said": strategy,
+            # The agent's own proposal and the person's answers to its
+            # questions, as the door put them: the plan is built from those.
+            "your_proposal": (
+                answer.get("your_proposal") or answer.get("steps_you_bid") or []
+            ),
+            "the_person_answered": (
+                answer.get("the_person_answered") or answer.get("selection_answers") or []
+            ),
+            "form": form_of(answer) or {},
+            "answer_these_on_every_step": [self._blank_row(row) for row in step_rows],
+            "and_for_the_plan": [self._blank_row(row) for row in plan_rows],
+            "you_may_also_use": answer.get("optional_picks") or [],
+        }
+        send = answer.get("send") or ""
+        if send:
+            payload["how_to_send_it"] = send
+        if self._tools_ride_the_outline:
+            # The `tool` pick comes off this want's list, and on a provider
+            # that caches nothing the list is not in the prefix.
+            payload["tools_on_this_want"] = tools_index(brief)
+        return payload
+
+    def _fill_the_form(
+        self,
+        target_id: str,
+        kind: str,
+        answer: dict[str, Any],
+        want: Any,
+        strategy: Any,
+        brief: Any,
+    ) -> tuple[dict[str, Any], str]:
+        """ONE MODEL CALL, and the form goes in. (answer, "" | "form")."""
+        payload = self._the_form_ask(answer, want, strategy, brief)
+        # LAW A: what the person said rides this ask too.
+        instruction = with_the_person_said(FORM_INSTRUCTION, payload, answer)
+        form = read_form(
             self._ask(
-                SEEDED_OUTLINE_INSTRUCTION if seed else OUTLINE_INSTRUCTION,
-                self._outline_payload(want, strategy, brief, seed),
-                "outline seeded" if seed else "outline",
+                instruction,
+                payload,
+                "form",
+                head=self._head(answer),
+                budget=FORM_CHAR_BUDGET,
             )
         )
-        if seed and not outline.get("steps"):
+        if not form.get("steps"):
+            self.log.warning(
+                "draft loop %s target=%s: the door asked for the form and the "
+                "model answered with no steps",
+                kind,
+                target_id,
+            )
+            return answer, "form"
+        self.log.info(
+            "draft loop %s target=%s: the form came back with %d step(s) and "
+            "span_days=%s",
+            kind,
+            target_id,
+            len(form["steps"]),
+            form.get("span_days"),
+        )
+        return self._put(target_id, kind, {"form": form}), ""
+
+    def _step_for(self, answer: Any, index: int | None) -> Any:
+        """THE STEP A BLANK IS ON.
+
+        On a form draft that is the FORM's step, never the expanded
+        document's: the expander stamps connect steps of its own in front of
+        the ones the agent wrote (rule 236, rule 242), so `steps.3` of the
+        document and step 4 of the form are not the same step.
+        """
+        form = form_of(answer)
+        if form is not None:
+            step = form_step(form, index)
+            if step is not None:
+                return step
+        return step_context((answer or {}).get("draft"), index)
+
+    # -- stage one: the proposal -------------------------------------------
+    def _propose(
+        self,
+        target_id: str,
+        brief: Any,
+        idempotency_key: str,
+        file: bool,
+    ) -> dict[str, Any]:
+        """THE PROPOSAL IS ONE CALL (rule 243).
+
+        The want, the stance line, the questions the person will answer and
+        the tools this want offers go in; seven fields come back; the bench's
+        own proposal door takes them. No outline, no blanks, no fixes: there
+        is no plan here to fix. A long title or paragraph is the DOOR's to
+        trim, and what it trimmed comes back on `bench_fixed` and is logged,
+        never retried.
+        """
+        payload: dict[str, Any] = {
+            "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
+            "what_the_person_said": person_strategy(brief),
+            "budget_cents": budget_of(brief),
+            "tools_on_this_want": tools_index(brief),
+        }
+        if self._tools_ride_the_outline:
+            # Nothing caches here, so the rules ride the one call that makes
+            # the choice rather than a prefix nobody is charged less for.
+            payload["the_rules"] = SHORT_FRONT_DOOR
+        proposal = read_proposal(
+            self._ask(PROPOSAL_INSTRUCTION, payload, "proposal", head=self._head())
+        )
+        if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
+            return self._gave_up(
+                target_id,
+                "bid",
+                "no_proposal",
+                "The model was asked for a proposal and answered with no "
+                "title and no paragraph.",
+            )
+        self.log.info(
+            "proposal for target=%s: %d of %d fields, %d link(s), %d "
+            "question(s), %d tool(s)",
+            target_id,
+            len(proposal),
+            len(PROPOSAL_FIELDS),
+            len(proposal.get("research_links") or []),
+            len(proposal.get("finalist_questions") or []),
+            len(proposal.get("tools_needed") or []),
+        )
+        if not file:
+            return {
+                "ok": True,
+                "filed": False,
+                "dry_run": True,
+                "kind": "bid",
+                "draft": proposal,
+                "proposal": proposal,
+                "rounds": 0,
+                "model_calls": self.calls,
+                "trail": self.trail,
+            }
+        filed = self.provider.submit_proposal(target_id, proposal, idempotency_key)
+        filed = filed if isinstance(filed, dict) else {}
+        fixed = self._note_bench_fixed(target_id, "bid", filed)
+        out: dict[str, Any] = {
+            "ok": bool(filed.get("ok")),
+            "filed": bool(filed.get("ok")),
+            "kind": "bid",
+            "response": filed,
+            "proposal": proposal,
+            "proposal_id": filed.get("proposal_id"),
+            "rounds": 0,
+            "model_calls": self.calls,
+            "trail": self.trail,
+        }
+        if fixed:
+            out["bench_fixed"] = fixed
+        if not out["ok"]:
+            out["error"] = filed.get("error") or "proposal_refused"
+            out["message"] = filed.get("message") or ""
+            self.log.warning(
+                "proposal for target=%s was not filed: %s (%s)",
+                target_id,
+                out["error"],
+                self._preview(out["message"]),
+            )
+        return out
+
+    def _open(self, target_id: str, kind: str) -> dict[str, Any]:
+        """THE ONE PUT, AND IT IS EMPTY (rule 243 + rule 113).
+
+        A PROPOSAL never comes through this door any more -- it is one model
+        call and one filing (`_propose`) -- so the only draft this loop opens
+        is a PLAN's, and a plan is opened EMPTY on purpose: the bench answers
+        with the form (`next: "form"`), or on an older bench with the steps
+        already filed beside the person's answers (`next: "outline"`). Either
+        way what comes next is the door's to name, and `_follow` follows it.
+        """
+        return self._put(target_id, kind, {})
+
+    def _follow(
+        self,
+        target_id: str,
+        kind: str,
+        answer: dict[str, Any],
+        want: Any,
+        strategy: Any,
+        brief: Any = None,
+    ) -> tuple[dict[str, Any], str]:
+        """WHAT THE DOOR NAMES NEXT IS WHAT HAPPENS NEXT.
+
+        Two names today. `next: "form"` is the plan door since rule 244: the
+        bench has put the agent's own proposal, the person's answers, the
+        stance line, one finished example and the BLANK FORM in front of us
+        and wants the form back filled. `next: "outline"` is the older plan
+        door, which wants the steps back before it builds a template. An
+        answer with no `next` -- and a `form` answer where a form already
+        stands -- is handed back untouched, because the rest of the loop is
+        what comes next.
+
+        Returns (answer, what was asked for and never came back).
+        """
+        if not isinstance(answer, dict):
+            return answer, ""
+        named = str(answer.get("next") or "")
+        if named == "form":
+            if not the_form_is_blank(answer):
+                return answer, ""
+            return self._fill_the_form(target_id, kind, answer, want, strategy, brief)
+        if named != "outline":
+            return answer, ""
+        bid_steps = [s for s in (answer.get("steps_you_bid") or []) if isinstance(s, dict)]
+        # AN AGENT'S OWN WINS ARE ITS SHELF. A want that needs the tools of a
+        # job this agent already won is that job again in other words, so
+        # where the door asks for an outline the ask starts from the shape
+        # that worked and only asks what changes. (This is the older plan
+        # door. The current one hands over a form and one finished example of
+        # its own, which is the same idea in the bench's hands.)
+        seed, _score = self._seed(brief)
+        payload = self._outline_payload(want, strategy, brief, seed)
+        payload["steps_you_bid"] = bid_steps
+        payload["the_person_answered"] = (
+            answer.get("the_person_answered") or answer.get("selection_answers") or []
+        )
+        outline = read_outline(
+            self._ask(
+                SEEDED_OUTLINE_INSTRUCTION if seed else PLAN_OUTLINE_INSTRUCTION,
+                payload,
+                "plan outline seeded" if seed else "plan outline",
+                head=self._head(answer),
+            )
+        )
+        if not outline.get("steps") and seed:
             # The model was shown a shape that worked and answered with
             # nothing. The shape is still the best thing anyone has for this
-            # want, so it goes in as it stands rather than costing the want.
+            # want, so it goes in as it stands rather than costing the plan.
             self.log.warning(
                 "draft loop: the adjust call answered with no steps; sending "
                 "the plan that was accepted before, unchanged"
             )
             outline = seed
-        if not outline.get("steps"):
-            return None
-        return self._put(target_id, kind, outline)
-
-    def _follow(
-        self, target_id: str, kind: str, answer: dict[str, Any], want: Any, strategy: Any
-    ) -> dict[str, Any]:
-        """WHAT THE DOOR NAMES NEXT IS WHAT HAPPENS NEXT. `next: "outline"`
-        is the one name today: the bench has put `steps_you_bid` beside
-        `the_person_answered` and wants the outline back before it builds a
-        template. One model ask, one PUT, and the answer to that PUT is the
-        template the rest of the loop reads. An answer with no `next` is
-        handed back untouched."""
-        if not isinstance(answer, dict) or answer.get("next") != "outline":
-            return answer
-        bid_steps = [s for s in (answer.get("steps_you_bid") or []) if isinstance(s, dict)]
-        payload = {
-            "want": want,
-            "what_the_person_said": strategy,
-            "steps_you_bid": bid_steps,
-            "the_person_answered": answer.get("the_person_answered") or [],
-        }
-        outline = read_outline(self._ask(PLAN_OUTLINE_INSTRUCTION, payload, "plan outline"))
         if not outline.get("steps"):
             # The model was shown its own steps and the answers and said
             # nothing. The steps it bid are still the best thing anyone has,
@@ -1176,7 +2095,7 @@ class DraftLoop:
                 ]
             }
         if not outline.get("steps"):
-            return answer
+            return answer, "outline"
         self.log.info(
             "draft loop %s target=%s: outline round -- %d step(s) bid, %d "
             "answer(s) from the person, %d step(s) sent back",
@@ -1186,9 +2105,44 @@ class DraftLoop:
             len(payload["the_person_answered"]),
             len(outline["steps"]),
         )
-        return self._put(target_id, kind, outline)
+        return self._put(target_id, kind, outline), ""
 
     # -- the pieces --------------------------------------------------------
+    # THE FORM'S OWN WORDS, VERBATIM (2026-09-11). The plan door no longer
+    # hands back a bare path and a note: a blank is a QUESTION in plain words
+    # ("Step 1, what do you do?") and, where the answer is a pick, the
+    # CHOICES it may be answered with ("finds, prepares, does, posts, buys,
+    # books, checks, emails, calls, meeting, waits, confirms, reviews"). Both
+    # are the bench's, both go in front of the model exactly as they came,
+    # and this module neither rewords them nor invents a choice list of its
+    # own -- a runtime that paraphrased the form would be answering a
+    # different question than the one the door will mark.
+    _BLANK_KEYS = (
+        ("question", "question"),
+        ("choices", "choices"),
+        ("note", "what_belongs_there"),
+        ("example", "example"),
+        ("cap", "up_to_characters"),
+        ("kind", "kind"),
+    )
+
+    def _blank_row(self, row: Any) -> dict[str, Any]:
+        row = row if isinstance(row, dict) else {}
+        out: dict[str, Any] = {"path": row.get("path")}
+        for name, label in self._BLANK_KEYS:
+            value = row.get(name)
+            if value not in (None, "", [], {}):
+                out[label] = value
+        # THE SAME SENTENCE TWICE IS NOT TWO SENTENCES (2026-09-11). The plan
+        # door sends `note` as a copy of `question` (draft_door.form_answer
+        # builds the blanks that way), so every blank arrived carrying its own
+        # words twice -- seven questions a step, doubled, on the one ask that
+        # is meant to fit the whole plan.
+        if out.get("what_belongs_there") == out.get("question"):
+            out.pop("what_belongs_there", None)
+        out["required"] = bool(row.get("required"))
+        return out
+
     def _fill_the_blanks(
         self, target_id: str, kind: str, answer: dict[str, Any], want: Any
     ) -> dict[str, Any]:
@@ -1202,16 +2156,8 @@ class DraftLoop:
                 "step_number": None if index is None else index + 1,
                 # ONE step. The draft has every other one and the model needs
                 # none of them to write this one's words.
-                "step": _fit(step_context(answer.get("draft"), index)),
-                "blanks": [
-                    {
-                        "path": row.get("path"),
-                        "what_belongs_there": row.get("note"),
-                        "example": row.get("example"),
-                        "required": bool(row.get("required")),
-                    }
-                    for row in rows
-                ],
+                "step": _fit(self._step_for(answer, index)),
+                "blanks": [self._blank_row(row) for row in rows],
             }
             if index is None:
                 payload["these_are"] = (
@@ -1225,6 +2171,7 @@ class DraftLoop:
                     instruction,
                     payload,
                     "blanks" if index is None else f"step {index + 1}",
+                    head=self._head(answer),
                 )
             )
             if not patches:
@@ -1248,20 +2195,32 @@ class DraftLoop:
     ) -> dict[str, Any]:
         """ONE problem at a time, for as long as the bench names one.
 
-        Advancing the draft is useful work. Repeating an identical draft and
-        problem is not: stop after three unchanged responses and let the
-        watcher advance to another target. There is no total step/round cap.
+        Advancing the draft is useful work. Being named for the same problem
+        over and over is not: the THIRD consecutive round on the same
+        (path, code) stops the draft and lets the watcher move to another
+        target. There is no total step/round cap.
 
-        WHAT A REPEAT GETS IS A BETTER PROMPT, NOT A LIMIT. When the bench
-        names the same path with the same code twice running, the next ask
-        carries what was sent last round and what the bench has for that path
-        now. Live on 2026-09-09, Greg spent rounds 123-132 on one REJ-15 on
-        `finalist_questions.0.0`, asked the same question in the same words
-        every time, and answered it the same way every time.
+        THE GUARD IS THE PROBLEM'S NAME, NOT THE DRAFT'S TEXT (2026-09-11).
+        It used to hash the whole draft with the next fix and the remaining
+        count, so a model that REWORDED the same bad field looked like
+        progress and the guard never tripped: the document changed every
+        round while the bench named the same field every round. On 2026-09-11
+        GPT-6 Astra died that way on `research_links[0].plan_use` -- two
+        identical asks, two rewordings, no end -- and Jan, Alice and Bobby
+        each burned the full 200-round ceiling on one want. Now the count is
+        keyed on the (path, code) the bench names, and a reworded answer to
+        the same named problem counts as the repeat it is.
+
+        WHAT THE FIRST REPEAT GETS IS A BETTER PROMPT, NOT A LIMIT. When the
+        bench names the same path with the same code twice running, the second
+        ask carries what was sent last round and what the bench has for that
+        path now. Live on 2026-09-09, Greg spent rounds 123-132 on one REJ-15
+        on `finalist_questions.0.0`, asked the same question in the same words
+        every time, and answered it the same way every time. Only the THIRD
+        naming of that same pair stops the draft.
         """
         last_named: tuple[str, str] | None = None
-        last_progress = None
-        unchanged = 0
+        named_before: dict[tuple[str, str], int] = {}
         while (
             not answer.get("ready")
             and not answer.get("closed")
@@ -1271,30 +2230,46 @@ class DraftLoop:
             fix = answer["next_fix"]
             path = str(fix.get("path") or "")
             code = str(fix.get("code") or "")
-            progress = json.dumps({"draft": answer.get("draft"),
-                                   "next_fix": fix, "remaining": answer.get("remaining")},
-                                  sort_keys=True, default=str)
-            unchanged = unchanged + 1 if progress == last_progress else 0
-            last_progress = progress
-            if unchanged >= 3:
-                return dict(answer, ok=False, error="draft_stalled",
-                            message="The draft and its next problem were unchanged after three patches; paused to avoid repeated model spending.")
+            named_before[(path, code)] = named_before.get((path, code), 0) + 1
+            if named_before[(path, code)] >= self.SAME_PROBLEM_ROUNDS:
+                return dict(
+                    answer,
+                    ok=False,
+                    error="draft_stalled",
+                    message=(
+                        f"The bench named {path or 'the same path'} "
+                        f"({code or 'no code'}) three times and the patches "
+                        "did not clear it; paused to avoid repeated model "
+                        "spending."
+                    ),
+                )
             index = step_of(path)
+            # A PROBLEM COMES BACK AS A QUESTION, NOT A CODE (2026-09-11).
+            # Where the door asks one -- "Step 1, what do you do? Choose one:
+            # finds, prepares, ..." -- the question and its choices ride in
+            # front of the model exactly as the door wrote them. `code` and
+            # `fix` still ride for a door that speaks the old way; neither is
+            # reworded here.
+            fix_this: dict[str, Any] = {
+                "path": fix.get("path"),
+                "current_value": fix.get("current"),
+                "code": fix.get("code"),
+                "fix": fix.get("fix"),
+                "detail": fix.get("detail"),
+            }
+            for name in ("question", "choices", "cap", "kind"):
+                value = fix.get(name)
+                if value not in (None, "", [], {}):
+                    fix_this[name] = value
             payload: dict[str, Any] = {
                 "want": want,
-                "fix_this": {
-                    "path": fix.get("path"),
-                    "current_value": fix.get("current"),
-                    "code": fix.get("code"),
-                    "fix": fix.get("fix"),
-                    "detail": fix.get("detail"),
-                },
+                "fix_this": fix_this,
                 "step_number": None if index is None else index + 1,
                 # The plan in one line per step, and the ONE step being
                 # changed. Never the draft: a thirty-step document in front of
                 # a one-field fix is the cost this loop exists to avoid.
                 "plan": outline_summary(answer.get("draft")),
-                "step": _fit(step_context(answer.get("draft"), index)),
+                "step": _fit(self._step_for(answer, index)),
             }
             # SAME PATH, SAME CODE AS LAST ROUND: say so, and hand back what
             # was sent beside what the bench has now. No strike rule and no
@@ -1321,7 +2296,9 @@ class DraftLoop:
             last_named = (path, code)
             # LAW A: and the tail of every fix ask.
             instruction = with_the_person_said(instruction, payload, answer)
-            patches = read_patches(self._ask(instruction, payload, f"fix {path or '?'}"))
+            patches = read_patches(
+                self._ask(instruction, payload, f"fix {path or '?'}", head=self._head())
+            )
             if not patches:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
                 # fenced reply with nothing in it, a refusal, a timeout); twice
@@ -1335,7 +2312,7 @@ class DraftLoop:
                 )
                 patches = read_patches(
                     self._ask(EMPTY_ANSWER_INSTRUCTION + instruction, payload,
-                              f"fix {path or '?'} (again)")
+                              f"fix {path or '?'} (again)", head=self._head())
                 )
             if not patches:
                 self.log.warning(
@@ -1395,9 +2372,15 @@ class DraftLoop:
         idempotency_key: str = "",
         file: bool = True,
     ) -> dict[str, Any]:
-        """Outline -> blanks -> fixes -> file. One want, one answer.
+        """ONE WANT, ONE ANSWER, and which road depends on the stage.
 
-        `file` false runs the whole loop and stops at the door: the document
+        `kind="bid"` is a PROPOSAL: one model call, one filing, no draft door
+        (rule 243). `kind="plan"` is the form: read what stands, open an empty
+        draft if nothing does, do whatever the door names next -- the form, or
+        an outline on an older bench -- then the blanks it left open, then the
+        content it named, then file.
+
+        `file` false runs the whole thing and stops at the door: the document
         the bench holds comes back on `draft` and nothing is filed.
         """
         want = (brief or {}).get("want") if isinstance(brief, dict) else None
@@ -1409,13 +2392,19 @@ class DraftLoop:
         caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
         self.prefix = stable_prefix(brief, act_kinds, with_tools=caches)
         self._tools_ride_the_outline = not caches
+        self.stance = stance_line(brief)
+        # TWO STAGES (rule 243, 2026-09-11). A PROPOSAL is the agent's short
+        # answer to a want and it is ONE CALL. A PLAN is the form, and only
+        # the agent the person picked is ever asked for one.
+        if kind == "bid":
+            return self._propose(target_id, brief, idempotency_key, file)
         # READ FIRST, EVERY CYCLE. This is the loop's first step and the only
         # thing that decides whether an outline goes out at all.
         state, answer = self._read_first(target_id, kind)
         if state == self.OVER:
             return self._gave_up(
                 target_id, kind,
-                "draft_closed" if answer.get("closed") else
+                closed_error(answer) if answer.get("closed") else
                 str(answer.get("error") or "draft_unreadable"),
                 str(
                     answer.get("closed")
@@ -1425,19 +2414,15 @@ class DraftLoop:
                 answer,
             )
         if state == self.NOTHING_STANDING:
-            opened = self._open(target_id, kind, want, strategy, brief, act_kinds)
-            if opened is None:
-                return self._gave_up(
-                    target_id, kind, "no_outline",
-                    "The model was asked for an outline and answered with no steps.",
-                )
-            answer = opened
+            answer = self._open(target_id, kind)
         # THE DOOR SAYS WHAT COMES NEXT. Read it before assuming a template.
-        answer = self._follow(target_id, kind, answer, want, strategy)
-        if answer.get("next"):
+        answer, unanswered = self._follow(
+            target_id, kind, answer, want, strategy, brief
+        )
+        if unanswered:
             return self._gave_up(
-                target_id, kind, "no_outline",
-                f"The door asked for the {answer.get(next)} and the model gave none.",
+                target_id, kind, f"no_{unanswered}",
+                f"The door asked for the {unanswered} and the model gave none.",
                 answer,
             )
         if not answer.get("ok") and not answer.get("closed"):
@@ -1466,7 +2451,7 @@ class DraftLoop:
         if not answer.get("ready"):
             return self._gave_up(
                 target_id, kind,
-                "draft_closed" if answer.get("closed") else "draft_not_ready",
+                closed_error(answer) if answer.get("closed") else "draft_not_ready",
                 str(
                     answer.get("closed")
                     or "The draft still has problems and the loop stopped before filing."

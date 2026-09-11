@@ -61,7 +61,11 @@ def test_an_approved_act_the_platform_carries_out_is_not_the_agents_move():
 
 
 def test_an_approved_outside_act_is_the_agents_to_go_and_do():
-    assert platform_move(_payload(acts=[{"act_id": "a1", "kind": "outside", "state": "approved"}])) is None
+    assert platform_move(_payload(acts=[{
+                    "act_id": "a1",
+                    "kind": "outside",
+                    "state": "approved",
+                }])) is None
 
 
 def test_a_step_the_person_holds_is_the_persons_move():
@@ -72,11 +76,25 @@ def test_a_step_the_person_holds_is_the_persons_move():
 
 def test_the_persons_words_are_always_the_agents_move():
     held = [{"act_id": "a1", "kind": "meeting", "state": "held"}]
-    spoke = _payload(acts=held, step_thread={"messages": [{"id": "m1", "who": "person"}], "unread_from_person": 1, "unanswered_elsewhere": []})
+    spoke = _payload(
+        acts=held,
+        step_thread={
+            "messages": [{"id": "m1", "who": "person"}],
+            "unread_from_person": 1,
+            "unanswered_elsewhere": [],
+        },
+    )
     assert platform_move(spoke, {"kinds": {"meeting": "held"}}) is None
     owed = _payload(acts=held, owed_replies=[{"id": "r1"}])
     assert platform_move(owed, {"kinds": {"meeting": "held"}}) is None
-    elsewhere = _payload(acts=held, step_thread={"messages": [], "unread_from_person": 0, "unanswered_elsewhere": [{"step_id": "s-0"}]})
+    elsewhere = _payload(
+        acts=held,
+        step_thread={
+            "messages": [],
+            "unread_from_person": 0,
+            "unanswered_elsewhere": [{"step_id": "s-0"}],
+        },
+    )
     assert platform_move(elsewhere, {"kinds": {"meeting": "held"}}) is None
 
 
@@ -90,18 +108,31 @@ def test_an_act_that_came_back_is_the_agents_move_again():
 
 
 def test_a_sent_act_leaves_the_outcome_to_the_agent():
-    assert platform_move(_payload(acts=[{"act_id": "a1", "kind": "email", "state": "sent"}])) is None
+    assert platform_move(_payload(acts=[{
+                    "act_id": "a1",
+                    "kind": "email",
+                    "state": "sent",
+                }])) is None
 
 
 def test_a_standing_wait_on_the_outside_world_is_not_the_agents_move():
-    waiting = _payload(waiting_outside={"on": "email_reply", "who": "Ruby at the studio", "what": "her answer"})
+    waiting = _payload(waiting_outside={
+            "on": "email_reply",
+            "who": "Ruby at the studio",
+            "what": "her answer",
+        })
     assert platform_move(waiting) == "waiting outside on Ruby at the studio (rule 216)"
     landed = _payload(
         waiting_outside={"on": "email_reply", "who": "Ruby", "what": "her answer"},
         inbound_replies=[{"id": "in-1"}],
     )
     assert platform_move(landed) is None
-    lapsed = _payload(waiting_outside={"on": "email_reply", "who": "Ruby", "what": "x", "until": "2000-01-01T00:00:00Z"})
+    lapsed = _payload(waiting_outside={
+            "on": "email_reply",
+            "who": "Ruby",
+            "what": "x",
+            "until": "2000-01-01T00:00:00Z",
+        })
     assert platform_move(lapsed) is None
 
 
@@ -116,7 +147,14 @@ def test_a_plain_working_step_is_the_agents_move():
 def _completed_run(goal, mode):
     return RunResult(
         run_id="run-x", status=RunStatus.COMPLETED, result={"summary": "Handled."},
-        checkpoint=Checkpoint(run_id="run-x", goal=goal, data={}, event_cursor=0, revision=0, updated_at="2026-09-09T00:00:00Z"),
+        checkpoint=Checkpoint(
+            run_id="run-x",
+            goal=goal,
+            data={},
+            event_cursor=0,
+            revision=0,
+            updated_at="2026-09-09T00:00:00Z",
+        ),
         usage=ModelUsage(total_tokens=10), iterations=1, observed_mode=mode,
     )
 
@@ -176,7 +214,8 @@ def test_a_platform_run_step_starts_no_model_run_and_logs_one_line(caplog):
     assert result["platform_steps"] == 1
     assert "goal" not in observed  # the model was never started
     assert resources.toll_bench.fetched == ["d1"]  # one read, the one the dispatch makes anyway
-    assert "step 2: the platform's move (meeting block held (rule 229)); no model call" in caplog.text
+    assert ("step 2: the platform's move (meeting block held (rule 229)); "
+            "no model call" in caplog.text)
 
 
 def test_an_act_held_for_allow_starts_no_model_run_even_when_a_pulse_is_due():

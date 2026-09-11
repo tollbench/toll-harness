@@ -8,6 +8,85 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.37.0] - 2026-09-11
+
+**Two stages: a proposal is one call, a plan is a form.**
+
+### What forced this release
+
+On 10 and 11 September the fleet spun. A bid was an eighteen-step, ~33KB
+document checked by 44 refusal rules: the strongest model on the fleet took one
+want from 139 problems down to 5 in 36 rounds and then died on two length caps,
+and three smaller models each burned the full 200-round ceiling on the same want
+and filed nothing. Two of those deaths were this package's own -- an empty tool
+catalog read as a missing one, and a stall guard that hashed the draft's text
+instead of naming the problem -- and the rest was the shape of the work: the
+agent was being asked to think up a plan AND type it into a 130-slot form, one
+blank at a time, before anyone had picked it.
+
+### Added
+
+- `FORM_INSTRUCTION`, `read_form`, `form_of`, `form_step`, `the_form_is_blank`
+  and `FORM_STEP_FIELDS`: the plan stage. When the draft door answers
+  `next: "form"` the runtime reads the blank form, the questions in the bench's
+  own plain words, the stance line and the finished example off that one
+  answer, fills the form in ONE model call, and PUTs it back as
+  `{"kind": "plan", "form": {"span_days": N, "steps": [...]}}`. The twelve form
+  fields are read out of the model's reply and everything else is dropped: a
+  field the door does not name is a field the door will not read.
+- `FORM_CHAR_BUDGET` (16,000 characters, ~4,000 input tokens) for that one ask.
+  The old 8,000 was written for a loop of thirty small rounds, and at 8,000 the
+  bench's seventeen-step example -- the single biggest lever a weak model has --
+  was the first thing shed on exactly the plans that need it most.
+- `stance_of` and `is_small_proposal`; `example_plan` now reads the bench's own
+  `example_plan` key (and still reads the older `example`).
+- `read_question` / `read_questions`: the proposal's questions are HAR blocks
+  the person TAPS, each with an id of its own -- `yes_no`, `single_choice`
+  (with its options), `short_answer`, or the `contact_picker` whose words are
+  the bench's and whose people are the person's. The agent writes only the
+  BLANK, on `fill`, and the bench composes the sentence from its frame; a
+  model that writes the whole sentence has the frame taken off it here rather
+  than reaching the person as "Should I Should I include the background?".
+  `finalist_questions` is always present, `[]` included.
+
+### Changed
+
+- **A PROPOSAL IS ONE MODEL CALL AND ONE FILING.** Seven fields, no draft door,
+  no steps: `run(kind="bid")` asks once, `POST .../proposals/validate` says what
+  the door would trim, and `POST .../proposals` files it. Every repair keyed off
+  `steps[]` (required blocks, contact binding, the blank-form drop, the local
+  mirror) moved into `_repair_the_plan_shaped_proposal` and runs only for a
+  proposal that carries steps, because none of them can run over a document
+  that is not there.
+- **A TRIM IS NOT A REFUSAL.** What the door says it corrected rides back on
+  `bench_fixed` -- from the validate door's `trimmed` on a proposal, from the
+  draft door's own `bench_fixed` on a plan -- and is logged and carried, never
+  asked about again. The harness trims nothing itself.
+- The draft loop is the PLAN's loop. A plan draft opens empty, and what comes
+  next is whatever the door names: the form, or (on an older bench) the outline
+  round, where this agent's own accepted plans still seed the shape.
+- `plan_failed` is terminal in the runtime and memoized like a closed want: the
+  bench has already scored the agent "selected, could not present a plan" and
+  asked the person to choose somebody else.
+
+### Fixed
+
+- **`tools: []` means NO tools, never the platform fallback.** An empty list is
+  the bench saying this want offers none; only a missing key (or a null) means
+  no index is published. Reading an empty list as unpublished handed the model
+  the fallback verbs, so every plan on a want with no tools carried a connection
+  row it could never use. `block_templates: {}` is the same answer, one line
+  away, and reads the same way now.
+- **The stall guard is keyed on the problem's (path, code), not the draft's
+  text.** A model that reworded the same bad field looked like progress to a
+  hash of the whole draft, and the guard never tripped; the third naming of the
+  same pair now ends the draft, consecutive or not -- the same count the bench
+  keeps.
+- A blank no longer arrives carrying its own sentence twice (the plan door
+  sends `note` as a copy of `question`), and a blanks round on a form draft is
+  asked about the FORM's step rather than the expanded document's, where the
+  bench has stamped connect steps of its own in front of the agent's.
+
 ## [0.36.5] - 2026-09-10
 
 ### Changed

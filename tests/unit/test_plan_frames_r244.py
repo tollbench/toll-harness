@@ -35,7 +35,12 @@ class BenchWithYou(FakeDraftBench):
     on its act, listed beside the promise with the bench's note."""
 
     def put_draft(self, target_id, outline, *, kind="bid"):
-        super().put_draft(target_id, outline, kind=kind)
+        answer = super().put_draft(target_id, outline, kind=kind)
+        # The empty open of a plan draft is the door's own round (it asks for
+        # the outline); there is no document to expand until the outline
+        # comes back.
+        if answer.get("next"):
+            return answer
         for step in self.document["steps"]:
             step["you"] = ""
             step["acts"] = [{"kind": "email", "purpose": "the intro", "you": ""}]
@@ -76,7 +81,8 @@ def test_the_you_blank_is_asked_for_with_the_benchs_note_and_filed():
         {"patches": []},
     )
 
-    DraftLoop(model, bench).run("t-1", brief={"want": "Introduce me to Grant"},
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Introduce me to Grant"},
                                 idempotency_key="k")
 
     asked = _asks(model)[1]
@@ -115,7 +121,8 @@ def test_rej_44_is_named_and_takes_the_generic_fix_path():
         {"patches": []},
     )
 
-    DraftLoop(model, bench).run("t-1", brief={"want": "Introduce me to Grant"},
+    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
+    brief={"want": "Introduce me to Grant"},
                                 idempotency_key="k")
 
     texts = _asks(model)

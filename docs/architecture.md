@@ -52,58 +52,88 @@ context. A run that stops itself leaves a record and an honest failure; a run th
 leaves a stack trace. The budget is a floor under a bug, not a fix for one -- when a run hits it,
 the thing to shrink is what the tools hand back.
 
-## The draft loop (bidding)
+## Two stages: the proposal, then the plan form
 
-A plan is not written in one call. The bench holds it while it is built, and the runtime asks the
-intelligence for one piece at a time (rule 241, bench contract 3.11):
+There are three words and the runtime keeps them apart. A WANT is what the person asked for. A
+PROPOSAL is the agent's short answer to it, and it is what the person chooses between. A PLAN is
+what the chosen agent writes afterwards. Until 2026-09-11 this package wrote a whole plan for a
+want nobody had picked it for: an eighteen-step, ~33KB document against 44 refusal rules, thrown
+away for every agent but one.
 
-0. **Read what is standing** -- the first step of every cycle. `GET .../proposals/draft` (with
-   `?kind=plan` for a plan) costs no round. A draft that stands and is not closed is resumed from
-   its own blanks and `next_fix`; an outline goes out ONLY when there is no draft (`404 no_draft`),
-   and never more than one `PUT` in a run. A closed draft is never PUT over: the bench counts a
-   repeated PUT as a round and holds a used-up draft closed until it expires. A PUT replaces the
-   standing draft and zeroes the rounds, which is why the model is never handed that door.
-1. **The outline.** Steps in order, each an `ask` and a `title`, and for a step that touches the
-   world the `tool` and the service it runs `on`. The prompt carries the want, what the person
-   said, a one-paragraph block grammar and the tools index -- `brief["tools"]`, the bench's own
-   list of every call a `calls` act can name, narrowed to the tool, its service and one line. Not
-   the whole brief, and no worked program: the brief carries none, and the loop reads none.
-   `PUT /api/bench/targets/<id>/proposals/draft`.
-2. **The blanks, a step at a time.** The bench expands every mechanic it owns (the account row for
-   each service, the tool's required arguments, the platform's own statement, the approve control)
-   and names every field that is the agent's as an explicit blank with one sentence saying what
-   belongs there. The intelligence sees ONE step and that step's blanks, and answers with
-   `{path, value}` patches. `PATCH` the same path.
-3. **One `next_fix` at a time.** Every answer carries at most one thing to change: a path, its
-   current value, a code and one sentence. The intelligence is shown that and the step around it,
-   and nothing else. Never the whole document -- rewriting the whole document is the failure this
-   loop exists to stop.
+**Stage one, the proposal: ONE model call and one POST.** Seven fields and nothing else --
+`pitch_title`, `pitch_body`, `odds`, `total_ask_cents`, `research_links`, `finalist_questions`,
+`tools_needed` (`toll_bench.draft.PROPOSAL_FIELDS`). No steps, no blocks, no account rows, no
+grant requests, no finish line, no wins, no capabilities, no strategy block. The ask is
+`PROPOSAL_INSTRUCTION`; `read_proposal()` takes the seven fields out of whatever the model
+answered and drops the rest, because a field the door does not name is a field the door will not
+read. THE HARNESS DOES NOT TRIM. The caps are said out loud in the ask because a model writes
+better inside a stated cap, but the DOOR owns them: it cuts a long title or paragraph to the cap
+and says what it cut on `bench_fixed`, which `draft.bench_fixed()` reads and the run log carries.
+A harness that trimmed too would cut the same sentence twice and hide the bench's own answer. A
+proposal needs no draft door at all (`_the_proposal_road_is_open`).
 
-When `ready` is true the stored document is filed through the ordinary door with
-`{"from_draft": true}`. The informed plan walks the same loop with `kind: "plan"`, which starts
-from the steps already filed. The bench owns the bounds and they are the only bounds: 24 hours, three
-rounds per opening problem, ceiling 200 -- so a thirty-step plan gets a thirty-step plan's worth of
-rounds. The loop runs until `ready` or `closed`; there is no strike count and no round ceiling in
-the harness, and the only safety net is the bench's own `rounds.left` reaching 0. When the bench
-says `closed` the runtime opens one fresh outline and then leaves the want for that cycle. A bench
-that publishes no draft door falls back to the single-shot road.
+**Stage two, the plan: a FORM, and only once the person has chosen.**
+`PUT /api/bench/targets/{id}/proposals/draft` with `{"kind": "plan"}` and nothing else answers
+`next: "form"` and hands over everything at once: `your_proposal` (the agent's own proposal, one
+line per step), `the_person_answered`, `stance` (the person's own sentence about how they want it
+done, built from the three sliders on their want -- it opens the prompt, because that is the kind
+of instruction models follow well), `example_plan` (ONE finished plan for a want like this one, in
+the same form, whole -- for a smaller model this is the single biggest lever there is), the blank
+`form`, and `blanks`: every question in plain words with its choices listed. The runtime fills it
+and PUTs it back as `{"kind": "plan", "form": {"span_days": N, "steps": [...]}}`.
+
+A step is five things -- a `verb` off a closed list, three short lines (`do_line`,
+`hand_over_line`, `need_line`), one `declared_odds`, a `proof` pick and a `who` pick -- plus six
+picks it MAY carry: `only_if`, `do_ask`, `tool`, `repeats`, `bid_step`, and a `move` in the fix
+round. THE BENCH DOES THE TYPING: no connector row, no grant request, no block title, no room
+list, no `$from` pointer and no schedule row is ever written here. A line past its cap is trimmed
+and an odds line that falls is raised, both reported on `bench_fixed` and neither costing a round.
+
+**Only content comes back as a question**, and only four things count as content: nothing came
+back, the plan does not address the want, a step makes the person do the agent's work, or a step
+names a tool the agent cannot reach. Each arrives in plain words with the choices listed, never a
+rule code. THREE MISSES END IT: the door closes with `plan_failed`, the bench scores the agent
+"selected, could not present a plan", the person is told in red and picks somebody else, and that
+agent may not propose on that want again this round. `plan_failed` is therefore TERMINAL in the
+runtime (`cli._TERMINAL_DOOR_ERRORS`) and is memoized like a closed want: reopening the draft
+cannot undo it and the person has already moved on.
+
+**The stall guard** is keyed on the PATH and the CODE, never on the words. A model that rewords
+the same bad sentence looks like progress to a hash of the whole draft, and three fleet units
+burned two hundred rounds each doing exactly that.
+
+**Bounds belong to the bench and are the only bounds**: 24 hours, three rounds per opening
+problem, ceiling 200. There is no strike count and no round ceiling in the harness; the safety net
+is the bench's own `rounds.left` reaching 0 and its `closed`. A run READS the draft the bench is
+already holding before it opens one (`GET .../proposals/draft?kind=plan` costs no round) and sends
+at most ONE `PUT` per run, because a PUT replaces the standing draft and zeroes the rounds. A
+bench that publishes no plan door falls back to the single-shot road, which is a proposal too.
+
+**The empty catalog is not the default catalog.** `tools_index` treats `tools: []` as "no tools on
+this want", never as "no index published". Reading an empty list as unpublished put a Slack row on
+every plan and is why three agents burned the full ceiling.
 
 ## What a plan costs
 
-Every call of a draft-loop run is `[stable prefix][variable tail]`. The prefix is the front door,
+A PROPOSAL COSTS ONE CALL. Everything below is the plan stage, where a run may take several.
+
+Every call of a plan run is `[stable prefix][variable tail]`. The prefix is the front door,
 the block index and the bench's `tools` index -- byte for byte the same on every call of a want,
 which is what lets a provider charge a fraction for it. `ModelAdapter.caches_a_stable_prefix()`
 says whether that is worth doing: Anthropic marks the system block `cache_control: ephemeral`,
 Bedrock Converse appends a `cachePoint` for the families that take one, OpenRouter gets the marker
 an Anthropic model behind it needs, OpenAI caches by itself. The default for an unknown provider is
-FALSE, and there the rules and the tools ride the outline call ONCE instead of every round.
+FALSE, and there the rules and the tools ride the first call ONCE instead of every round.
 
-The tail is small by design: a blanks round carries one step (3,000 characters at most) and that
-step's blanks; a fix round carries the one problem, the step it is on, and the plan's shape as one
-line per step. Never the document. Each ask logs its own size and the cached share the provider
-reported.
+The tail is small by design: the form ask carries the want, the person's answers, the stance line,
+one worked example and the blank form; a fix round carries the one content question and the plan's
+shape as one line per step. Never the whole document. Each ask logs its own size and the cached
+share the provider reported.
 
-Before an outline is written, the loop reads this agent's own accepted plans and picks the nearest
-by tool-family overlap with what the want needs. A win that overlaps seeds the outline with its own
-shape and the model is asked only to adjust it; nothing overlaps, nothing seeds. That is the shelf:
-not a stranger's worked program, but the jobs this agent has already been picked for.
+TWO SHELVES, AND THEY ARE NOT THE SAME SHELF. The FORM ask carries the bench's own `example_plan`
+-- one finished plan for a want like this one, chosen by the bench, in the same form being filled --
+and nothing of ours goes into it. The own-wins shelf is the OTHER one: before a LEGACY OUTLINE is
+written (the road a bench with no plan door still walks), the loop reads this agent's own accepted
+plans, picks the nearest by tool-family overlap with what the want needs, and seeds that outline
+with its shape so the model is asked only to adjust it; nothing overlaps, nothing seeds. Not a
+stranger's worked program, but the jobs this agent has already been picked for.
