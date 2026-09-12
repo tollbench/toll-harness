@@ -8,6 +8,69 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.38.3] - 2026-09-12
+
+**A step-level problem has two exits: replace the step, or drop it.**
+
+### What forced this release
+
+Production, 2026-09-11, one fleet unit on want 14db651d. The bench refused a
+form step `restates_the_pick` -- "The person picks who this goes to on their
+own step (step 1, Who should this go to?). Do not plan a step for it. Say what
+you DO with the people they pick, or drop this step." -- three rounds running.
+Each round the fix ask handed the model ONE LINE of the step
+(`form.steps.0.do_line`) and the model reworded that one line: "picks" became
+"selects". The verb `finds` never moved and the hand-over line stayed "A list
+of two contacts with their names and email addresses", so the bench's check
+stayed true. Three namings, `draft_stalled`, then `plan_failed`.
+
+Rewording one line of a step cannot clear a problem that is about the step.
+
+### Added
+
+- `whole_step_path`: `form.steps.2` names a WHOLE step; `form.steps.2.do_line`
+  names one line of it, and the two are different questions.
+- `WHOLE_STEP_FIX_INSTRUCTION`: when the bench names a whole step, the fix ask
+  hands the model EVERY field of it (`_whole_step_for`, not the `_fit` version
+  a one-line ask gets -- a field the model cannot see is a field that comes
+  back empty) and names two exits and no third: send the whole step back as
+  the patch value, or drop it.
+- `read_drop` and `DraftLoop._drop_step`: a drop is not a patch. It goes
+  through the door's own drop instruction --
+  `PATCH {"kind": "plan", "drop": {"step": N}}`, via the new
+  `drop_draft_step` on the provider and `drop_proposal_draft_step` on the API
+  client -- so the bench removes the step, renumbers what is left and answers
+  with its next problem. It spends one round and is recorded like a patch.
+  `read_drop` takes four spellings: the door's `{"drop": {"step": N}}`, a bare
+  `{"drop": N}`, `{"action": "drop", "step": N}`, and the word with no number,
+  which can only mean the step just named.
+- `RESTATING_STEP_INSTRUCTION`: on `restates_the_pick` the ask says what would
+  make it a step -- do something WITH the people (emails, meeting, calls,
+  posts, books) -- and that dropping it is the other answer, because the step
+  after it reads the picks straight off the person's own step.
+- `REPEATED_STEP_EXITS_INSTRUCTION`: the repeated branch now says plainly that
+  rewording did not work and names both exits, WHICHEVER path the bench used.
+  That is the branch the prod loop was in: named a field path three times and
+  patched that one field three times.
+
+### Changed
+
+- A whole-step question answered with ONE FIELD of that step is the wrong
+  shape: asked once more with the whole step in front of it, and the second
+  answer is taken whatever shape it is. A whole-step replacement sent against
+  a field path is no longer aimed back at the field (`_aim` already passes a
+  parent path through; there is now a test holding it).
+- The three-tries brake on one `(path, code)` is unchanged.
+
+### Note on the bench side
+
+As this shipped the bench still named `form.steps.N.do_line` and published no
+`drop` instruction (checked in `plan_form.py` and `draft_routes.py` on
+staging -- `drop` there is the draft ROW, not a step). Both paths are held: the
+field path the bench uses today, through the repeated branch, and the
+whole-step path it is moving to. The drop call is built to the agreed shape and
+a bench that does not publish it simply answers the ordinary way.
+
 ## [0.38.2] - 2026-09-11
 
 **Three refusals off every bid: the whole question, the want's own tools, and

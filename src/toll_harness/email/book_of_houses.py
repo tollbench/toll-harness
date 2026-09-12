@@ -311,6 +311,20 @@ class BookOfHousesApiClient:
             authenticated=True,
         )
 
+    def drop_proposal_draft_step(
+        self, target_id: str, step: int, kind: str = "plan"
+    ) -> dict[str, Any]:
+        """TAKE ONE STEP OUT. `{"kind": kind, "drop": {"step": N}}` on the same
+        PATCH door as a patch: the bench removes the step, renumbers what is
+        left and answers with its next problem. Spends one round, exactly like
+        a patch does.
+
+        The door publishes this beside `reorder_call` as `drop_call`.
+        """
+        return self.patch_proposal_draft(
+            target_id, None, kind, document={"drop": {"step": int(step)}}
+        )
+
     def patch_proposal_draft(
         self,
         target_id: str,

@@ -238,6 +238,46 @@ BLANKS_INSTRUCTION = (
     "...]}."
 )
 
+# THE CONTENT CODE THAT IS ABOUT THE WHOLE STEP, not a line of it.
+RESTATES_THE_PICK = "restates_the_pick"
+
+WHOLE_STEP_FIX_INSTRUCTION = (
+    "THE BENCH NAMED THE WHOLE STEP, NOT ONE LINE OF IT. Rewording a line "
+    "cannot clear this: the step itself is the problem. `step` below carries "
+    "every field of it. TWO EXITS AND NO THIRD:\n"
+    "  REPLACE IT -- the whole step back as the patch value, every field "
+    "filled, doing something different: "
+    '{"patches": [{"path": "<the path named below>", "value": {"verb": "...", '
+    '"do_line": "...", "hand_over_line": "...", "who": "agent", ...}}]}\n'
+    "  DROP IT -- the plan is better without it: "
+    '{"drop": {"step": <step_number below>}}\n'
+    "Answer with one or the other and nothing else. A patch to ONE FIELD of "
+    "this step is not an answer to this question.\n"
+)
+
+RESTATING_STEP_INSTRUCTION = (
+    "WHAT IS WRONG WITH THIS STEP: its whole work is handing back people the "
+    "person already picked. The bench asks WHO on a step of its own, out of "
+    "the person's private contact book, so there is nothing here for a step "
+    "of yours to find, get, identify or list. A step that stays must DO "
+    "SOMETHING WITH those people -- email them, meet them, call them, post to "
+    "them, book something for them -- and its `verb` must say so (emails, "
+    "meeting, calls, posts, books). If this step was only getting you the "
+    "names, DROP IT: the step after it reads the picks straight off the "
+    "person's own step, and no address ever rides the plan.\n"
+)
+
+REPEATED_STEP_EXITS_INSTRUCTION = (
+    "REWORDING DID NOT WORK. You have changed the words on this path and the "
+    "bench is naming it again, so the words are not what is wrong -- the STEP "
+    "is. Changing one line of it a third time cannot clear it. There are two "
+    "exits and no third:\n"
+    '  REPLACE THE WHOLE STEP: {"patches": [{"path": "<steps_path below>", '
+    '"value": {"verb": "...", "do_line": "...", "hand_over_line": "...", '
+    '"who": "agent", ...}}]} -- every field, doing something different.\n'
+    '  DROP THE STEP: {"drop": {"step": <step_number below>}}\n'
+)
+
 REPEATED_FIX_INSTRUCTION = (
     "THE BENCH IS NAMING THE SAME THING AGAIN. Your last patch did not clear "
     "it. `you_sent_last_round` is exactly what you sent and "
@@ -323,6 +363,72 @@ def read_patches(answer: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+_DROP_WORD = re.compile(r"\bdrop(?:ped|ping)?\b", re.IGNORECASE)
+_DIGITS = re.compile(r"\d+")
+
+
+def read_drop(answer: Any, asked_step: int | None = None) -> int | None:
+    """The 0-BASED step a model asked to DROP, or None.
+
+    Four shapes, because a raw model writes whichever one it read: the
+    `{"drop": {"step": N}}` the door takes, a bare `{"drop": N}`,
+    `{"action": "drop", "step": N}`, and the WORD drop with no number at all --
+    which can only mean the step the bench just named, so `asked_step` is the
+    answer. The number a model writes is the one the prompt showed it, which
+    is the 1-based `step_number`; `asked_step` settles any doubt.
+    """
+    if not isinstance(answer, dict):
+        return None
+    told = answer.get("drop")
+    if told is None and str(answer.get("action") or "").strip().lower() == "drop":
+        told = answer.get("step", True)
+    if told is None:
+        return None
+    number: Any = None
+    if isinstance(told, dict):
+        number = told.get("step", told.get("number"))
+    elif isinstance(told, bool):
+        number = None
+    elif isinstance(told, (int, float)):
+        number = told
+    elif isinstance(told, str):
+        if not _DROP_WORD.search(told) and not _DIGITS.search(told):
+            return None
+        found = _DIGITS.search(told)
+        number = int(found.group(0)) if found else None
+    if isinstance(number, bool) or number is None:
+        return asked_step
+    try:
+        wanted = int(number)
+    except (TypeError, ValueError):
+        return asked_step
+    if asked_step is None:
+        return wanted
+    # The prompt shows the 1-based step number; the door counts from zero.
+    # Either spelling of the step that was ASKED about reads as that step.
+    if wanted in (asked_step, asked_step + 1):
+        return asked_step
+    return wanted
+
+
+def _step_path(path: Any, index: int | None) -> str:
+    """`form.steps.N` for the step a field path sits on."""
+    text = str(path or "")
+    if index is None:
+        return text
+    prefix = "form." if text.startswith("form.") else ""
+    return f"{prefix}steps.{index}"
+
+
+def _is_a_field_patch(patches: Any, asked: str) -> bool:
+    """True when every patch names a FIELD of the step that was asked for
+    whole. `form.steps.0.do_line` against `form.steps.0` is the wrong shape."""
+    rows = [str(row.get("path") or "") for row in patches or [] if isinstance(row, dict)]
+    if not rows:
+        return False
+    return all(row.startswith(asked + ".") for row in rows)
+
+
 def read_outline(answer: dict[str, Any]) -> dict[str, Any]:
     """The outline out of the model's answer. `steps` is the only key that
     rides; anything else the model volunteered is a word it was not asked for
@@ -377,6 +483,18 @@ _STEP_PATH = re.compile(r"^(?:form\.)?steps\.(\d+)(?:\.|$)")
 
 def step_of(path: Any) -> int | None:
     match = _STEP_PATH.match(str(path or ""))
+    return int(match.group(1)) if match else None
+
+
+# A path that names a WHOLE STEP and no field on it. `form.steps.2` is the
+# step; `form.steps.2.do_line` is one line of it, and the two are different
+# questions (0.38.3).
+_WHOLE_STEP_PATH = re.compile(r"^(?:form\.)?steps\.(\d+)$")
+
+
+def whole_step_path(path: Any) -> int | None:
+    """The 0-based index when the bench named a WHOLE step, else None."""
+    match = _WHOLE_STEP_PATH.match(str(path or "").strip())
     return int(match.group(1)) if match else None
 
 
@@ -2453,6 +2571,11 @@ class DraftLoop:
                     ),
                 )
             index = step_of(path)
+            # THE WHOLE STEP, OR ONE LINE OF IT (0.38.3). `form.steps.2` with
+            # no field after it is the STEP being named, and rewording a line
+            # of it cannot clear that.
+            whole = whole_step_path(path)
+            repeated = (path, code) == last_named and bool(path)
             # A PROBLEM COMES BACK AS A QUESTION, NOT A CODE (2026-09-11).
             # Where the door asks one -- "Step 1, what do you do? Choose one:
             # finds, prepares, ..." -- the question and its choices ride in
@@ -2480,14 +2603,37 @@ class DraftLoop:
                 "plan": outline_summary(answer.get("draft")),
                 "step": _fit(self._step_for(answer, index)),
             }
+            # THE TWO EXITS, and the whole step to choose between them with.
+            # A step-level problem is answered by replacing the step or
+            # dropping it, so the ask carries EVERY field of it -- `_fit`
+            # sheds keys, and a field the model cannot see is a field it
+            # cannot fill in when it sends the step back.
+            if whole is not None or (repeated and index is not None):
+                payload["step"] = self._whole_step_for(answer, index)
+                payload["steps_path"] = _step_path(path, index)
+                payload["step_number"] = index + 1 if index is not None else None
             # SAME PATH, SAME CODE AS LAST ROUND: say so, and hand back what
             # was sent beside what the bench has now. No strike rule and no
             # round limit -- a model that is told its last answer did not land,
             # and shown it, can send something else; a model that is asked the
             # same question in the same words answers it the same way.
             instruction = FIX_INSTRUCTION
-            if (path, code) == last_named and path:
-                instruction = REPEATED_FIX_INSTRUCTION + FIX_INSTRUCTION
+            if whole is not None:
+                instruction = WHOLE_STEP_FIX_INSTRUCTION
+            if code == RESTATES_THE_PICK and (whole is not None or index is not None):
+                instruction = RESTATING_STEP_INSTRUCTION + instruction
+            if repeated:
+                # REWORDING DID NOT WORK. Say it plainly and name both exits,
+                # whichever path the bench used: the prod loop on 2026-09-11
+                # was named `form.steps.0.do_line` three times and patched
+                # that one line three times ("picks" -> "selects") while the
+                # verb and the hand-over line kept the check true.
+                head = REPEATED_FIX_INSTRUCTION
+                if index is not None:
+                    head = REPEATED_STEP_EXITS_INSTRUCTION
+                    if code == RESTATES_THE_PICK:
+                        head = RESTATING_STEP_INSTRUCTION + head
+                instruction = head + instruction
                 payload["your_last_patch_did_not_clear_this"] = {
                     "path": path,
                     "you_sent_last_round": self._last_sent_for(path),
@@ -2505,9 +2651,38 @@ class DraftLoop:
             last_named = (path, code)
             # LAW A: and the tail of every fix ask.
             instruction = with_the_person_said(instruction, payload, answer)
-            patches = read_patches(
-                self._ask(instruction, payload, f"fix {path or '?'}", head=self._head())
+            reply = self._ask(
+                instruction, payload, f"fix {path or '?'}", head=self._head()
             )
+            patches = read_patches(reply)
+            # THE STEP COMES OUT (0.38.3). A drop is not a patch: it is the
+            # door's own instruction, and it is the second exit on every
+            # step-level problem.
+            dropping = read_drop(reply, index)
+            if dropping is None and (whole is not None or repeated) and index is not None:
+                # A WHOLE-STEP QUESTION ANSWERED WITH ONE FIELD is the wrong
+                # shape: ask once more with the step in front of it, and take
+                # the field patch only if the second answer is the same shape.
+                if whole is not None and _is_a_field_patch(patches, path):
+                    self.log.info(
+                        "draft loop %s target=%s: %s was answered with one "
+                        "field of the step; asking once more for the whole "
+                        "step or a drop",
+                        kind,
+                        target_id,
+                        path,
+                    )
+                    reply = self._ask(
+                        WHOLE_STEP_FIX_INSTRUCTION + instruction,
+                        payload,
+                        f"fix {path} (whole step)",
+                        head=self._head(),
+                    )
+                    patches = read_patches(reply)
+                    dropping = read_drop(reply, index)
+            if dropping is not None:
+                answer = self._drop_step(target_id, kind, dropping, path, code)
+                continue
             if not patches:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
                 # fenced reply with nothing in it, a refusal, a timeout); twice
@@ -2534,6 +2709,40 @@ class DraftLoop:
                 break
             patches = self._aim(patches, path, kind, target_id)
             answer = self._patch(target_id, kind, patches, f"fix {path or '?'}")
+        return answer
+
+    def _whole_step_for(self, answer: Any, index: int | None) -> Any:
+        """EVERY field of one step, un-shed.
+
+        `_fit` drops the heavy keys to keep a one-field ask small, which is
+        right for a one-field ask and wrong here: a step being replaced whole
+        has to be seen whole, or the fields the model cannot see come back
+        empty.
+        """
+        return self._step_for(answer, index)
+
+    def _drop_step(
+        self, target_id: str, kind: str, index: int, path: str, code: str
+    ) -> dict[str, Any]:
+        """THE SECOND EXIT: take the step out through the door's own door.
+
+        Not a patch -- `{"kind": "plan", "drop": {"step": N}}` on the same
+        PATCH call -- so the bench renumbers what is left and answers with its
+        next problem, exactly as it does after a patch.
+        """
+        self.log.info(
+            "draft loop %s target=%s round=%d drop step %d (%s, %s)",
+            kind,
+            target_id,
+            self.rounds + 1,
+            index + 1,
+            path or "?",
+            code or "no code",
+        )
+        self._sent.append((path, {"drop": {"step": index}}))
+        answer = self.provider.drop_draft_step(target_id, index, kind=kind)
+        self.rounds += 1
+        self._record(target_id, kind, answer, f"drop step {index + 1}")
         return answer
 
     def _aim(

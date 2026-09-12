@@ -1830,6 +1830,26 @@ class BookOfHousesTollBenchProvider:
             self.api.patch_proposal_draft, target_id, list(patches or []), kind
         )
 
+    def drop_draft_step(
+        self, target_id: str, step: int, *, kind: str = "plan"
+    ) -> dict[str, Any]:
+        """ONE STEP OUT, through the door's own drop instruction.
+
+        THE SECOND EXIT ON A STEP-LEVEL PROBLEM (0.38.3). A step whose whole
+        work the bench refuses -- one that only restates the person's own
+        contact pick, say -- is answered by replacing it or by taking it out,
+        and rewording one line of it cannot clear it. `{"kind": ..., "drop":
+        {"step": N}}` on the PATCH door: the bench removes the step, renumbers
+        what is left, and answers with its next problem. One round, like a
+        patch.
+
+        A bench that publishes no drop instruction answers the ordinary way
+        and the loop carries on from whatever it says.
+        """
+        return self._draft_answer(
+            self.api.drop_proposal_draft_step, target_id, int(step), kind
+        )
+
     def read_draft(self, target_id: str, *, kind: str = "bid") -> dict[str, Any]:
         """The draft as it stands. Costs no round."""
         return self._draft_answer(self.api.get_proposal_draft, target_id, kind)
