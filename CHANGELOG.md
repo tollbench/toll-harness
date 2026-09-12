@@ -8,6 +8,82 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.39.0] - 2026-09-12
+
+**The who step is the agent's pick, and `missing_who` is answered with the
+door's own insert call.**
+
+### What forced this release
+
+Production, 2026-09-12, one deal on one want. The bench used to INSERT the
+"Who should this go to?" step into a plan by itself. On that walk it inserted
+one AFTER the agent's step 4 and then refused its own document as "step 5" --
+a step the agent never wrote, at a number that had moved under it while it was
+still answering questions about the plan. An agent set up to succeed picks the
+step itself; nothing is shoved into the middle of its work.
+
+So rule 238 was amended: the bench never inserts, the agent writes a form step
+`{"verb": "who", "who": "person", "declared_odds": n}` in front of the first
+step that reaches a person, and a plan that reaches somebody without one is
+REFUSED WITH THE BLOCK and the exact call that puts one in. Step numbers never
+move under the agent again.
+
+Which makes `missing_who` a problem with a known answer. The door names the
+call; this release SENDS it. Handing that question to a model -- "reword the
+step that reaches a person" -- would be the old contact loop in a new place:
+the step is not wrong, and there is nothing on it to reword.
+
+### Added
+
+- **`insert_draft_step` on the provider and `insert_proposal_draft_step` on
+  the API client.** `PATCH .../proposals/draft {"kind": "plan", "insert":
+  {"before": N, "step": {...}}}`, the third exit beside `patches` and `drop`.
+  `before` counts from ONE, like drop; the bench re-expands the plan and
+  slides every `only_if.step` and `repeats.of_step` at or past `before` up by
+  one. Spends one round, like a patch. A 422 `insert_not_possible` comes back
+  as its body, like every other door refusal.
+- **`read_insert`, `who_insert`, `who_step`, `who_odds` in `toll_bench.draft`.**
+  The insert call is read out of the door's own question -- brace-matched, so
+  spacing and quoting are the door's business and not a contract -- and BUILT
+  from the problem (`form.steps.N` plus that step's own declared odds, 0.5
+  when it has none) when the words carry no call.
+- **`DraftLoop._insert_step` and `_insert_the_who_step`.** A `missing_who`
+  problem short-circuits the model ask entirely: the call goes out, one line
+  in the log, and the loop carries on from the bench's next problem.
+- **REJ-45 / `who_step_missing`** as a refusal the agent can act on:
+  `blocks.REJ_WHO_STEP_MISSING`, in `FILE_DOOR_REFUSALS` so it comes back as a
+  result carrying `field`, `reason` and `fix` (and the refusal brake counts it
+  like any other), and `_who_step_missing_refusal` on both filing doors --
+  non-terminal, nothing repaired at home, because a harness that wrote the who
+  step would be writing the agent's plan.
+
+### Changed
+
+- **The form ask says whose step it is.** `WHO_STEP_SENTENCE` rides
+  `FORM_INSTRUCTION`: put a `who` step in front of the first step that reaches
+  a person, the bench writes its title, book, minutes and cost, ONE per plan,
+  and never plan a step to find, get or list the people. `who` joins the verb
+  list the door publishes.
+- **`RESTATING_STEP_INSTRUCTION` no longer says the bench asks who.** It says
+  the who step is a step YOU put in, and that a step which only hands back the
+  person's own picks should be dropped -- the same two exits as before.
+- **`missing_who`, `one_who_per_plan` and `who_reaches_nobody` are whole-step
+  codes** (`WHOLE_STEP_CODES`). A bench that names a FIELD path under one of
+  them is still naming the step, so the ask carries every field of it and both
+  exits; the last two are answered by the drop call that already existed.
+- **The front-door sheet and `CONTACT_STEP_SENTENCE`** say the agent puts the
+  who step in -- the form step at the draft door, or a PROVIDE step holding one
+  `contact_picker` block copied whole out of the brief's
+  `block_templates["who"]` at the file door -- and that a plan missing one is
+  refused REJ-45.
+
+### Unchanged
+
+The contact book is still not a question: a `contact_picker` on a PROPOSAL is
+refused REJ-15 and is still dropped before filing. Nothing in this package
+writes a who step into a plan during a repair; the refusal hands the agent the
+step and the agent writes it.
+
 ## [0.38.4] - 2026-09-12
 
 **Nobody withdraws a person's chosen agent over a bug that was not the

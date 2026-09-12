@@ -38,6 +38,12 @@ REJ_FRAME = blocks.REJ_FRAME
 # that question on `bid_template.finalist_questions` -- so it is repaired from
 # there and is deliberately not in REJ_CARRIES_THE_FORM.
 REJ_CONTACT_ROUTE = blocks.REJ_CONTACT_ROUTE
+
+# RULE 238 AMENDED (2026-09-12): the plan reaches a person and no who step
+# stands above it. The who step is the agent's pick now, so this refusal
+# carries the step to add and nothing here repairs it.
+REJ_WHO_STEP_MISSING = blocks.REJ_WHO_STEP_MISSING
+WHO_STEP_MISSING_CODE = blocks.WHO_STEP_MISSING_CODE
 # RULE: SAY WHERE EVERY ARGUMENT CAME FROM (2026-09-09). The bid door's
 # fourth question refuses an argument with no declared source and a tool
 # whose account row is missing from its own step.
@@ -146,6 +152,11 @@ FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
         "off_platform_payment",
         # The deal itself, not the filing: nothing to re-file until it changes.
         "deal_not_active",
+        # RULE 238 AMENDED (2026-09-12) / REJ-45: the plan reaches a person and
+        # no who step stands above it. A 4xx the agent can act on -- the door
+        # names the step to add -- so it comes back as a result with `field`,
+        # `reason` and `fix` on it, and the brake counts it like any other.
+        blocks.WHO_STEP_MISSING_CODE,
         # RULE 233 (2026-09-05): the shape door. The bench counts the empty
         # boxes on the cards and its sentence names the card and the field.
         *blocks.SHAPE_DOOR_REFUSALS,
@@ -264,10 +275,11 @@ HAR_FORMAT_SLUGS = frozenset(
         "communication",
         "yes_no",
         "number",
-        # RULE 238 CORRECTED (2026-09-11). A STEP format, and never a
-        # question: the bench stamps the who step into the plan itself, with
-        # the person's own contact book on it, and each pick arrives as a
-        # reference for `acts[].contact_ref`. It stays a legal HAR slug here
+        # RULE 238 CORRECTED (2026-09-11), AMENDED (2026-09-12). A STEP
+        # format, and never a question: who it goes to is a step of the plan,
+        # the AGENT puts it in, the bench writes the person's own contact book
+        # onto it, and each pick arrives as a reference for
+        # `acts[].contact_ref`. It stays a legal HAR slug here
         # because the step carries it; `_finalist_block_problems` refuses it
         # on a PROPOSAL in the door's own words.
         "contact_picker",
@@ -288,7 +300,8 @@ FINALIST_REFUSED_FORMATS = frozenset(
 )
 FINALIST_TEXT_FORMATS = frozenset({"short_answer", "written_response"})
 # RULE 238 CORRECTED (Steven, 2026-09-11): no picker belongs on a proposal at
-# all. The bench refuses one REJ-15 and asks who on a step of the plan.
+# all. The bench refuses one REJ-15, and who it goes to is a step of the PLAN
+# -- since 2026-09-12 a step the agent puts in itself.
 CONTACT_PICKER_FORMAT = blocks.CONTACT_PICKER_FORMAT
 # Rule 170: a choice control must offer real options, not an empty dropdown that
 # forces a type-in. Same minimums the step blocks carry.
@@ -1155,9 +1168,10 @@ class BookOfHousesTollBenchProvider:
         """RULE 240 / REJ-40: the door refused a plan that says nobody who.
 
         ONE repair is left here since rule 238 was corrected (2026-09-11).
-        Adding a contact question is not it -- the who step is the BENCH's, and
-        a picker on a proposal is refused REJ-15 -- so the only bid worth
-        filing again is the one where this person answered "find them for me":
+        Adding a contact question is not it -- the who step is a STEP of the
+        plan (the agent's own since 2026-09-12), and a picker on a proposal is
+        refused REJ-15 -- so the only bid worth filing again is the one where
+        this person answered "find them for me":
         the send is bound to a research run of the agent's own. Anything else
         and the door's own sentence is the answer, filed once and no more.
         """
@@ -1171,8 +1185,9 @@ class BookOfHousesTollBenchProvider:
         research = blocks.contact_research_of(brief)
         if research is None:
             _LOGGER.warning(
-                "Target %s: who this goes to is the bench's own step, so there "
-                "is nothing to add here; the door's own refusal is the answer",
+                "Target %s: who this goes to is a step of the plan and the "
+                "agent's own to write, so there is nothing to add here; the "
+                "door's own refusal is the answer",
                 target_id,
             )
             return proposal, None
@@ -1270,6 +1285,32 @@ class BookOfHousesTollBenchProvider:
         return diff
 
     @staticmethod
+    def _who_step_missing_refusal(error: Any) -> dict[str, Any]:
+        """The door's REJ-45, handed to the model in the door's own words.
+
+        Nothing is repaired here. The who step is the agent's pick (rule 238,
+        amended 2026-09-12) and a harness that wrote one would be writing the
+        plan. Non-terminal: a refused filing writes nothing, so the round is
+        not spent and the next filing can carry the step.
+        """
+        return {
+            "ok": False,
+            "error": blocks.WHO_STEP_MISSING_CODE,
+            "rej": error.rej,
+            "detail": error.message,
+            "terminal": False,
+            "fix": blocks.CONTACT_STEP_SENTENCE,
+            "message": (
+                "Nothing was filed. The bench refused this plan REJ-45: a step "
+                "reaches a person and no who step stands above it. `detail` "
+                "names the step. Put the person's who step in front of it -- a "
+                "PROVIDE step holding one `contact_picker` block, copied whole "
+                "out of the brief's `block_templates[\"who\"]` -- and file "
+                "once more. Do not plan a step to find or list the people."
+            ),
+        }
+
+    @staticmethod
     def _contact_route_refusal(error: Any) -> dict[str, Any]:
         """The door's REJ-40, handed to the model in the door's own words."""
         return {
@@ -1283,11 +1324,13 @@ class BookOfHousesTollBenchProvider:
                 "Nothing was filed. The bench refused this plan REJ-40: an act "
                 "that runs on the person's own account names nobody to send it "
                 "to, or a plan field holds a raw address. `detail` carries the "
-                "door's own words. YOU DO NOT ADD A CONTACT QUESTION -- the "
-                "bench stamps the who step into the plan itself. What this plan "
-                "must carry is an empty `contact_ref` for the person's pick to "
-                "fill, or a `found_contact` {name, email, source_url} the "
-                "person approves beside the exact message."
+                "door's own words. YOU DO NOT ADD A CONTACT QUESTION -- who it "
+                "goes to is a STEP, and since 2026-09-12 it is YOURS to put in "
+                "front of the first step that reaches somebody. What this plan "
+                "must carry is that step, an empty `contact_ref` for the "
+                "person's pick to fill, or a `found_contact` "
+                "{name, email, source_url} the person approves beside the "
+                "exact message."
             ),
         }
 
@@ -1863,6 +1906,30 @@ class BookOfHousesTollBenchProvider:
         """
         return self._draft_answer(
             self.api.drop_proposal_draft_step, target_id, int(step), kind
+        )
+
+    def insert_draft_step(
+        self, target_id: str, before: int, step: dict[str, Any], *, kind: str = "plan"
+    ) -> dict[str, Any]:
+        """ONE STEP IN, through the door's own insert instruction (0.39.0).
+
+        THE THIRD EXIT ON A STEP-LEVEL PROBLEM. `missing_who` is the one that
+        forced it: a plan that reaches a person needs a who step above it, the
+        who step is the agent's to put in, and the door hands back the exact
+        call. `{"kind": ..., "insert": {"before": N, "step": {...}}}` on the
+        PATCH door: the bench re-expands the plan, slides every pointer at or
+        past `before` up by one, and answers with its next problem. `before`
+        counts from ONE, like drop. Spends one round, like a patch.
+
+        A 422 `insert_not_possible` comes back as its BODY, like every other
+        door refusal here, and the loop reads its reason rather than retrying.
+        """
+        return self._draft_answer(
+            self.api.insert_proposal_draft_step,
+            target_id,
+            int(before),
+            dict(step or {}),
+            kind,
         )
 
     def read_draft(self, target_id: str, *, kind: str = "bid") -> dict[str, Any]:
@@ -2504,7 +2571,7 @@ class BookOfHousesTollBenchProvider:
                     )
                 # RULE 238 CORRECTED / REJ-40: the plan reaches a person and
                 # says nobody. A contact question is NOT the repair any more --
-                # the who step is the bench's own. The one bid worth filing
+                # the who step is a step of the plan. The one bid worth filing
                 # again is "find them for me", bound to a research run.
                 elif first.rej == REJ_CONTACT_ROUTE:
                     proposal, bound = self._bind_who_after(
@@ -2615,6 +2682,11 @@ class BookOfHousesTollBenchProvider:
                 # spent. The reservation was released just above; the door's
                 # own words and the question to ask come back non-terminal.
                 return self._contact_route_refusal(error)
+            if error.rej == REJ_WHO_STEP_MISSING:
+                # RULE 238 AMENDED (2026-09-12): the who step is the agent's
+                # pick, so there is nothing here to repair -- the door's own
+                # words and the step to add come back non-terminal.
+                return self._who_step_missing_refusal(error)
             if fleet_engaged and error.status in (404, 409):
                 # Terminal refusals for this round: bidding closed because an
                 # agent is selected, a bid already on file, participation
@@ -2998,6 +3070,11 @@ class BookOfHousesTollBenchProvider:
                         target_id, proposal_id, submitted_plan,
                         f"{idempotency_key}-{_retry_tag(error.rej)}",
                     )
+            if error.rej == REJ_WHO_STEP_MISSING:
+                # RULE 238 AMENDED (2026-09-12) at the SECOND door. Nothing is
+                # repaired: the step is the agent's to write, and a revision
+                # that writes it for them is a plan the agent never wrote.
+                return self._who_step_missing_refusal(error)
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
                 return self._block_refusal(target_id, error)
             raise

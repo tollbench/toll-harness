@@ -123,6 +123,17 @@ REJ_ROW_NEEDED_BEFORE = "REJ-43"
 # published on the brief's own `bid_template.finalist_questions`.
 REJ_CONTACT_ROUTE = "REJ-40"
 
+# RULE 238 AMENDED (2026-09-12): a plan step that reaches a person with no who
+# step above it. The who step is the AGENT's now -- the bench stopped
+# inserting one after it inserted its own step into the middle of a plan and
+# then refused the agent's document over a step the agent never wrote. What
+# this refusal hands back is the STEP: a PROVIDE step holding one
+# `contact_picker` block, copied whole out of the brief's
+# `block_templates["who"]`, or the form step {"verb": "who"} at the draft
+# door. Nothing is repaired at home; the door's own words are the answer.
+REJ_WHO_STEP_MISSING = "REJ-45"
+WHO_STEP_MISSING_CODE = "who_step_missing"
+
 # THE FRAME (Steven, 2026-09-10): the bench refuses an `outcome_promise` that
 # starts in the first person, a `minor_detail` line that does not start with an
 # -ing word, or a `you` line that is a status phrase or a promise, and the
@@ -1169,11 +1180,16 @@ def _align_grant_steps(
 #
 # A person is contacted through their own contact book and never through a
 # loose address. THE BOOK CAME OUT OF THE QUESTIONS: who this goes to is a
-# STEP the BENCH stamps into the plan -- ask PROVIDE, control `contact_picker`,
-# title "Who should this go to?", `count` a FLOOR and never a ceiling -- in
-# front of the first step that reaches anybody, after the person has chosen
-# this agent. The agent never writes that step and never sees a picker on the
-# proposal form.
+# STEP of the plan -- ask PROVIDE, control `contact_picker`, title "Who should
+# this go to?", `count` a FLOOR and never a ceiling -- in front of the first
+# step that reaches anybody, after the person has chosen this agent.
+#
+# AMENDED 2026-09-12: THE AGENT PUTS THAT STEP IN, the bench does not. On the
+# plan form it is a step {"verb": "who", "who": "person", "declared_odds": n}
+# and the bench writes the title, the book and the mechanics onto it; on a
+# whole plan filed at the file door it is the brief's `block_templates["who"]`
+# copied whole. A plan that reaches somebody without one is refused REJ-45.
+# The agent still never sees a picker on the PROPOSAL form (REJ-15).
 #
 # WHAT FORCED THE CORRECTION. One fleet unit filed a plan whose step 2 was
 # "finds two friends from the contact list provided by the person" -- a step
@@ -1206,12 +1222,17 @@ PERSON_LANE = "person"
 # The door's own words when it refuses a plan for not saying who (REJ-40), and
 # the words the mirror says about a picker on a proposal (REJ-15).
 CONTACT_STEP_SENTENCE = (
-    "YOU DO NOT SAY WHO THIS GOES TO: THE BENCH DOES. It stamps a step of its "
-    "own -- \"Who should this go to?\", the person's own contact book on it -- "
-    "in front of your first step that reaches somebody, and each pick arrives "
-    "as a reference for acts[].contact_ref. Leave `contact_ref` empty, never "
-    "put an address in the plan, and do not plan a step to find or list the "
-    "people: say what you DO with the people they pick."
+    "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN (amended 2026-09-12). In "
+    "front of your first step that reaches somebody goes a step of its own -- "
+    "\"Who should this go to?\", the person's own contact book on it: on the "
+    "plan form a step {\"verb\": \"who\", \"who\": \"person\", "
+    "\"declared_odds\": <your number>}, on a whole plan filed here a PROVIDE "
+    "step holding one `contact_picker` block, copied whole out of "
+    "block_templates[\"who\"]. The bench writes its title and its mechanics, "
+    "never the step itself, and each pick arrives as a reference for "
+    "acts[].contact_ref. ONE who step per plan. Leave `contact_ref` empty, "
+    "never put an address in the plan, and do not plan a step to find or list "
+    "the people: say what you DO with the people they pick."
 )
 CONTACT_QUESTION_REFUSED = (
     "the contact book is not one of your questions: the person picks who this "
@@ -1371,11 +1392,12 @@ def merge_required_blocks(
     _account` ROW, onto the step that uses it -- never a GRANT step of the
     harness's own making, which is exactly what REJ-38 refuses.
 
-    RULE 238 CORRECTED (2026-09-11). THE QUESTIONS ARE NOT TOUCHED. This used
-    to put the brief's own `contact_picker` on a bid whose repaired steps
-    reached a person; the bench now refuses a contact question on a proposal
-    outright (REJ-15) and stamps the who STEP into the plan itself, so the
-    repair that was meant to save a bid was spending every one of them.
+    RULE 238 CORRECTED (2026-09-11), AMENDED (2026-09-12). THE QUESTIONS ARE
+    NOT TOUCHED. This used to put the brief's own `contact_picker` on a bid
+    whose repaired steps reached a person; the bench refuses a contact
+    question on a proposal outright (REJ-15), and who it goes to is a STEP --
+    the agent's own to write, never this package's and never the bench's -- so
+    the repair that was meant to save a bid was spending every one of them.
     """
     steps, inserted = _merge_step_form(
         proposal,

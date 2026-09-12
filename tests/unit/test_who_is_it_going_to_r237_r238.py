@@ -362,9 +362,9 @@ def test_a_bid_shaped_wrong_is_still_the_door_s_to_say_so():
 
 
 def test_this_package_writes_no_who_step_of_its_own():
-    # The bench stamps it. A harness that wrote one would be writing the step
-    # whose whole work is handing back the person's own pick -- the thing that
-    # forced the correction.
+    # The AGENT picks it (amended 2026-09-12) and the door refuses a plan that
+    # is missing it. A harness that wrote one in a repair would be writing the
+    # agent's plan, which is the thing that forced the correction.
     plan = _plan(WORK_STEP)
     merged, _inserted = blocks.merge_required_blocks(
         plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
@@ -375,17 +375,21 @@ def test_this_package_writes_no_who_step_of_its_own():
         assert "contact_picker" not in formats
 
 
-def test_the_runtime_sheet_says_the_bench_asks_who():
+def test_the_runtime_sheet_says_the_agent_puts_the_who_step_in():
+    # AMENDED 2026-09-12: the bench stopped inserting the step; the sheet has
+    # to say whose step it is now, or the agent writes a plan without one.
     from toll_harness.core.runtime import TOLL_BENCH_SYSTEM_INSTRUCTION
 
-    assert "THE BENCH DOES" in TOLL_BENCH_SYSTEM_INSTRUCTION
+    assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in TOLL_BENCH_SYSTEM_INSTRUCTION
+    assert '"verb": "who"' in TOLL_BENCH_SYSTEM_INSTRUCTION
+    assert "REJ-45" in TOLL_BENCH_SYSTEM_INSTRUCTION
     assert "never plan a step to find or list the" in TOLL_BENCH_SYSTEM_INSTRUCTION
     assert "Never add a picker they already declined" not in TOLL_BENCH_SYSTEM_INSTRUCTION
 
 
 def test_contact_picker_is_still_a_har_slug_because_the_who_step_carries_it():
-    # The bench stamps it onto a step. A mirror that called the slug unknown
-    # would refuse the bench's own plan at home.
+    # The who STEP carries it. A mirror that called the slug unknown would
+    # refuse a legal plan at home.
     from toll_harness.toll_bench.book_of_houses import HAR_FORMAT_SLUGS
 
     assert "contact_picker" in HAR_FORMAT_SLUGS
@@ -510,9 +514,13 @@ def test_the_rej40_refusal_hands_back_the_who_step_in_the_door_s_words():
     result = _provider(api).submit_proposal("t-1", _plan(FUTURE_STEP), "idem-3")
     assert result["ok"] is False
     assert result["detail"] == "names nobody to send it to"
-    assert "THE BENCH DOES" in result["fix"]
+    assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in result["fix"]
     assert "do not plan a step to find or list the people" in result["fix"]
-    assert "contact_picker" not in result["fix"]
+    # The picker is NAMED now (amended 2026-09-12) -- as the who STEP's own
+    # block, copied out of the brief's templates, never as a question on the
+    # proposal, which the bench still refuses REJ-15.
+    assert 'block_templates["who"]' in result["fix"]
+    assert "question" not in result["fix"]
     # Filed ONCE. A harness that kept bouncing the same plan spends the run.
     assert len(api.submissions) == 1
 

@@ -241,6 +241,49 @@ BLANKS_INSTRUCTION = (
 # THE CONTENT CODE THAT IS ABOUT THE WHOLE STEP, not a line of it.
 RESTATES_THE_PICK = "restates_the_pick"
 
+# THE WHO STEP IS THE AGENT'S PICK (rule 238, amended 2026-09-12).
+#
+# WHAT FORCED IT: on production, 2026-09-12, the bench INSERTED its own who
+# step after the agent's step 4 and then refused its own document as "step 5"
+# -- a step the agent never wrote. So the bench stopped inserting. The agent
+# picks the step like it picks `emails` or `meeting`, and a plan that reaches
+# somebody with no who step above it is REFUSED WITH THE BLOCK and the exact
+# call that puts one in. Step numbers never move under the agent again.
+MISSING_WHO = "missing_who"
+ONE_WHO_PER_PLAN = "one_who_per_plan"
+WHO_REACHES_NOBODY = "who_reaches_nobody"
+
+# Every content code that is about the STEP and not a line of it. A bench that
+# names a field path under one of these is still naming the step: there is no
+# line on it to reword.
+WHOLE_STEP_CODES = frozenset(
+    {RESTATES_THE_PICK, MISSING_WHO, ONE_WHO_PER_PLAN, WHO_REACHES_NOBODY}
+)
+
+# The door's 422 when the insert it named cannot be made (no `step` object,
+# `before` out of range). Logged with its reason and never retried blindly.
+INSERT_NOT_POSSIBLE = "insert_not_possible"
+
+# The who step, as the agent writes it: three fields and no more. Everything
+# else on it -- the title, the person's own contact book, the minutes, the
+# cost -- is the bench's, and a do_line or a proof written here is ignored.
+WHO_VERB = "who"
+DEFAULT_WHO_ODDS = 0.5
+
+WHO_STEP_SENTENCE = (
+    "WHO IT GOES TO IS A STEP, AND THE STEP IS YOURS TO PUT IN (rule 238, "
+    "amended 2026-09-12). In front of the FIRST step that reaches a person -- "
+    "emails, meeting, calls, or any send whose recipient is the person's to "
+    "choose -- write one step of its own: "
+    '{"verb": "who", "who": "person", "declared_odds": <your number>}. '
+    "The bench writes everything else on it: its title, the person's own "
+    "contact book, its minutes and its cost. ONE who step per plan -- every "
+    "send below it reads the same picks -- and never plan a step to find, get "
+    "or list the people: say what you DO with the ones they pick. A plan that "
+    "reaches somebody with no who step above it is refused `missing_who`, and "
+    "the door hands back the exact call that puts one in.\n"
+)
+
 WHOLE_STEP_FIX_INSTRUCTION = (
     "THE BENCH NAMED THE WHOLE STEP, NOT ONE LINE OF IT. Rewording a line "
     "cannot clear this: the step itself is the problem. `step` below carries "
@@ -257,14 +300,15 @@ WHOLE_STEP_FIX_INSTRUCTION = (
 
 RESTATING_STEP_INSTRUCTION = (
     "WHAT IS WRONG WITH THIS STEP: its whole work is handing back people the "
-    "person already picked. The bench asks WHO on a step of its own, out of "
-    "the person's private contact book, so there is nothing here for a step "
-    "of yours to find, get, identify or list. A step that stays must DO "
-    "SOMETHING WITH those people -- email them, meet them, call them, post to "
-    "them, book something for them -- and its `verb` must say so (emails, "
-    "meeting, calls, posts, books). If this step was only getting you the "
-    "names, DROP IT: the step after it reads the picks straight off the "
-    "person's own step, and no address ever rides the plan.\n"
+    "person already picked. WHO IT GOES TO IS ITS OWN STEP -- a step YOU put "
+    "in the plan, verb `who`, where the person opens their own private "
+    "contact book and picks -- so there is nothing here for a step of yours "
+    "to find, get, identify or list. A step that stays must DO SOMETHING WITH "
+    "those people -- email them, meet them, call them, post to them, book "
+    "something for them -- and its `verb` must say so (emails, meeting, "
+    "calls, posts, books). If this step was only getting you the names, DROP "
+    "IT: the step after it reads the picks straight off the who step, and no "
+    "address ever rides the plan.\n"
 )
 
 REPEATED_STEP_EXITS_INSTRUCTION = (
@@ -409,6 +453,126 @@ def read_drop(answer: Any, asked_step: int | None = None) -> int | None:
     if wanted in (asked_step, asked_step + 1):
         return asked_step
     return wanted
+
+
+# ---------------------------------------------------------------------------
+# THE INSERT CALL — the door names it, the harness sends it
+# ---------------------------------------------------------------------------
+# `missing_who` is not a question about words. The door says exactly which
+# call answers it, in the call's own JSON, so the answer is to SEND THAT CALL.
+# Asking a model to reword a step that is not wrong is how the old contact
+# loop burned its rounds.
+_INSERT_KEY = re.compile(r"[\"']?insert[\"']?\s*:\s*\{")
+
+
+def _balanced_object(text: str, start: int) -> str | None:
+    """The JSON object that OPENS at `start`, brace-counted, strings skipped."""
+    if start < 0 or start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    quote = ""
+    for position in range(start, len(text)):
+        char = text[position]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                in_string = False
+            continue
+        if char in "\"'":
+            in_string = True
+            quote = char
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : position + 1]
+    return None
+
+
+def read_insert(text: Any) -> dict[str, Any] | None:
+    """The `{"before": N, "step": {...}}` the door wrote into its question.
+
+    Robust to spacing and to whichever quotes the door used, because what is
+    being read is a sentence with JSON in it and not a JSON document. None
+    when there is no insert call in the words at all.
+    """
+    raw = str(text or "")
+    if not raw:
+        return None
+    for match in _INSERT_KEY.finditer(raw):
+        chunk = _balanced_object(raw, raw.find("{", match.end() - 1))
+        if chunk is None:
+            continue
+        try:
+            parsed = json.loads(chunk)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("step"), dict):
+            continue
+        out: dict[str, Any] = {"step": dict(parsed["step"])}
+        before = parsed.get("before")
+        if isinstance(before, bool):
+            before = None
+        if isinstance(before, (int, float)):
+            out["before"] = int(before)
+        elif isinstance(before, str) and before.strip().isdigit():
+            out["before"] = int(before.strip())
+        return out
+    return None
+
+
+def who_odds(step: Any) -> float:
+    """The odds the who step carries: the named step's own number, or 0.5.
+
+    The bench clamps it like every other step's, so nothing is clamped here.
+    """
+    if isinstance(step, dict):
+        odds = step.get("declared_odds")
+        if isinstance(odds, (int, float)) and not isinstance(odds, bool):
+            return float(odds)
+    return DEFAULT_WHO_ODDS
+
+
+def who_step(odds: Any = None) -> dict[str, Any]:
+    """The three fields of a who step. Everything else on it is the bench's."""
+    return {
+        "verb": WHO_VERB,
+        "who": "person",
+        "declared_odds": odds if isinstance(odds, (int, float)) and not isinstance(odds, bool)
+        else DEFAULT_WHO_ODDS,
+    }
+
+
+def who_insert(fix: Any, step: Any = None, index: int | None = None) -> dict[str, Any] | None:
+    """THE CALL THAT ANSWERS `missing_who`, built from the door's own words.
+
+    The door writes the whole call into its question, so that is read first
+    and sent back as it came. When the words carry no call -- an older bench,
+    a question reworded -- the same call is BUILT from what the problem
+    already says: the path names the step that reaches a person (0-based), the
+    who step goes in front of it (`before` counts from ONE, like move and
+    drop), and its odds are that step's own.
+    """
+    fix = fix if isinstance(fix, dict) else {}
+    for key in ("question", "fix", "detail", "message", "current"):
+        found = read_insert(fix.get(key))
+        if found is None:
+            continue
+        if not isinstance(found.get("before"), int):
+            if index is None:
+                continue
+            found["before"] = index + 1
+        return found
+    if index is None:
+        return None
+    return {"before": index + 1, "step": who_step(who_odds(step))}
 
 
 def _step_path(path: Any, index: int | None) -> str:
@@ -1077,9 +1241,10 @@ FINALIST_DEFAULT_FORMAT = "short_answer"
 # is read only so a model still writing the old shape keeps its question
 # instead of having it thrown away.
 _QUESTION_WORD_KEYS = ("title", "question", "prompt", "text", "fill")
-# RULE 238 CORRECTED (Steven, 2026-09-11): THE CONTACT BOOK IS NOT A QUESTION.
-# Who this goes to is a STEP of the plan that the BENCH stamps, after the
-# person has chosen this agent, out of their own private book -- so a
+# RULE 238 (Steven, 2026-09-11; amended 2026-09-12): THE CONTACT BOOK IS NOT A
+# QUESTION. Who this goes to is a STEP of the plan -- one the AGENT puts in
+# (verb `who`) and the bench writes the person's own book onto, after they
+# have chosen this agent -- so a
 # `contact_picker` on a PROPOSAL is refused REJ-15 at the door. The slug is
 # kept here for one reason: to recognise it and DROP it if a model writes one.
 CONTACT_PICKER_FORMAT = "contact_picker"
@@ -1238,7 +1403,8 @@ def read_question(entry: Any, ordinal: int) -> dict[str, Any] | None:
         return None
     fmt = str(entry.get("format") or "").strip().lower()
     if fmt == CONTACT_PICKER_FORMAT:
-        # Not ours to ask. The who step is the bench's (rule 238 corrected).
+        # Not ours to ask HERE. Who it goes to is a step of the plan, and
+        # since 2026-09-12 it is the agent's own step (verb `who`).
         return None
     words = _question_words(entry)
     if not words:
@@ -1529,7 +1695,8 @@ FORM_INSTRUCTION = (
     "-- so add entries to the blank form or drop them freely. You never write "
     "a connect row, a grant request, a block title, a room list, a schedule "
     "row or a pointer: the bench writes every one of those from your picks.\n"
-    'Answer: {"span_days": 14, "steps": [{"verb": "finds", "do_line": "...", '
+    + WHO_STEP_SENTENCE
+    + 'Answer: {"span_days": 14, "steps": [{"verb": "finds", "do_line": "...", '
     '"hand_over_line": "...", "need_line": "", "declared_odds": 0.4, '
     '"proof": "text", "who": "agent"}, ...]}.'
 )
@@ -2439,7 +2606,9 @@ class DraftLoop:
     # hands back a bare path and a note: a blank is a QUESTION in plain words
     # ("Step 1, what do you do?") and, where the answer is a pick, the
     # CHOICES it may be answered with ("finds, prepares, does, posts, buys,
-    # books, checks, emails, calls, meeting, waits, confirms, reviews"). Both
+    # books, checks, emails, calls, meeting, who, waits, confirms, reviews").
+    # `who` is the step the person picks on, and since 2026-09-12 it is the
+    # AGENT's to put in front of the first step that reaches somebody. Both
     # are the bench's, both go in front of the model exactly as they came,
     # and this module neither rewords them nor invents a choice list of its
     # own -- a runtime that paraphrased the form would be answering a
@@ -2575,6 +2744,22 @@ class DraftLoop:
             # no field after it is the STEP being named, and rewording a line
             # of it cannot clear that.
             whole = whole_step_path(path)
+            # THE WHO CODES ARE ALWAYS ABOUT THE STEP (0.39.0). A bench that
+            # names a field path under one of them is naming the step anyway.
+            if whole is None and index is not None and code in WHOLE_STEP_CODES:
+                whole = index
+            # `missing_who` IS NOT A QUESTION FOR THE MODEL (0.39.0). The door
+            # named the call that answers it -- a who step in front of the
+            # step that reaches somebody -- so the call goes out and the model
+            # is never asked to reword a step that is not wrong.
+            if code == MISSING_WHO:
+                inserted = self._insert_the_who_step(
+                    target_id, kind, fix, answer, index, path
+                )
+                if inserted is not None:
+                    last_named = (path, code)
+                    answer = inserted
+                    continue
             repeated = (path, code) == last_named and bool(path)
             # A PROBLEM COMES BACK AS A QUESTION, NOT A CODE (2026-09-11).
             # Where the door asks one -- "Step 1, what do you do? Choose one:
@@ -2744,6 +2929,93 @@ class DraftLoop:
         self.rounds += 1
         self._record(target_id, kind, answer, f"drop step {index + 1}")
         return answer
+
+    def _insert_step(
+        self,
+        target_id: str,
+        kind: str,
+        before: int,
+        step: dict[str, Any],
+        path: str,
+        code: str,
+    ) -> dict[str, Any]:
+        """THE THIRD EXIT: a step the plan was missing goes IN.
+
+        Not a patch -- `{"kind": "plan", "insert": {"before": N, "step": {...}}}`
+        on the same PATCH door -- so the bench expands the whole plan again and
+        slides every pointer at or past `before` up by one. `before` counts
+        from ONE, like move and drop. One round, like a patch.
+        """
+        self.log.info(
+            "draft loop %s target=%s round=%d insert a %s step before step %d "
+            "(%s, %s)",
+            kind,
+            target_id,
+            self.rounds + 1,
+            str(step.get("verb") or "?"),
+            before,
+            path or "?",
+            code or "no code",
+        )
+        self._sent.append((path, {"insert": {"before": before, "step": step}}))
+        answer = self.provider.insert_draft_step(target_id, before, step, kind=kind)
+        self.rounds += 1
+        self._record(target_id, kind, answer, f"insert before step {before}")
+        return answer
+
+    def _insert_the_who_step(
+        self,
+        target_id: str,
+        kind: str,
+        fix: dict[str, Any],
+        answer: dict[str, Any],
+        index: int | None,
+        path: str,
+    ) -> dict[str, Any] | None:
+        """`missing_who`: SEND THE CALL THE DOOR NAMED, do not ask for words.
+
+        The door's question carries the whole insert call. It goes back as it
+        came. None means the call could not be made -- a door with no insert
+        instruction, a problem with no step in its path, or a 422
+        `insert_not_possible` -- and then the caller falls back to the
+        ordinary whole-step ask, once, like any other step-level problem. A
+        refused insert is never re-sent blindly: the same problem three times
+        stops the draft, the way every other repeated problem does.
+        """
+        if getattr(self.provider, "insert_draft_step", None) is None:
+            self.log.warning(
+                "draft loop %s target=%s: the bench named %s and this door has "
+                "no insert call; asking the agent for the whole step instead",
+                kind,
+                target_id,
+                MISSING_WHO,
+            )
+            return None
+        insert = who_insert(fix, self._step_for(answer, index), index)
+        if insert is None:
+            self.log.warning(
+                "draft loop %s target=%s: %s named %s and no insert call could "
+                "be read or built from it",
+                kind,
+                target_id,
+                MISSING_WHO,
+                path or "?",
+            )
+            return None
+        sent = self._insert_step(
+            target_id, kind, int(insert["before"]), dict(insert["step"]), path, MISSING_WHO
+        )
+        if isinstance(sent, dict) and str(sent.get("error") or "") == INSERT_NOT_POSSIBLE:
+            self.log.warning(
+                "draft loop %s target=%s: the door refused the who-step insert "
+                "(%s: %s); asking the agent for the whole step instead",
+                kind,
+                target_id,
+                INSERT_NOT_POSSIBLE,
+                " ".join(str(sent.get("message") or "").split())[:200],
+            )
+            return None
+        return sent
 
     def _aim(
         self, patches: list[dict[str, Any]], path: str, kind: str, target_id: str

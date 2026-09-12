@@ -325,6 +325,26 @@ class BookOfHousesApiClient:
             target_id, None, kind, document={"drop": {"step": int(step)}}
         )
 
+    def insert_proposal_draft_step(
+        self, target_id: str, before: int, step: dict[str, Any], kind: str = "plan"
+    ) -> dict[str, Any]:
+        """PUT ONE STEP IN. `{"kind": kind, "insert": {"before": N, "step": {...}}}`
+        on the same PATCH door as a patch: the bench re-expands the plan and
+        slides every `only_if.step` and `repeats.of_step` at or past `before`
+        up by one. `before` counts from ONE like drop, and `before` = steps + 1
+        appends. Spends one round, exactly like a patch does.
+
+        The door publishes this beside `reorder_call` and `drop_call` as
+        `insert_call`, and it is the answer to `missing_who`: the who step is
+        the agent's pick (rule 238, amended 2026-09-12).
+        """
+        return self.patch_proposal_draft(
+            target_id,
+            None,
+            kind,
+            document={"insert": {"before": int(before), "step": dict(step or {})}},
+        )
+
     def patch_proposal_draft(
         self,
         target_id: str,
