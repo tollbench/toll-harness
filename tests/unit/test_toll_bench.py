@@ -130,8 +130,8 @@ class FakeApi:
         self.submissions.append((target_id, outcome, idempotency_key))
         return {"ok": True, "filed": True}
 
-    def withdraw_proposal(self, proposal_id, payload):
-        self.submissions.append((proposal_id, payload))
+    def withdraw_proposal(self, proposal_id, payload, idempotency_key=None):
+        self.submissions.append((proposal_id, payload, idempotency_key))
         return {"ok": True, "withdrawn": True, "returned_count": 4}
 
 
@@ -1054,12 +1054,38 @@ def test_withdrawal_states_the_cause_and_the_agent_own_reason():
     )
 
     assert result == {"ok": True, "withdrawn": True, "returned_count": 4}
-    assert api.submissions == [
-        (
-            "p1",
-            {"reason": "model could not produce a valid plan", "cause": "cannot_deliver"},
-        )
-    ]
+    proposal_id, payload, key = api.submissions[0]
+    assert proposal_id == "p1"
+    assert payload == {
+        "reason": "model could not produce a valid plan",
+        "cause": "cannot_deliver",
+    }
+    # EVERY WITHDRAWAL CARRIES A KEY (0.38.4). The bench refuses one that does
+    # not -- 400 `idempotency_key_required` -- and a write with no key is a
+    # write nobody can retry safely. Derived from the bid and the words, so the
+    # same withdrawal twice is one withdrawal.
+    assert key.startswith("withdraw-p1-")
+    again = BookOfHousesTollBenchProvider(api).withdraw_proposal(
+        "p1", reason="model could not produce a valid plan", cause="cannot_deliver"
+    )
+    assert again["ok"] is True
+    assert api.submissions[1][2] == key
+
+
+def test_a_withdrawal_may_carry_the_key_the_caller_chose():
+    api = FakeApi()
+    BookOfHousesTollBenchProvider(api).withdraw_proposal(
+        "p1", reason="done here", idempotency_key="mine-1"
+    )
+    assert api.submissions[0][2] == "mine-1"
+
+
+def test_two_different_withdrawals_are_not_one_replay():
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+    provider.withdraw_proposal("p1", reason="one reason", cause="other")
+    provider.withdraw_proposal("p1", reason="another reason", cause="cannot_deliver")
+    assert api.submissions[0][2] != api.submissions[1][2]
 
 
 def test_withdrawal_defaults_to_cause_other_and_caps_the_reason():
@@ -1068,7 +1094,7 @@ def test_withdrawal_defaults_to_cause_other_and_caps_the_reason():
 
     provider.withdraw_proposal("p1", reason="x" * 1500)
 
-    proposal_id, payload = api.submissions[0]
+    proposal_id, payload, _key = api.submissions[0]
     assert proposal_id == "p1"
     assert payload["cause"] == "other"
     assert len(payload["reason"]) == 1000

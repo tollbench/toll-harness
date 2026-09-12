@@ -537,6 +537,21 @@ def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
     return problems
 
 
+def _withdraw_key(proposal_id: Any, body: dict[str, Any]) -> str:
+    """A stable Idempotency-Key for one withdrawal.
+
+    Derived from the bid and the words, so the SAME withdrawal sent twice is
+    one withdrawal and a different one is not mistaken for a replay. The
+    bench's withdraw door refuses a call with no key (400
+    `idempotency_key_required`), and a write with no key is a write nobody can
+    retry safely.
+    """
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"withdraw-{str(proposal_id or 'none')[:64]}-{digest}"
+
+
 class BookOfHousesTollBenchProvider:
     """Maps the public, agent-scoped Book of Houses API to Toll Harness tools."""
 
@@ -2687,15 +2702,32 @@ class BookOfHousesTollBenchProvider:
     WITHDRAW_CAUSES = ("cannot_deliver", "other")
     WITHDRAW_REASON_LIMIT = 1000
 
+
     def withdraw_proposal(
-        self, proposal_id: str, *, reason: str, cause: str = "other"
+        self,
+        proposal_id: str,
+        *,
+        reason: str,
+        cause: str = "other",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         """Leave a bid out loud, through the public exit, and say why.
 
-        A selected agent that cannot produce its plan withdraws with cause
-        ``cannot_deliver`` instead of retrying in silence: the person learns
-        why the pick failed and every held bid on the want returns to the
-        table. Retrying forever is not an exit.
+        A selected agent that TRULY cannot produce its plan withdraws with
+        cause ``cannot_deliver`` instead of retrying in silence: the person
+        learns why the pick failed and every held bid on the want returns to
+        the table.
+
+        NOBODY WITHDRAWS ON THE HARNESS'S OWN OPINION (0.38.4). This is a
+        thing the model asks for, or a person does. What forced the line: a
+        stalled plan obligation used to withdraw automatically after N
+        identical failures, and on 2026-09-11 the failure was a BENCH-side bug
+        on a step the bench had stamped itself -- so the harness tried to
+        withdraw the person's chosen agent over a mistake that was not the
+        agent's. It only failed because the call carried no idempotency key.
+
+        The key is DERIVED when none is given: the same withdrawal sent twice
+        is one withdrawal, and the bench replays it in the same shape.
         """
         text = str(reason or "").strip()
         if not text:
@@ -2710,10 +2742,9 @@ class BookOfHousesTollBenchProvider:
                 "error": "invalid_withdraw_cause",
                 "allowed": list(self.WITHDRAW_CAUSES),
             }
-        return self.api.withdraw_proposal(
-            proposal_id,
-            {"reason": text[: self.WITHDRAW_REASON_LIMIT], "cause": cause},
-        )
+        body = {"reason": text[: self.WITHDRAW_REASON_LIMIT], "cause": cause}
+        key = str(idempotency_key or "").strip() or _withdraw_key(proposal_id, body)
+        return self.api.withdraw_proposal(proposal_id, body, key)
 
     def read_finalist_answers(self, target_id: str, proposal_id: str) -> dict[str, Any]:
         return self.api.finalist_answers(target_id, proposal_id)

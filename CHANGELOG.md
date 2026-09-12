@@ -8,6 +8,62 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.38.4] - 2026-09-12
+
+**Nobody withdraws a person's chosen agent over a bug that was not the
+agent's.**
+
+### What forced this release
+
+Production, 2026-09-11. One fleet unit had been SELECTED on want 14db651d. The
+bench refused its plan filing five times in a row on an unchanged state -- for
+a BENCH-side bug, a refusal on a step the bench had stamped itself, since fixed
+there. The harness logged "Stalling obligation file_informed_plan/... after 5
+identical failures" and went straight to "Withdrawal of unproducible plan". It
+failed only because the withdraw call carried no Idempotency-Key and the bench
+answered 400 `idempotency_key_required`. Had that call worked, a person would
+have watched their chosen agent withdraw over a mistake that was not the
+agent's, and every held bid on the want would have come back to the table for
+nothing.
+
+Then the bench fixed the document server-side, and the unit sat stalled anyway
+until someone restarted it.
+
+### Changed
+
+- **A STALLED PLAN NEVER WITHDRAWS.** `_withdraw_unproducible_plan` is gone,
+  replaced by `_plan_is_blocked`: the bench's own refusal goes in the log, and
+  onto the check-in blocker where the plan road has a deal to put one on
+  (`_post_plan_blocker`; a plan the person is still waiting on has no deal and
+  no check-in, and then the log is the record and nothing is invented). A
+  refusal the agent cannot clear is not proof the agent cannot deliver.
+  Withdrawing is the MODEL's call, through `toll_bench.withdraw_proposal`, or
+  the person's -- never this package's own opinion.
+- **A STALL ON A PLAN IS A WAIT, NOT A STATE.** `_breaker_skip` now re-tests a
+  stalled `file_informed_plan` every cycle and lifts it on either of two
+  things: the draft the bench is HOLDING has changed
+  (`_plan_draft_fingerprint` -- the problem it names next, the problems left,
+  `_bench_fixed`, ready/closed, `updated_at`, the step count; the draft read
+  costs no round), or `_PLAN_STALL_WAIT_SECONDS` (ten minutes) has passed.
+  Before this a stall outlived everything but a restart.
+- **EVERY WITHDRAWAL CARRIES AN IDEMPOTENCY-KEY.** `api.withdraw_proposal`
+  sends one, the provider derives a stable key from the bid and the words when
+  the caller gives none (`_withdraw_key`, so the same withdrawal twice is one
+  withdrawal and a different one is not read as a replay), the protocol in
+  `base.py` declares it, and the `toll_bench.withdraw_proposal` tool takes an
+  optional `idempotency_key` from the model. The `cause` vocabulary is
+  unchanged and still checked against the bench's own two words
+  (`cannot_deliver`, `other`).
+
+### Note
+
+`tests/conformance/test_permanent_agent.py` is red at this commit and was
+before it: one fleet unit was registered in commits 215983d and
+f9a4545 without being named in `EXPECTED_REFERENCE_AGENTS`, and its
+`harness:` line reads a version the test does not expect. That is the same
+omission the file's own comment records for `herald`. Left for whoever added
+the agent; nothing in this release touches it. The unit suite is green.
+
 ## [0.38.3] - 2026-09-12
 
 **A step-level problem has two exits: replace the step, or drop it.**

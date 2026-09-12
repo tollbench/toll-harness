@@ -1212,13 +1212,29 @@ def _breaker_run_result(goal, mode, status, result):
     )
 
 
-def _breaker_resources(obligation, *, failure=None, withdrawals=None, goals=None):
-    """A connected agent whose single obligation always fails the same way."""
+def _breaker_resources(
+    obligation, *, failure=None, withdrawals=None, goals=None, draft=None
+):
+    """A connected agent whose single obligation always fails the same way.
 
-    def withdraw_proposal(proposal_id, *, reason, cause="other"):
+    `draft` is what the bench is HOLDING for a plan: a dict, or a callable
+    answering one, so a test can change it server-side mid-run the way the
+    bench did on 2026-09-11.
+    """
+
+    def withdraw_proposal(proposal_id, *, reason, cause="other", idempotency_key=""):
         if withdrawals is not None:
-            withdrawals.append({"proposal_id": proposal_id, "reason": reason, "cause": cause})
+            withdrawals.append({
+                "proposal_id": proposal_id,
+                "reason": reason,
+                "cause": cause,
+                "idempotency_key": idempotency_key,
+            })
         return {"ok": True, "returned_count": 4}
+
+    def read_draft(target_id, *, kind="bid"):
+        held = draft() if callable(draft) else draft
+        return held if isinstance(held, dict) else {"ok": True, "problems": []}
 
     toll_bench = SimpleNamespace(
         ensure_reachable=lambda: {"ok": True},
@@ -1226,6 +1242,7 @@ def _breaker_resources(obligation, *, failure=None, withdrawals=None, goals=None
         list_proposals=lambda: {"proposals": [{"id": "proposal-1", "total_ask_cents": 0}]},
         status=lambda: {"payout": {"ready": True}},
         withdraw_proposal=withdraw_proposal,
+        read_draft=read_draft,
     )
     runtime = SimpleNamespace(
         email_provider=None,
@@ -1287,31 +1304,139 @@ def test_identical_failures_back_off_and_stall_the_obligation(monkeypatch):
     assert fourth["ok"] is True
     assert fourth["run"] is None
     assert fourth["stalled_obligations"] == 1
-    assert len(withdrawals) == 1
+    # AND NOTHING IS WITHDRAWN (0.38.4). See the test below for the night that
+    # forced it.
+    assert withdrawals == []
 
 
-def test_a_stalled_plan_request_withdraws_with_cause_cannot_deliver(monkeypatch):
+def test_a_stalled_plan_request_never_withdraws_the_persons_chosen_agent(monkeypatch):
+    """WHAT FORCED IT (production, 2026-09-11). The bench refused a selected
+    agent's plan five times on an UNCHANGED state for a bench-side bug -- a
+    refusal on a step the bench had stamped itself -- and this package went
+    straight to withdrawing the bid with cause `cannot_deliver`. It only failed
+    because the call carried no idempotency key. Had it worked, the person
+    would have watched their chosen agent withdraw over a mistake that was not
+    the agent's, and every held bid on the want would have returned to the
+    table for nothing.
+
+    A refusal the agent cannot clear is not proof the agent cannot deliver."""
     monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     withdrawals = []
     resources = _breaker_resources(
         _plan_obligation(),
-        failure={"error": "ValidationException: toolUse"},
+        failure={"error": "REJ-16 on a step the bench stamped"},
         withdrawals=withdrawals,
+    )
+
+    for _ in range(5):
+        result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
+
+    assert withdrawals == []
+    assert result["breaker"]["stalled"] is True
+    blocked = result["breaker"]["blocked"]
+    assert blocked["withdrawn"] is False
+    assert blocked["blocked"] is True
+    assert blocked["attempts"] == 5
+    assert "REJ-16" in blocked["refusal"]
+    assert blocked["waiting_seconds"] == cli._PLAN_STALL_WAIT_SECONDS
+
+
+def test_the_stall_lifts_when_the_bench_is_holding_a_different_draft(monkeypatch):
+    """Tonight the bench FIXED the document server-side and the unit sat
+    stalled anyway until someone restarted it. The draft read costs no round,
+    so a stalled plan is re-tested every cycle."""
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    held = {"ok": True, "problems": [{"path": "form.steps.0", "code": "REJ-16"}],
+            "next_fix": {"path": "form.steps.0", "code": "REJ-16"},
+            "draft": {"steps": [{"title": "one"}]}}
+    goals = []
+    resources = _breaker_resources(
+        _plan_obligation(),
+        failure={"error": "REJ-16 on a step the bench stamped"},
+        goals=goals,
+        draft=lambda: held,
     )
 
     for _ in range(2):
         cli._process_market_attention(resources, wait=0, stall_threshold=2)
+    stalled = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+    assert stalled["run"] is None
+    assert stalled["stalled_obligations"] == 1
+    dispatched = len(goals)
 
-    assert withdrawals == [
-        {
-            "proposal_id": "proposal-1",
-            "reason": (
-                "model could not produce a valid plan after 2 attempts: "
-                "ValidationException: toolUse"
-            ),
-            "cause": "cannot_deliver",
-        }
-    ]
+    # The bench fixes its own step. Nothing about the obligation changed.
+    held = {"ok": True, "problems": [], "next_fix": None, "ready": True,
+            "draft": {"steps": [{"title": "one"}], "_bench_fixed": ["step 1 rebuilt"]}}
+
+    after = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert after["run"] is not None
+    assert len(goals) == dispatched + 1
+
+
+def test_a_stalled_plan_tries_again_after_the_bounded_wait(monkeypatch):
+    """Not forever, and not until a restart: ten minutes is the ceiling on a
+    stall somebody is waiting behind."""
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    goals = []
+    resources = _breaker_resources(
+        _plan_obligation(),
+        failure={"error": "REJ-16 on a step the bench stamped"},
+        goals=goals,
+        draft={"ok": True, "problems": [{"path": "form.steps.0", "code": "REJ-16"}]},
+    )
+
+    for _ in range(2):
+        cli._process_market_attention(resources, wait=0, stall_threshold=2)
+    assert cli._process_market_attention(
+        resources, wait=0, stall_threshold=2
+    )["run"] is None
+    dispatched = len(goals)
+
+    # Ten minutes later, with the same draft and the same obligation.
+    key = cli._obligation_key(_plan_obligation())
+    cli._OBLIGATION_FAILURES[key]["stalled_at"] -= cli._PLAN_STALL_WAIT_SECONDS + 1
+
+    after = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert after["run"] is not None
+    assert len(goals) == dispatched + 1
+
+
+def test_a_plan_blocked_on_a_deal_puts_the_refusal_on_the_check_in(monkeypatch):
+    """Where the plan road HAS a blocker to post, the person reads why nothing
+    is moving. Where it has none -- a plan the person is still waiting on, with
+    no deal yet -- the log is the record and nothing is invented."""
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    pulses = []
+    resources = _breaker_resources(
+        _plan_obligation(deal_id="deal-9"),
+        failure={"error": "REJ-16 on a step the bench stamped"},
+    )
+    resources.toll_bench.post_check_in = lambda deal_id, pulse, key: (
+        pulses.append((deal_id, pulse, key)) or {"ok": True}
+    )
+
+    for _ in range(2):
+        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert result["breaker"]["blocked"]["blocker_posted"] is True
+    assert pulses[0][0] == "deal-9"
+    assert "refusing this plan" in pulses[0][1]["blocker"]
+    assert len(pulses[0][1]["blocker"]) <= 280
+
+
+def test_a_plan_with_no_deal_posts_nothing_and_says_nothing_it_cannot(monkeypatch):
+    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
+    resources = _breaker_resources(
+        _plan_obligation(),
+        failure={"error": "REJ-16 on a step the bench stamped"},
+    )
+
+    for _ in range(2):
+        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
+
+    assert "blocker_posted" not in result["breaker"]["blocked"]
 
 
 def test_a_stalled_deal_step_stalls_without_withdrawing(monkeypatch):

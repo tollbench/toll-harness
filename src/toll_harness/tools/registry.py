@@ -1176,6 +1176,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "proposal_id": {"type": "string"},
                     "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
                     "cause": {"enum": ["cannot_deliver", "other"]},
+                    "idempotency_key": {"type": "string"},
                 },
                 ["proposal_id", "reason"],
             ),
@@ -1184,6 +1185,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             arguments["proposal_id"],
             reason=arguments["reason"],
             cause=arguments.get("cause") or "other",
+            idempotency_key=arguments.get("idempotency_key") or "",
         ),
     )
     registry.register(

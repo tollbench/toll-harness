@@ -1464,8 +1464,56 @@ def _failure_signature(payload: Any) -> str:
     return str(payload or "unknown_failure")
 
 
-def _breaker_skip(obligation: dict[str, Any]) -> bool:
-    """True while this exact obligation is stalled and has not changed."""
+# A STALL IS A WAIT, NOT A STATE (0.38.4). A stalled plan obligation used to
+# stay stalled until the process restarted. On 2026-09-11 the bench refused a
+# plan five times for a BENCH-side bug on a step the bench had stamped itself,
+# fixed the document server-side, and the fleet unit sat stalled anyway until
+# someone restarted it. So a stall on a plan lifts on either of two things: the
+# draft the bench is HOLDING changes, or this much time passes.
+_PLAN_STALL_WAIT_SECONDS = 600.0
+
+
+def _plan_draft_fingerprint(resources: Any, obligation: dict[str, Any]) -> str | None:
+    """What the bench is holding for this plan, as one digest, or None.
+
+    The draft read costs no round, so a stalled plan can be re-checked every
+    cycle for free. What counts as a change is what the bench SAYS about the
+    document -- the problem it names next, the problems left, what it fixed
+    itself, whether it is ready or closed, and when it last moved -- because a
+    plan stalls on the bench's answer and not on its own text.
+    """
+    reader = getattr(getattr(resources, "toll_bench", None), "read_draft", None)
+    target_id = str(obligation.get("target_id") or "")
+    if not callable(reader) or not target_id:
+        return None
+    try:
+        answer = reader(target_id, kind="plan")
+    except Exception:  # noqa: BLE001 - a free probe never breaks the cycle
+        return None
+    if not isinstance(answer, dict):
+        return None
+    document = answer.get("draft") if isinstance(answer.get("draft"), dict) else {}
+    fix = answer.get("next_fix") if isinstance(answer.get("next_fix"), dict) else {}
+    basis = {
+        "next_fix": (fix.get("path"), fix.get("code")),
+        "problems": [
+            (row.get("path"), row.get("code"))
+            for row in (answer.get("problems") or [])
+            if isinstance(row, dict)
+        ],
+        "ready": answer.get("ready"),
+        "closed": answer.get("closed"),
+        "bench_fixed": document.get("_bench_fixed") or answer.get("bench_fixed"),
+        "updated_at": answer.get("updated_at") or document.get("updated_at"),
+        "steps": len(document.get("steps") or []),
+    }
+    return hashlib.sha256(
+        json.dumps(basis, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _breaker_skip(obligation: dict[str, Any], resources: Any = None) -> bool:
+    """True while this exact obligation is stalled and nothing has changed."""
     key = _obligation_key(obligation)
     state = _OBLIGATION_FAILURES.get(key)
     if not state or not state.get("stalled"):
@@ -1473,6 +1521,32 @@ def _breaker_skip(obligation: dict[str, Any]) -> bool:
     if state.get("fingerprint") != _obligation_fingerprint(obligation):
         # The server changed what it is asking for: this is new work, and a
         # stalled key must never outlive the payload that stalled it.
+        _OBLIGATION_FAILURES.pop(key, None)
+        return False
+    if obligation.get("kind") != "file_informed_plan":
+        return True
+    # THE PERSON IS WAITING ON THIS ONE. A plan obligation is somebody's chosen
+    # agent owing them a plan, so the stall is re-tested every cycle rather
+    # than held until a restart.
+    held = _plan_draft_fingerprint(resources, obligation)
+    if held is not None and state.get("draft") is None:
+        state["draft"] = held
+    if held is not None and held != state.get("draft"):
+        _LOGGER.warning(
+            "Plan %s: the bench is holding a different draft than when this "
+            "stalled; trying again",
+            obligation.get("proposal_id") or obligation.get("target_id") or "?",
+        )
+        _OBLIGATION_FAILURES.pop(key, None)
+        return False
+    waited = time.monotonic() - float(state.get("stalled_at") or 0.0)
+    if waited >= _PLAN_STALL_WAIT_SECONDS:
+        _LOGGER.warning(
+            "Plan %s: stalled %.0f seconds and the person is still waiting; "
+            "trying again",
+            obligation.get("proposal_id") or obligation.get("target_id") or "?",
+            waited,
+        )
         _OBLIGATION_FAILURES.pop(key, None)
         return False
     return True
@@ -1509,29 +1583,86 @@ def _plan_obligation_cleared(resources: Any, obligation: dict[str, Any]) -> tupl
     return True, None
 
 
-def _withdraw_unproducible_plan(
+def _plan_is_blocked(
     resources: Any, obligation: dict[str, Any], attempts: int, error: str
 ) -> dict[str, Any]:
-    """Leave the want out loud when this agent cannot file the plan it owes."""
+    """SAY SO AND WAIT. A stalled plan is never withdrawn by this package.
+
+    WHAT FORCED THE CHANGE (production, 2026-09-11). This used to withdraw the
+    bid with cause `cannot_deliver` after N identical failures. That night the
+    bench refused a selected agent's plan five times on an unchanged state for
+    a BENCH-side bug -- REJ-16 on a step the bench had stamped itself -- and
+    the harness moved straight to "Withdrawal of unproducible plan". It only
+    failed because the call carried no idempotency key. Had it worked, a person
+    would have watched their chosen agent withdraw over a mistake that was not
+    the agent's, and every held bid on the want would have come back to the
+    table for nothing.
+
+    A refusal the agent cannot clear is not proof the agent cannot deliver. So
+    the door's own words go in the log (and on the blocker where the plan road
+    has one), and the obligation waits: `_breaker_skip` lifts the stall the
+    moment the bench is holding a different draft, and after ten minutes
+    regardless. Withdrawing is the MODEL's call, through
+    `toll_bench.withdraw_proposal`, or the person's.
+    """
     proposal_id = str(obligation.get("proposal_id") or "")
-    if not proposal_id:
-        return {"ok": False, "error": "withdraw_skipped_without_proposal_id"}
-    reason = f"model could not produce a valid plan after {attempts} attempts: {error[:200]}"
-    try:
-        response = resources.toll_bench.withdraw_proposal(
-            proposal_id, reason=reason, cause="cannot_deliver"
-        )
-    except Exception as failure:  # noqa: BLE001 - the exit must not kill the cycle
-        _LOGGER.warning(
-            "Withdrawal of unproducible plan %s failed: %s", proposal_id, failure
-        )
-        return {"ok": False, "error": "withdraw_failed", "message": str(failure)}
     _LOGGER.warning(
-        "Withdrew proposal %s with cause cannot_deliver after %d identical failures",
-        proposal_id,
+        "Plan %s is blocked on the bench's own refusal after %d identical "
+        "failures: %s. NOT withdrawing -- a refusal this agent cannot clear is "
+        "not proof it cannot deliver. Waiting for the draft to change, or %.0f "
+        "seconds, whichever comes first.",
+        proposal_id or obligation.get("target_id") or "?",
         attempts,
+        error[:300],
+        _PLAN_STALL_WAIT_SECONDS,
     )
-    return {"ok": True, "proposal_id": proposal_id, "reason": reason, "response": response}
+    blocked: dict[str, Any] = {
+        "ok": True,
+        "blocked": True,
+        "proposal_id": proposal_id,
+        "attempts": attempts,
+        "refusal": error[:600],
+        "waiting_seconds": _PLAN_STALL_WAIT_SECONDS,
+        "withdrawn": False,
+    }
+    # Where the plan road has a blocker to post, post it. A plan obligation is
+    # usually pre-deal and has none, and then the log is the record.
+    posted = _post_plan_blocker(resources, obligation, error)
+    if posted is not None:
+        blocked["blocker_posted"] = posted
+    return blocked
+
+
+def _post_plan_blocker(
+    resources: Any, obligation: dict[str, Any], error: str
+) -> bool | None:
+    """The bench's refusal, on the check-in of the deal this plan belongs to.
+
+    None when there is no deal and no check-in door to put it on, which is the
+    usual case for a plan the person is still waiting on.
+    """
+    deal_id = str(obligation.get("deal_id") or "")
+    post = getattr(getattr(resources, "toll_bench", None), "post_check_in", None)
+    if not deal_id or not callable(post):
+        return None
+    blocker = _person_safe(
+        f"The bench is refusing this plan and the refusal is not mine to fix: "
+        f"{error}"
+    )[:280]
+    pulse = {
+        "changed": "Nothing changed here.",
+        "now": "Waiting: the bench is refusing this plan the same way every time.",
+        "next": "Nothing of yours; this one is ours and the platform's.",
+        "progress_percent": 0,
+        "blocker": blocker,
+    }
+    digest = hashlib.sha256(blocker.encode("utf-8")).hexdigest()[:10]
+    try:
+        answer = post(deal_id, pulse, f"plan-blocked-{deal_id}-{digest}")
+    except Exception as failure:  # noqa: BLE001 - a blocker must not kill the cycle
+        _LOGGER.warning("the plan blocker check-in failed: %s", failure)
+        return False
+    return bool((answer or {}).get("ok", True))
 
 
 def _breaker_record_failure(
@@ -1560,6 +1691,11 @@ def _breaker_record_failure(
     }
     if attempts >= max(1, threshold) and not state["stalled"]:
         state["stalled"] = True
+        state["stalled_at"] = time.monotonic()
+        if obligation.get("kind") == "file_informed_plan":
+            # What the bench was holding when this stalled, so the next cycle
+            # can tell a fixed document from the same one.
+            state["draft"] = _plan_draft_fingerprint(resources, obligation)
         # ONE line, at the fleet log level, carrying the count and the error.
         _LOGGER.warning(
             "Stalling obligation %s after %d identical failures: %s",
@@ -1571,7 +1707,7 @@ def _breaker_record_failure(
         breaker["stalled"] = True
         if obligation.get("kind") == "file_informed_plan" and not state["exited"]:
             state["exited"] = True
-            breaker["withdrawal"] = _withdraw_unproducible_plan(
+            breaker["blocked"] = _plan_is_blocked(
                 resources, obligation, attempts, error
             )
     _OBLIGATION_FAILURES[key] = state
@@ -1626,7 +1762,7 @@ def _process_market_attention(
         if (item.get("kind") == "feedback_returned"
                 and completed.get(_obligation_key(item)) == _obligation_fingerprint(item)):
             continue
-        if _breaker_skip(item):
+        if _breaker_skip(item, resources):
             _stalled += 1
             continue
         _live.append(item)

@@ -395,13 +395,26 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
-    def withdraw_proposal(self, proposal_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def withdraw_proposal(
+        self,
+        proposal_id: str,
+        payload: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """THE PUBLIC EXIT, and it is an idempotent write like every other.
+
+        WHAT FORCED THE KEY (production, 2026-09-11): this call sent none and
+        the bench answered 400 `idempotency_key_required`. That 400 is the only
+        reason a withdrawal the harness should never have sent did not reach a
+        person whose chosen agent was working fine.
+        """
         proposal = urllib.parse.quote(proposal_id, safe="")
         return self._request(
             "POST",
             f"/api/bench/proposals/{proposal}/withdraw",
             payload=payload,
             authenticated=True,
+            idempotency_key=idempotency_key,
         )
 
     def current_step(self, deal_id: str) -> dict[str, Any]:
