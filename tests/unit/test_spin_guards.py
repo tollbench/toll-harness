@@ -1,44 +1,14 @@
-from tests.unit.test_market_watch import _breaker_resources
 from toll_harness import cli
 from toll_harness.toll_bench.draft import DraftLoop
 
 
-def test_completed_feedback_runs_once_and_changed_feedback_wakes_again(monkeypatch):
-    monkeypatch.setattr(cli, '_OBLIGATION_FAILURES', {})
-    obligation = dict(kind='feedback_returned', target_id='spin-target',
-                      proposal_id='spin-bid',
-                      feedback={'reason': 'Do all the work',
-                                'given_at': '2026-09-09'})
-    goals=[]
-    resources=_breaker_resources(obligation,goals=goals)
-    assert cli._process_market_attention(resources,0)['run'] is not None
-    for _ in range(10):
-        assert cli._process_market_attention(resources,0)['run'] is None
-    assert len(goals)==1
-    obligation['feedback']={'reason':'Use a different approach','given_at':'2026-09-10'}
-    assert cli._process_market_attention(resources,0)['run'] is not None
-    assert len(goals)==2
-    other=_breaker_resources(obligation,goals=[])
-    assert cli._process_market_attention(other,0)['run'] is not None
-
-def test_completed_feedback_does_not_starve_other_obligations(monkeypatch):
-    monkeypatch.setattr(cli, '_OBLIGATION_FAILURES', {})
-    first=dict(kind='feedback_returned',target_id='first',proposal_id='bid-1')
-    second=dict(kind='feedback_returned',target_id='second',proposal_id='bid-2')
-    goals=[]
-    resources=_breaker_resources(first,goals=goals)
-    resources.toll_bench.attention=lambda wait: {'attention':[first,second]}
-    cli._process_market_attention(resources,0)
-    cli._process_market_attention(resources,0)
-    assert len(goals)==2
-    assert cli._process_market_attention(resources,0)['attention_count']==0
-
-def test_failed_feedback_still_uses_failure_breaker(monkeypatch):
-    monkeypatch.setattr(cli, '_OBLIGATION_FAILURES', {})
-    obligation=dict(kind='feedback_returned',target_id='failed',proposal_id='bid-3')
-    resources=_breaker_resources(obligation,failure={'error':'temporary'})
-    for i in range(2):
-        assert cli._process_market_attention(resources,0)['breaker']['consecutive_failures']==i+1
+def test_feedback_returned_is_not_a_kind_the_harness_knows():
+    """Contract 3.20 (2026-09-12): the bench never sends feedback_returned;
+    a proposal never changes after filing. The RAM-only completed-feedback
+    guard that a restart used to forget is gone with the kind."""
+    assert 'feedback_returned' not in cli._OBLIGATION_DISPATCH
+    assert 'feedback_returned' not in cli._OBLIGATION_PRIORITY
+    assert not hasattr(cli, '_FEEDBACK_RETURNED_INSTRUCTION')
 
 def test_the_same_problem_named_three_times_stops_the_draft():
     """THE GUARD IS THE PROBLEM'S NAME, NOT THE DRAFT'S TEXT (2026-09-11).

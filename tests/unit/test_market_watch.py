@@ -1545,15 +1545,16 @@ def test_a_changed_obligation_payload_lifts_the_stall(monkeypatch):
     assert len(goals) == 1
 
 
-def test_returned_bid_dispatches_with_the_feedback_and_proposal_tools(monkeypatch):
+def test_an_unknown_kind_still_dispatches_without_the_retired_feedback_tools(monkeypatch):
+    """The unknown-kind fallback keeps every live instruction and tool set;
+    the retired feedback_returned set is no longer folded in."""
     monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     goals = []
     obligation = {
-        "kind": "feedback_returned",
+        "kind": "some_future_kind",
         "target_id": "target-1",
         "proposal_id": "proposal-1",
-        "why": "the person failed the selected agent and said why",
-        "feedback": {"reason": "no plan ever arrived", "given_at": "2026-09-02T00:00:00Z"},
+        "why": "a kind this build has not special-cased",
     }
     resources = _breaker_resources(obligation, goals=goals)
 
@@ -1561,17 +1562,10 @@ def test_returned_bid_dispatches_with_the_feedback_and_proposal_tools(monkeypatc
 
     assert result["ok"] is True
     goal, tools = goals[0]
-    assert "back on the table" in goal
-    assert "no plan ever arrived" in goal
-    assert "re-file ONCE" in goal
-    assert set(tools) == {
-        "toll_bench.read_brief",
-        "toll_bench.list_proposals",
-        "toll_bench.validate_proposal",
-        "toll_bench.submit_proposal",
-        "toll_bench.withdraw_proposal",
-        "result.complete",
-    }
+    assert "re-file ONCE" not in goal
+    assert "back on the table" not in goal
+    assert "toll_bench.submit_proposal" not in set(tools)
+    assert "toll_bench.validate_proposal" not in set(tools)
 
 
 def test_stall_threshold_comes_from_the_agent_configuration(tmp_path):

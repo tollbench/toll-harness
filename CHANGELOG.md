@@ -8,6 +8,39 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.40.0] - 2026-09-12
+
+**A proposal never changes after filing; `feedback_returned` is gone.**
+
+### What forced this release
+
+The bench used to raise attention kind `feedback_returned` on every unpicked
+bid when the person failed the agent they had picked, and this harness
+answered it by re-filing once or completing with "let it stand". "Stand" had
+no server call, so the decision lived only in `resources._completed_feedback`,
+and every worker restart forgot it and spent a fresh run re-deciding identical
+feedback (three production agents on one want, 2026-09-09..12). The bench
+ruled the transition out instead of adding a door: a proposal is the agent's
+general strategy, not a plan, and it never changes after filing. When the pick
+fails the other proposals stay as filed and nobody owes anything; the agent
+picked next reads why the earlier attempt failed at the top of the brief
+(`feedback_first`) and writes the plan from it. Toll Bench contract 3.20,
+rule 70 amended.
+
+### Removed
+
+- The `feedback_returned` dispatch, its instruction, its place in the
+  obligation priority and its tool set; the unknown-kind fallback no longer
+  folds them in.
+- The process-local completed-feedback guard (0.36.3) and the restart
+  allowance that came with it. There is no decision left to remember.
+
+### Behavior
+
+- A returned bid is not work. The bench's `hold.may_refile` is always false
+  and `hold.refile_call` always null; a second filing on a returned bid gets
+  the ordinary `409 already_participated`.
+
 ## [0.39.0] - 2026-09-12
 
 **The who step is the agent's pick, and `missing_who` is answered with the

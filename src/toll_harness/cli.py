@@ -543,7 +543,6 @@ _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "draft_sent_back",
     "file_informed_plan",
     "unanswered_message",
-    "feedback_returned",
 )
 
 # Shared bookkeeping tools every focused obligation goal needs: load/save a
@@ -740,15 +739,12 @@ _UNANSWERED_MESSAGE_INSTRUCTION = (
     "toll_bench.reply_step_message before any check-in or outcome; a work pulse "
     "is not a reply."
 )
-_FEEDBACK_RETURNED_INSTRUCTION = (
-    "The person failed the selected agent and said why; the feedback is in the "
-    "obligation below, in the person's own words. Your bid was held behind that "
-    "selection and is now back on the table. Read your own bid and the feedback, "
-    "then re-file ONCE only if you can fix what they named -- a re-file "
-    "supersedes your earlier bid and a second one is refused. If you cannot fix "
-    "what they named, change nothing and call result.complete with 'let it "
-    "stand'."
-)
+# feedback_returned (2026-09-02..2026-09-12) is GONE. Contract 3.20, rule 70
+# amended: a proposal is the agent's general strategy and never changes
+# after filing; when the person fails the agent they picked, the other
+# proposals stay as filed and nobody owes anything. The bench never sends
+# that kind again, so there is no instruction, no dispatch and no memory of
+# a 'let it stand' decision to lose on restart.
 _REFUSED_BEFORE_TAIL = (
     " The bench already refused this step's filing on exactly this state; its "
     "own words are in `the_bench_refused`. Fix exactly what it names before "
@@ -840,19 +836,6 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.submit_informed_plan",
                 # The public exit rides the same dispatch: an agent that cannot
                 # produce this plan says so out loud rather than retrying.
-                "toll_bench.withdraw_proposal",
-            }
-        )
-        | _BOOKKEEPING_TOOLS,
-    },
-    "feedback_returned": {
-        "instruction": _FEEDBACK_RETURNED_INSTRUCTION,
-        "tools": frozenset(
-            {
-                "toll_bench.read_brief",
-                "toll_bench.list_proposals",
-                "toll_bench.validate_proposal",
-                "toll_bench.submit_proposal",
                 "toll_bench.withdraw_proposal",
             }
         )
@@ -1756,12 +1739,6 @@ def _process_market_attention(
     _live: list[dict[str, Any]] = []
     _stalled = 0
     for item in obligations:
-        # A successful feedback decision may deliberately leave the bid as-is.
-        # The server keeps that feedback visible; visibility is not new work.
-        completed = getattr(resources, "_completed_feedback", {})
-        if (item.get("kind") == "feedback_returned"
-                and completed.get(_obligation_key(item)) == _obligation_fingerprint(item)):
-            continue
         if _breaker_skip(item, resources):
             _stalled += 1
             continue
@@ -1984,14 +1961,11 @@ def _process_market_attention(
             + _FILE_INFORMED_PLAN_INSTRUCTION
             + " "
             + _UNANSWERED_MESSAGE_INSTRUCTION
-            + " "
-            + _FEEDBACK_RETURNED_INSTRUCTION
         )
         obligation_tools = (
             _OBLIGATION_DISPATCH["deal_step"]["tools"]
             | _OBLIGATION_DISPATCH["file_informed_plan"]["tools"]
             | _OBLIGATION_DISPATCH["unanswered_message"]["tools"]
-            | _OBLIGATION_DISPATCH["feedback_returned"]["tools"]
             | {"toll_bench.guide", "human.request"}
         )
     else:
@@ -2111,10 +2085,6 @@ def _process_market_attention(
         payload["ok"] = ok
         payload["plan_filing_verified"] = ok
     if ok:
-        if kind == "feedback_returned" and result.status.value == "completed":
-            completed = getattr(resources, "_completed_feedback", {})
-            completed[_obligation_key(obligation)] = _obligation_fingerprint(obligation)
-            resources._completed_feedback = completed
         _breaker_reset(obligation)
         return payload
     breaker = _breaker_record_failure(
