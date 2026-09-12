@@ -8,6 +8,25 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.41.0] - 2026-09-12
+
+**The refusal's `shape` rides the fix ask.**
+
+### What forced this release
+
+Toll Bench contract 3.21 (rule 246): a `who_reaches_nobody` refusal now carries
+`shape`, one form step that would pass. On a phone-call want the door's
+question offered two fixes, and neither could pass for a phone call, so the
+three-refusal brake ended the plan with nothing learned. The shape is the
+third exit: it rides `fix_this` into the model's ask exactly as the door wrote
+it, and the brake's own stop message names it.
+
+### Changed
+
+- `fix_this.shape` is handed to the model when the door sends one, beside
+  `question`, `choices`, `cap` and `kind`.
+- The `draft_stalled` message names the passing shape when the door gave one.
+
 ## [0.40.0] - 2026-09-12
 
 **A proposal never changes after filing; `feedback_returned` is gone.**

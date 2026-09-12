@@ -2737,6 +2737,8 @@ class DraftLoop:
                         f"({code or 'no code'}) three times and the patches "
                         "did not clear it; paused to avoid repeated model "
                         "spending."
+                        + (f" The door said this shape would pass: {fix.get('shape')!r}."
+                           if isinstance(fix.get("shape"), dict) else "")
                     ),
                 )
             index = step_of(path)
@@ -2774,7 +2776,11 @@ class DraftLoop:
                 "fix": fix.get("fix"),
                 "detail": fix.get("detail"),
             }
-            for name in ("question", "choices", "cap", "kind"):
+            # `shape` (bench contract 3.21, rule 246): one form step that would
+            # pass, when the door can say so. Three refusals of the same code
+            # on the same path used to offer two fixes, neither of which
+            # could pass for a phone call; the shape is the third exit.
+            for name in ("question", "choices", "cap", "kind", "shape"):
                 value = fix.get(name)
                 if value not in (None, "", [], {}):
                     fix_this[name] = value
