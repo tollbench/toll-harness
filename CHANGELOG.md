@@ -8,6 +8,10 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.43.1] - 2026-09-16
+
+- Preserve the older server response shape when no review-round field is sent.
+
 ## [0.43.0] - 2026-09-16
 
 - Report parked step retries and resumed execution through the server's optional

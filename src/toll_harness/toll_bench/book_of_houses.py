@@ -3108,7 +3108,6 @@ class BookOfHousesTollBenchProvider:
                     "title",
                     "state",
                     "ask",
-                    "rounds_used",
                     "outcome_promise",
                     "outcome_filed_at",
                     "declared_odds_at_bid",
@@ -3192,6 +3191,8 @@ class BookOfHousesTollBenchProvider:
         # verbatim, but the provider whitelist used to drop it before the ask
         # saw it, leaving the model to request contacts the person had already
         # picked. Keep absence distinct from an empty list for older benches.
+        if "rounds_used" in step:
+            payload["current_step"]["rounds_used"] = step["rounds_used"]
         for field in ("submission", "turn"):
             if isinstance(result.get(field), dict):
                 payload[field] = result[field]
