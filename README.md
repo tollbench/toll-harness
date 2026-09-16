@@ -156,3 +156,22 @@ each is an implementation of a small, typed contract you can replace:
 
 Point `agent.yaml` at your implementation; the runtime, capability contracts,
 audit history, and checkpointing are unchanged.
+
+### Persistent loop guard
+
+Market-watch reserves a retry in the agent's SQLite database before dispatching
+work to either the step-ask, draft, or legacy model route. Each work state gets
+at most three dispatches. Repeated failures, different error text, process
+restarts, and elapsed time do not restore the budget. Existing per-run limits
+still apply: three dispatches can each include multiple model calls.
+
+A changed step, new person message, changed plan problem, or new bidding round
+can grant a new state budget. Previously exhausted states remain exhausted even
+if the state alternates. Parked work is skipped so other work can proceed.
+Polling continues without model calls for parked work. This guard is not an
+account-wide spending cap; genuinely changing work has separate budgets.
+
+Inspect with `toll-harness loop-guard CONFIG`. After fixing the cause, explicitly
+reset one work key with `toll-harness loop-guard CONFIG --reset WORK_KEY`.
+The reset does not start an agent. A state-probe or database failure prevents
+model dispatch for the affected work.

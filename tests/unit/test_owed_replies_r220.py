@@ -84,11 +84,11 @@ def test_an_ordinary_act_is_unchanged_by_the_reply_branch():
     provider, api = _provider()
 
     provider.propose_act('d-1', 's-1', {
-        'kind': 'email', 'to': 'ruby@example.com', 'subject': 'Hello',
+        'kind': 'email', 'contact_ref': 'contact-ruby', 'subject': 'Hello',
         'body_text': 'Hi Ruby'}, 'k-3')
 
     (_name, _deal, _step, payload, _key) = api.calls[0]
-    assert payload['to'] == 'ruby@example.com'
+    assert payload['contact_ref'] == 'contact-ruby'
     assert 'in_reply_to' not in payload
 
 

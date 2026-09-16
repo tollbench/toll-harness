@@ -8,6 +8,16 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.42.0] - 2026-09-16
+
+- Add a durable three-dispatch budget per work state across market-watch's
+  step-ask, draft, and legacy routes. Counts survive restarts and alternating
+  failures; atomic reservation prevents concurrent workers exceeding the budget.
+- Skip exhausted work while allowing other work and changed input to proceed.
+- Add `loop-guard CONFIG [--reset WORK_KEY]` for inspection and scoped recovery.
+- Carry selected contact references and discovered contacts through email acts;
+  reject raw recipient addresses. Include person answers in step-ask context.
+
 ## [0.41.0] - 2026-09-12
 
 **The refusal's `shape` rides the fix ask.**

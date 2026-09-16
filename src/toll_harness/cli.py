@@ -29,6 +29,8 @@ from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.fleet import market_target_key
+from toll_harness.loop_guard import LoopGuard
+from toll_harness.loop_guard import fingerprint as loop_fingerprint
 from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
 from toll_harness.onboarding import (
@@ -1710,6 +1712,61 @@ def _configured_stall_threshold(config_path: Any) -> int:
         return _STALL_THRESHOLD_DEFAULT
 
 
+def _loop_guard(resources: Any) -> LoopGuard | None:
+    store = getattr(resources, "store", None)
+    # Real RuntimeResources always carries SQLiteStore. Lightweight embedders
+    # without persistent storage retain the legacy process-local backoff.
+    return LoopGuard(store.path) if isinstance(store, SQLiteStore) else None
+
+
+def _loop_key(obligation: dict[str, Any]) -> str:
+    return ":".join(_obligation_key(obligation))
+
+
+def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) -> str:
+    basis: dict[str, Any] = {"work": _obligation_key(obligation),
+                             "round": obligation.get("round"),
+                             "message_id": obligation.get("message_id")}
+    if isinstance(step, dict):
+        basis["step"] = json.loads(_deal_step_fingerprint(step))
+    elif obligation.get("kind") == "file_informed_plan":
+        reader = getattr(resources.toll_bench, "read_draft", None)
+        if callable(reader):
+            answer = reader(str(obligation.get("target_id") or ""), kind="plan")
+            if isinstance(answer, dict):
+                # Rewording the same bad field and updating a timestamp do not
+                # count as progress. Clearing/changing the problem does.
+                fix = answer.get("next_fix") or {}
+                basis["plan"] = {
+                    "next_fix": (fix.get("path"), fix.get("code")),
+                    "problems": [(p.get("path"), p.get("code"))
+                                 for p in answer.get("problems", []) if isinstance(p, dict)],
+                    "ready": answer.get("ready"), "closed": answer.get("closed"),
+                }
+    return loop_fingerprint(basis)
+
+
+def _loop_parked(reachability: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    return {"ok": True, "reachability": reachability, "attention_count": 0,
+            "run": None, "loop_guard": {"parked": keys, "attempt_limit": 3},
+            "retry_after_seconds": 300.0}
+
+
+def command_loop_guard(arguments: argparse.Namespace) -> int:
+    resources = build_runtime(arguments.config)
+    try:
+        guard = _loop_guard(resources)
+        if guard is None:
+            raise ValueError("Loop guard requires persistent SQLite storage")
+        if arguments.reset:
+            _print({"reset": arguments.reset, "states_removed": guard.reset(arguments.reset)})
+        else:
+            _print({"attempt_limit": 3, "states": guard.status()})
+        return 0
+    finally:
+        resources.close()
+
+
 def _process_market_attention(
     resources: Any,
     wait: int,
@@ -1734,12 +1791,13 @@ def _process_market_attention(
             "attention_count": 0,
             "run": None,
         }
+    guard = _loop_guard(resources)
     # Stalled keys drop out before anything is fetched or dispatched. They come
     # back the moment the server changes what it is asking for.
     _live: list[dict[str, Any]] = []
     _stalled = 0
     for item in obligations:
-        if _breaker_skip(item, resources):
+        if guard is None and _breaker_skip(item, resources):
             _stalled += 1
             continue
         _live.append(item)
@@ -1829,6 +1887,8 @@ def _process_market_attention(
     # Skipped steps drop out of this cycle's contention so plan requests and
     # message debts are not starved behind a person's silence.
     prefetched_steps: dict[str, dict[str, Any]] = {}
+    loop_states: dict[str, str] = {}
+    loop_parked: list[str] = []
     _remaining: list[dict[str, Any]] = []
     _idle_step_ids: list[str] = []
     _braked_step_ids: list[str] = []
@@ -1837,7 +1897,7 @@ def _process_market_attention(
     for item in obligations:
         step_id = str(item.get("step_id") or "")
         deal_id = str(item.get("deal_id") or "")
-        if item.get("kind") == "deal_step" and deal_id and callable(_read_step):
+        if item.get("kind") in _STEP_ASK_KINDS and deal_id and callable(_read_step):
             payload = prefetched_steps.get(deal_id)
             if payload is None:
                 try:
@@ -1865,6 +1925,22 @@ def _process_market_attention(
                 if step_id in _IDLE_STEP_MEMO and _deal_step_is_idle(step_id, payload):
                     _idle_step_ids.append(step_id)
                     continue
+        if guard is not None:
+            key = _loop_key(item)
+            if (item.get("kind") in _STEP_ASK_KINDS and deal_id
+                    and not isinstance(prefetched_steps.get(deal_id), dict)):
+                loop_parked.append(key)
+                continue
+            try:
+                state = _loop_state(resources, item, prefetched_steps.get(deal_id))
+            except Exception:  # No model dispatch without a reliable state probe.
+                _LOGGER.exception("Loop guard state probe failed for %s", key)
+                loop_parked.append(key)
+                continue
+            loop_states[key] = state
+            if guard.held(key, state):
+                loop_parked.append(key)
+                continue
         _remaining.append(item)
     if _idle_step_ids:
         _LOGGER.warning(
@@ -1927,6 +2003,8 @@ def _process_market_attention(
     # the next obligation on its next cycle.
     obligation = _select_obligation(obligations)
     if obligation is None:
+        if loop_parked:
+            return _loop_parked(reachability, loop_parked)
         # Every obligation was deferred (e.g. a lone deal step blocked on a
         # parked email send) or is the platform's to move. Nothing to hand
         # the model this cycle, so the loop has no reason to come back at
@@ -1943,6 +2021,10 @@ def _process_market_attention(
         if _braked_step_ids:
             _nothing["braked_steps"] = len(_braked_step_ids)
         return _nothing
+    if guard is not None:
+        key = _loop_key(obligation)
+        if not guard.reserve(key, loop_states[key]):
+            return _loop_parked(reachability, [key])
     kind = str(obligation.get("kind") or "")
     # RULE 241: the informed plan is built up in pieces too, at the same door.
     if kind == "file_informed_plan" and _draft_door_available(resources):
@@ -2540,6 +2622,24 @@ def _process_market_opportunities(
     checked against a live bench without spending an agent's one bid.
     """
     target_count, candidates, review_targets = _market_scan_candidates(resources)
+    guard = _loop_guard(resources)
+    parked = []
+    if guard is not None:
+        selected = []
+        for candidate in candidates:
+            key = "bid:" + _market_target_key(candidate)[0]
+            # Competing bid counts do not make our own broken proposal new work.
+            state = loop_fingerprint({k: v for k, v in candidate.items()
+                                      if k != "open_bid_count"})
+            if guard.reserve(key, state):
+                selected = [candidate]
+                break
+            parked.append(key)
+        candidates = selected
+        review_targets = [_market_target_key(t) for t in selected]
+        if not candidates and parked:
+            return {**_loop_parked(reachability, parked), "market_scan": True,
+                    "open_target_count": target_count, "candidate_count": 0}
     if not candidates:
         return {
             "ok": True,
@@ -3104,6 +3204,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Plan and validate at the bench's door, but file nothing",
     )
     watch.set_defaults(handler=command_market_watch)
+
+    guard = subcommands.add_parser("loop-guard", help="Inspect or explicitly reset parked work")
+    guard.add_argument("config")
+    guard.add_argument("--reset", metavar="WORK_KEY", help="Reset only this work key after repair")
+    guard.set_defaults(handler=command_loop_guard)
 
     operator = subcommands.add_parser("operator", help="Use the operator channel")
     operator_subcommands = operator.add_subparsers(dest="operator_command", required=True)

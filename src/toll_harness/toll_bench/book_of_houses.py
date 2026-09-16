@@ -3186,6 +3186,14 @@ class BookOfHousesTollBenchProvider:
             # contract 2.29: the same rows, email-only, in the older shape.
             "drafts_sent_back": result.get("drafts_sent_back") or [],
         }
+        # LAW A: the person's answers include the selected contact refs that
+        # make an email act valid. The step ask already preserves this block
+        # verbatim, but the provider whitelist used to drop it before the ask
+        # saw it, leaving the model to request contacts the person had already
+        # picked. Keep absence distinct from an empty list for older benches.
+        person_said = result.get("the_person_said")
+        if isinstance(person_said, list):
+            payload["the_person_said"] = list(person_said)
         # RULE 230, always present including zero. The file receipts ride the
         # step where the server puts them; read both places rather than making
         # the model poll a route for the one payload it must act on.
@@ -3414,7 +3422,8 @@ class BookOfHousesTollBenchProvider:
         Houses sends from your platform mailbox. kind 'calendar_event' -- the
         exact event, on a step whose deal already holds a calendar grant,
         which the person approves and Book of Houses puts on their calendar."""
-        allowed = {"kind", "to", "subject", "body_text", "purpose",
+        allowed = {"kind", "to", "contact_ref", "found_contact", "seat",
+                   "subject", "body_text", "purpose",
                    "in_reply_to",
                    "summary", "start", "end", "description", "location",
                    "attendees",
@@ -3505,11 +3514,26 @@ class BookOfHousesTollBenchProvider:
                 payload["purpose"] = str(act["purpose"])[:120]
             return self.api.propose_act(deal_id, step_id, payload,
                                         idempotency_key)
-        for field in ("to", "subject", "body_text"):
+        contact_ref = str(act.get("contact_ref") or "").strip()
+        found_contact = act.get("found_contact")
+        if act.get("to") or bool(contact_ref) == bool(found_contact):
+            return {
+                "ok": False,
+                "error": "contact_required",
+                "message": "An email needs exactly one contact_ref or found_contact.",
+            }
+        for field in ("subject", "body_text"):
             if not str(act.get(field) or "").strip():
                 return {"ok": False, "error": "missing_act_field", "field": field}
-        payload = {"kind": kind, "to": act["to"], "subject": act["subject"],
-                   "body_text": act["body_text"]}
+        payload = {
+            "kind": kind, "subject": act["subject"], "body_text": act["body_text"]
+        }
+        if contact_ref:
+            payload["contact_ref"] = contact_ref
+        else:
+            payload["found_contact"] = found_contact
+        if act.get("seat") is not None:
+            payload["seat"] = act["seat"]
         if act.get("purpose"):
             payload["purpose"] = str(act["purpose"])[:120]
         return self.api.propose_act(deal_id, step_id, payload, idempotency_key)

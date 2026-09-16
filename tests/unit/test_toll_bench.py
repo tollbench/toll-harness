@@ -752,6 +752,50 @@ def test_current_step_passes_open_ask_keys_through():
     assert result["open_ask_move"] == "File your outcome to OPEN this ask."
 
 
+def test_current_step_passes_person_answers_and_contact_refs_through():
+    # LAW A must survive both whitelists: the raw API response and the compact
+    # provider payload. Otherwise the step ask cannot file the email act even
+    # though the person already selected the recipients.
+    class PersonAnswersApi(FakeApi):
+        def current_step(self, deal_id):
+            payload = FakeApi.current_step(self, deal_id)
+            payload["the_person_said"] = [
+                {
+                    "question": "Who should this go to?",
+                    "answer": "New Test, Grant",
+                    "people": [
+                        {"name": "New Test", "contact_ref": "contact-1"},
+                        {"name": "Grant", "contact_ref": "contact-2"},
+                    ],
+                }
+            ]
+            return payload
+
+    result = BookOfHousesTollBenchProvider(PersonAnswersApi()).current_step("d1")
+
+    assert result["the_person_said"][0]["people"][0]["contact_ref"] == "contact-1"
+    assert result["the_person_said"][0]["people"][1]["contact_ref"] == "contact-2"
+
+
+def test_email_act_uses_the_selected_contact_ref_instead_of_a_raw_address():
+    class ActApi(FakeApi):
+        def propose_act(self, deal_id, step_id, payload, idempotency_key):
+            self.submissions.append((deal_id, step_id, payload, idempotency_key))
+            return {"ok": True, "act_id": "act-1"}
+
+    api = ActApi()
+    provider = BookOfHousesTollBenchProvider(api)
+    act = {
+        "kind": "email", "contact_ref": "contact-1",
+        "subject": "Catching up", "body_text": "Hi! You are amazing.",
+    }
+
+    result = provider.propose_act("d1", "s1", act, "act-key")
+
+    assert result["ok"] is True
+    assert api.submissions == [("d1", "s1", act, "act-key")]
+
+
 def test_withdraw_act_declaration_sends_the_kind_and_the_reason():
     # r218: a step that declared an act does not close without it. The way out
     # for an agent that changed its mind is words, not silence -- and the

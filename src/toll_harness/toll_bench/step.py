@@ -276,7 +276,8 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "The person sent your act back, or it was denied or failed, and their "
         "reason is in `note` on that act. That act is DEAD: never re-file the "
         "same words and never wait on it. File ONE changed act that answers "
-        'them: {"call": "propose_act", "act": {"kind": "email", "to": "...", '
+        'them: {"call": "propose_act", "act": {"kind": "email", '
+        '"contact_ref": "<picked contact_ref>", '
         '"subject": "...", "body_text": "...", "purpose": "..."}} (kind '
         "calendar_event carries summary, start, end; kind meeting carries "
         "`with`). If their reason is not something you can act on, say so on "
@@ -285,8 +286,9 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
     "file_act": (
         "Your signed plan declared an act on this step and it is not filed "
         "yet; the bench refuses the outcome until it is (acts_not_filed). File "
-        'it exactly: {"call": "propose_act", "act": {"kind": "email", "to": '
-        '"...", "subject": "...", "body_text": "...", "purpose": "..."}} or '
+        'it exactly: {"call": "propose_act", "act": {"kind": "email", '
+        '"contact_ref": "<from the_person_said.people>", "subject": "...", '
+        '"body_text": "...", "purpose": "..."}} or '
         '{"call": "propose_act", "act": {"kind": "calendar_event", "summary": '
         '"...", "start": {"dateTime": "...", "timeZone": "..."}, "end": {...}}}. '
         "The person approves it word for word and Book of Houses sends it; you "

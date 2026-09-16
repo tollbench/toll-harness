@@ -79,11 +79,11 @@ def test_a_runaway_meeting_message_is_capped():
 def test_an_email_act_still_goes_through_unchanged():
     provider, api = _provider()
     out = provider.propose_act('d-1', 's-1', {
-        'kind': 'email', 'to': 'ruby@example.com', 'subject': 'Hello',
+        'kind': 'email', 'contact_ref': 'contact-ruby', 'subject': 'Hello',
         'body_text': 'Hi Ruby', 'purpose': 'the introduction'}, 'k-1')
     assert out['ok'] is True
     (_deal, _step, payload, key) = api.calls[0]
-    assert payload['kind'] == 'email' and payload['to'] == 'ruby@example.com'
+    assert payload['kind'] == 'email' and payload['contact_ref'] == 'contact-ruby'
     assert key == 'k-1'
 
 
@@ -111,7 +111,7 @@ def test_each_kind_is_held_to_its_own_words():
         'kind': 'calendar_event', 'summary': 'Practice session 1'},
         'k-3')['error'] == 'missing_act_field'
     assert provider.propose_act('d-1', 's-1', {
-        'kind': 'email', 'to': 'ruby@example.com'},
+        'kind': 'email', 'contact_ref': 'contact-ruby'},
         'k-4')['error'] == 'missing_act_field'
     assert api.calls == [], 'a half-written act reached the bench'
 

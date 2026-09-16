@@ -653,6 +653,15 @@ def test_the_tail_carries_what_the_person_said_verbatim():
     assert step_module.PERSON_SAID_INSTRUCTION == draft.PERSON_SAID_INSTRUCTION
 
 
+def test_email_act_prompts_use_the_picked_contact_ref_shape():
+    from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS
+
+    for move in ("file_act", "refile_act"):
+        instruction = MOVE_INSTRUCTIONS[move]
+        assert '"contact_ref"' in instruction
+        assert '"to": "..."' not in instruction
+
+
 def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the_tail():
     from toll_harness.toll_bench import step as step_module
     kinds = FakeBench().list_act_kinds()
