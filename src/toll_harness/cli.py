@@ -2615,7 +2615,7 @@ def _the_step_ask(
             "model_calls": outcome.get("model_calls"),
             "prompt_chars": outcome.get("prompt_chars"),
             "prefix_chars": outcome.get("prefix_chars"),
-            "tool_count": 0,
+            "tool_count": outcome.get("tool_count", 0),
         },
         "step_ask": outcome,
         "run": None,

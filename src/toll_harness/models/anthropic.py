@@ -38,6 +38,13 @@ def _canonical_tool_name(name: str) -> str:
     return name.replace("__", ".")
 
 
+def _presented_schema(schema: JsonObject) -> JsonObject:
+    """The tool schema as this API accepts it: no oneOf, allOf or anyOf at the
+    top level. Only what Anthropic is shown changes; the caller validates the
+    answer against the schema it passed in."""
+    return {key: value for key, value in schema.items() if key not in ("oneOf", "allOf", "anyOf")}
+
+
 class AnthropicModelAdapter(ModelAdapter):
     """Anthropic Messages API adapter with no model-specific runtime behavior.
 
@@ -138,7 +145,7 @@ class AnthropicModelAdapter(ModelAdapter):
                 {
                     "name": _tool_alias(tool.name),
                     "description": f"{tool.name} v{tool.version}: {tool.description}",
-                    "input_schema": tool.input_schema,
+                    "input_schema": _presented_schema(tool.input_schema),
                 }
                 for tool in tools
             ]

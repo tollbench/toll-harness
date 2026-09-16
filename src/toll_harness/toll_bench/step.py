@@ -25,9 +25,11 @@ So a deal step is asked the way a plan is written. THREE THINGS:
      bench says is owed, answer the person, re-file an act that came back,
      file a declared act, hand the step back -- `the_move` names it and the
      tail carries ONLY this step: its title, ask and promise, what changed
-     since the last look, the one thing to produce and the exact call. The
-     model answers with the payload for that one call, the runtime makes the
-     call, done. The prefix is `draft.stable_prefix`, byte for byte, so the
+     since the last look and the one thing to produce. The model gets the
+     calls that move allows as TOOLS, one per form the bench publishes on
+     `submission.actions`, with the bench's schema; it answers with exactly
+     one tool call, checked against that full schema, and the runtime makes
+     the call, done. The prefix is `draft.stable_prefix`, byte for byte, so the
      provider cache is shared with the bid loop.
   3. THE OLD ROAD IS STILL THERE for a move this ask cannot shape: a step
      that hands back bytes or a link (rule 230), an approved `outside` act
@@ -41,18 +43,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from toll_harness.core.budget import ContextBudget
-from toll_harness.core.types import ModelMessage
+from toll_harness.core.types import ModelMessage, ToolDefinition
 from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
     PERSON_SAID_KEY,
     PROMPT_CHAR_BUDGET,
     _fit,
     cached_input_tokens,
-    read_json_object,
     stable_prefix,
 )
 
@@ -250,8 +254,8 @@ def the_move(payload: dict[str, Any], obligation: dict[str, Any] | None = None) 
 STEP_DOOR = (
     "THIS IS NOT A PLAN ROUND. The plan is signed and you are walking ONE step "
     "of it. Below: the step, what changed since you last looked, and the one "
-    "move that is yours. Answer with the payload for that one call and nothing "
-    "else. Never write 'click Approve to send' or 'from your mailbox' to the "
+    "move that is yours. Make exactly ONE call with the tools you are given "
+    "and nothing else. Never write 'click Approve to send' or 'from your mailbox' to the "
     "person; never ask for a password, code, session or cookie; no bare URLs "
     "in a pulse."
 )
@@ -260,77 +264,123 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
     "answer_reply": (
         "Someone outside answered your email and the bench says you owe them a "
         "reply before anything else moves on this step (rule 220). Answer in "
-        'their thread: {"call": "propose_act", "act": {"in_reply_to": "<the '
-        'reply id>", "body_text": "<your words>"}} -- the bench fills to and '
-        "subject from the thread. If it is not a question (spam, a bounce, an "
-        'out-of-office) say why in one sentence: {"call": "dismiss_reply", '
-        '"reply_id": "<id>", "reason": "<one plain sentence>"}.'
+        "their thread with the propose_act tool for that reply -- the bench "
+        "fills to and subject from the thread. If it is not a question (spam, "
+        "a bounce, an out-of-office) use the dismiss_reply tool for that reply "
+        "and say why in one plain sentence."
     ),
     "answer_person": (
         "The person wrote on this step and nothing has gone back. Answer them, "
-        'plainly, and nothing else this round: {"call": "reply_step_message", '
-        '"reply": "<your words, under 4000 characters>"}. This is chat: it does '
-        "not close the step and does not open an ask."
+        "plainly, and nothing else this round, with reply_step_message. This is "
+        "chat: it does not close the step and does not open an ask."
     ),
     "refile_act": (
         "The person sent your act back, or it was denied or failed, and their "
         "reason is in `note` on that act. That act is DEAD: never re-file the "
         "same words and never wait on it. File ONE changed act that answers "
-        'them: {"call": "propose_act", "act": {"kind": "email", '
-        '"contact_ref": "<picked contact_ref>", '
-        '"subject": "...", "body_text": "...", "purpose": "..."}} (kind '
-        "calendar_event carries summary, start, end; kind meeting carries "
-        "`with`). If their reason is not something you can act on, say so on "
-        'the thread instead: {"call": "reply_step_message", "reply": "..."}.'
+        "them with a propose_act tool. If their reason is not something you "
+        "can act on, say so on the thread with reply_step_message instead."
     ),
     "file_act": (
         "Your signed plan declared an act on this step and it is not filed "
         "yet; the bench refuses the outcome until it is (acts_not_filed). File "
-        'it exactly: {"call": "propose_act", "act": {"kind": "email", '
-        '"contact_ref": "<from the_person_said.people>", "subject": "...", '
-        '"body_text": "...", "purpose": "..."}} or '
-        '{"call": "propose_act", "act": {"kind": "calendar_event", "summary": '
-        '"...", "start": {"dateTime": "...", "timeZone": "..."}, "end": {...}}}. '
-        "The person approves it word for word and Book of Houses sends it; you "
-        "never send it and never ask them to. If you do not know the recipient, "
-        'ask the person: {"call": "reply_step_message", "reply": "..."}.'
+        "it with the propose_act tool for its kind; an email names its "
+        "recipient by `contact_ref` from the_person_said.people. The person "
+        "approves it word for word and Book of Houses sends it; you never send "
+        "it and never ask them to. If you do not know the recipient, ask the "
+        "person with reply_step_message."
     ),
     "hand_back": (
         "Hand this step back: write the thing the step promised, from what is "
-        'in front of you, and file it: {"call": "file_outcome", "pulse": '
-        '{"changed": "<what you did, under 280 chars>", "now": "<one line>", '
-        '"next": "<one line>"}, "outcome": {"note": "<overview and the '
-        "person's next instruction, under 280 chars>\", \"document\": "
-        '{"title": "...", "blocks": [{"type": "heading", "text": "..."}, '
-        '{"type": "paragraph", "text": "..."}, {"type": "bullets", "items": '
-        '["..."]}]}}}. An APPROVE step takes `document`; any other ask may '
-        "carry `text` (a short string) instead of `document`. If "
+        "in front of you, and file it with file_outcome. If "
         "`deliverable.fields` is named, the document carries a `cards` block: "
         "items are objects keyed by exactly those field names, at least "
         "min_count of them, every value filled. If an act on this step reads "
         "sent or executed, quote its receipt in the document and send nothing "
         "yourself. If you asked someone outside and nothing can move until "
-        'they answer: {"call": "wait_outside", "wait": {"on": "email_reply", '
-        '"who": "...", "what": "..."}} (on is email_reply, third_party or '
-        'provider). If you must ask the person one thing first: {"call": '
-        '"reply_step_message", "reply": "..."}. If this step cannot be done '
-        "without a live search, a browser, a file or a tool: "
-        '{"call": "need_tools", "why": "..."} and nothing else.'
+        "they answer, use wait_outside. If you must ask the person one thing "
+        "first, use reply_step_message. If this step cannot be done without a "
+        "live search, a browser, a file or a tool, use need_tools and nothing "
+        "else."
     ),
 }
 
 PULSE_DUE_INSTRUCTION = (
     "A progress pulse is due (rule 100). If you are filing the outcome now, "
-    "the pulse rides with it. If you are not, post one honest pulse: "
-    '{"call": "post_check_in", "pulse": {"changed": "...", "now": "...", '
-    '"next": "...", "progress_percent": 0|25|50|75, "blocker": "<optional>"}} '
-    "-- never flat progress with no blocker on an ask the person cannot see yet."
+    "the pulse rides with it. If you are not, post one honest pulse with "
+    "post_check_in -- never flat progress with no blocker on an ask the person "
+    "cannot see yet."
 )
 
 REFUSED_INSTRUCTION = (
-    "The bench refused your last answer; its own words are in `the_bench_refused`. "
-    "Fix exactly what it names and answer once more with the same call shape."
+    "Your last answer was refused; the words are in `the_bench_refused`. "
+    "Fix exactly what it names and make the call once more."
 )
+
+# The bench's action name for each call this module makes.
+BENCH_ACTIONS: dict[str, str] = {
+    "propose_act": "propose_act",
+    "dismiss_reply": "dismiss_reply",
+    "reply_step_message": "post_step_message",
+    "post_check_in": "post_work_pulse",
+    "wait_outside": "wait_outside",
+    "file_outcome": "submit_step_outcome",
+}
+NEED_TOOLS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"why": {"type": "string", "minLength": 1}},
+    "required": ["why"],
+}
+_REPLY_IN_ENDPOINT = re.compile(r"/replies/([^/]+)/dismiss$")
+
+
+def step_tools(move: dict[str, Any], payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Tool name -> {call, schema, action}: one tool per form the bench
+    publishes for a call this move allows. Two forms for one call (two owed
+    replies, two declared acts) are two tools, `propose_act`, `propose_act_2`.
+    The schema is the bench's, whole."""
+    submission = payload.get("submission")
+    actions = submission.get("actions") if isinstance(submission, dict) else None
+    tools: dict[str, dict[str, Any]] = {}
+    for call in move.get("calls") or []:
+        forms = [
+            action for action in actions or []
+            if isinstance(action, dict)
+            and action.get("action") == BENCH_ACTIONS.get(call)
+            and isinstance(action.get("schema"), dict)
+        ]
+        for index, action in enumerate(forms, start=1):
+            name = call if index == 1 else f"{call}_{index}"
+            tools[name] = {"call": call, "schema": action["schema"], "action": action}
+    if tools and move.get("move") == "hand_back":
+        tools[NEED_TOOLS] = {"call": NEED_TOOLS, "schema": NEED_TOOLS_SCHEMA, "action": {}}
+    return tools
+
+
+def _definition(name: str, tool: dict[str, Any]) -> ToolDefinition:
+    action = tool["action"]
+    words = [str(action.get("result") or "")]
+    if action.get("template") is not None:
+        words.append("Template: " + json.dumps(action["template"], default=str))
+    if action.get("field_notes"):
+        words.append("Fields: " + json.dumps(action["field_notes"], default=str))
+    if tool["call"] == NEED_TOOLS:
+        words = ["This step needs a live search, a browser, a file or a tool."]
+    return ToolDefinition(name, " ".join(word for word in words if word), tool["schema"])
+
+
+def _schema_problem(arguments: Any, schema: dict[str, Any]) -> str | None:
+    """Where the arguments break the bench's schema, never their values."""
+    error = next(iter(sorted(
+        Draft202012Validator(schema).iter_errors(arguments),
+        key=lambda e: len(list(e.absolute_path)),
+    )), None)
+    if error is None:
+        return None
+    path = "".join(
+        f"[{part}]" if isinstance(part, int) else f".{part}" for part in error.absolute_path
+    )
+    return f"arguments{path} fails {error.validator}"
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +595,9 @@ class StepAsk:
         self.budget = ContextBudget(limit=0)
 
     # -- the model ---------------------------------------------------------
-    def _ask(self, instruction: str, tail: dict[str, Any], what: str) -> dict[str, Any]:
+    def _ask(
+        self, instruction: str, tail: dict[str, Any], what: str, tools: list[ToolDefinition]
+    ) -> Any:
         body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
         text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
         while len(text) > PROMPT_CHAR_BUDGET and _shed(tail):
@@ -563,7 +615,7 @@ class StepAsk:
         response = self.model.invoke(
             system=self.prefix,
             messages=[ModelMessage.text("user", text)],
-            tools=[],
+            tools=tools,
         )
         usage = getattr(response, "usage", None)
         if usage is not None:
@@ -582,7 +634,34 @@ class StepAsk:
             (len(self.prefix) + len(text)) // 4,
             "unreported" if cached is None else cached,
         )
-        return read_json_object(getattr(response, "text", ""))
+        return response
+
+    @staticmethod
+    def _one_call(
+        response: Any, tools: dict[str, dict[str, Any]]
+    ) -> tuple[str, dict[str, Any]] | dict[str, Any]:
+        """(tool name, arguments) when the answer is exactly one permitted tool
+        call whose arguments fit the bench's schema; otherwise the refusal,
+        named for what was wrong. Nothing runs before this says yes."""
+        allowed = sorted(tools)
+        calls = list(getattr(response, "tool_calls", None) or [])
+        if len(calls) != 1:
+            empty = not calls and not str(getattr(response, "text", "") or "").strip()
+            failure = "empty_response" if empty else "malformed_response"
+            return {"ok": False, "error": failure, "failure": failure,
+                    "tool_calls": len(calls), "allowed": allowed,
+                    "message": f"Make exactly one tool call, one of {', '.join(allowed)}."}
+        name = str(calls[0].name or "")
+        if name not in tools:
+            return {"ok": False, "error": "disallowed_tool", "failure": "disallowed_tool",
+                    "call": name, "allowed": allowed,
+                    "message": f"The call must be one of {', '.join(allowed)}."}
+        arguments = calls[0].arguments
+        problem = _schema_problem(arguments, tools[name]["schema"])
+        if problem:
+            return {"ok": False, "error": "invalid_arguments", "failure": "invalid_arguments",
+                    "call": name, "message": problem}
+        return name, dict(arguments)
 
     # -- the call ----------------------------------------------------------
     @staticmethod
@@ -595,75 +674,49 @@ class StepAsk:
     def _make_the_call(
         self,
         ids: dict[str, Any],
-        move: dict[str, Any],
+        tool: dict[str, Any],
         answer: dict[str, Any],
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        call = str(answer.get("call") or "").strip()
-        allowed = list(move.get("calls") or [])
-        if call not in allowed:
-            return {
-                "ok": False,
-                "error": "call_not_the_move",
-                "allowed": allowed,
-                "message": (
-                    f"The move on this step is {move.get('move')}; the call must be one "
-                    f"of {', '.join(allowed)}."
-                ),
-            }
+        call = tool["call"]
         deal_id = str(ids.get("deal_id") or "")
         step_id = str(ids.get("step_id") or "")
         key = self._key(step_id, call, answer)
         try:
             if call == "propose_act":
-                act = answer.get("act")
-                if not isinstance(act, dict) or not act:
-                    return {"ok": False, "error": "missing_act",
-                            "message": "`act` must be an object."}
-                return self.provider.propose_act(deal_id, step_id, act, key)
-            if call == "dismiss_reply":
-                return self.provider.dismiss_reply(
-                    deal_id, step_id, str(answer.get("reply_id") or ""),
+                result = self.provider.propose_act(deal_id, step_id, answer, key)
+            elif call == "dismiss_reply":
+                found = _REPLY_IN_ENDPOINT.search(str(tool["action"].get("endpoint") or ""))
+                result = self.provider.dismiss_reply(
+                    deal_id, step_id, found.group(1) if found else "",
                     {"reason": str(answer.get("reason") or "")}, key,
                 )
-            if call == "reply_step_message":
-                reply = str(answer.get("reply") or "").strip()
-                if not reply:
-                    return {"ok": False, "error": "missing_reply", "message": "`reply` is empty."}
-                return self.provider.reply_step_message(deal_id, step_id, reply[:4000], key)
-            if call == "post_check_in":
-                pulse = answer.get("pulse")
-                if not isinstance(pulse, dict):
-                    return {"ok": False, "error": "missing_pulse",
-                            "message": "`pulse` must be an object."}
-                return self.provider.post_check_in(deal_id, pulse, key)
-            if call == "wait_outside":
-                wait = answer.get("wait")
-                if not isinstance(wait, dict):
-                    return {"ok": False, "error": "missing_wait",
-                            "message": "`wait` must be an object."}
-                return self.provider.wait_outside(deal_id, step_id, wait, key)
-            if call == "file_outcome":
-                return self._file_the_outcome(ids, answer, payload, key)
+            elif call == "reply_step_message":
+                result = self.provider.reply_step_message(
+                    deal_id, step_id, str(answer.get("reply") or "")[:4000], key)
+            elif call == "post_check_in":
+                result = self.provider.post_check_in(deal_id, answer, key)
+            elif call == "wait_outside":
+                result = self.provider.wait_outside(deal_id, step_id, answer, key)
+            else:
+                result = self._file_the_outcome(ids, answer, payload, key)
         except Exception as error:  # noqa: BLE001 - a refusal is an answer, not a crash
-            return {
+            result = {
                 "ok": False,
                 "error": getattr(error, "code", None) or type(error).__name__,
                 "status": getattr(error, "status", None),
                 "message": getattr(error, "message", None) or str(error),
             }
-        return {"ok": False, "error": "unknown_call", "message": f"No door for {call}."}
+        if isinstance(result, dict) and not result.get("ok", True):
+            result = dict(result, failure="server_rejected")
+        return result
 
     def _file_the_outcome(
         self, ids: dict[str, Any], answer: dict[str, Any], payload: dict[str, Any], key: str
     ) -> dict[str, Any]:
         """The 100% pulse, then the outcome. A first pulse of 100 is legal on
         the bench (Steven, 2026-08-25); a pulse already at 100 is not repeated."""
-        outcome = answer.get("outcome")
-        if not isinstance(outcome, dict) or not outcome:
-            return {"ok": False, "error": "missing_outcome",
-                    "message": "`outcome` must be an object."}
-        outcome = dict(outcome)
+        outcome = dict(answer)
         outcome.setdefault("step_ref", str(ids.get("step_id") or ""))
         latest = payload.get("latest_work_pulse") or {}
         try:
@@ -672,12 +725,11 @@ class StepAsk:
             at_full = False
         automatic = (payload.get("submission") or {}).get("completion_recorded_on_outcome") is True
         if not at_full and not automatic:
-            given = answer.get("pulse") if isinstance(answer.get("pulse"), dict) else {}
             note = str(outcome.get("note") or "")[:280]
             pulse = {
-                "changed": str(given.get("changed") or note or "Finished the step's work")[:280],
-                "now": str(given.get("now") or "Filing the handover")[:280],
-                "next": str(given.get("next") or "Your review")[:280],
+                "changed": note or "Finished the step's work",
+                "now": "Filing the handover",
+                "next": "Your review",
                 "progress_percent": 100,
             }
             pulsed = self.provider.post_check_in(
@@ -687,11 +739,12 @@ class StepAsk:
                 return pulsed
         return self.provider.file_outcome(str(ids.get("target_id") or ""), outcome, key)
 
-    def _note(self, answer: dict[str, Any], result: dict[str, Any]) -> None:
+    def _note(self, call: Any, result: dict[str, Any]) -> None:
         self.trail.append({
-            "call": answer.get("call"),
+            "call": call,
             "ok": bool(result.get("ok")),
             "error": result.get("error"),
+            "failure": result.get("failure"),
         })
 
     # -- the run -----------------------------------------------------------
@@ -731,48 +784,53 @@ class StepAsk:
             payload, obligation, move, changed or [], pulse_due=pulse_due, refused=refused
         )
         ids = dict(tail["ids"])
-        answer = self._ask(
-            (REFUSED_INSTRUCTION + " " + instruction) if refused else instruction,
-            tail,
-            f"{move['move']} step {number}",
-        )
-        if str(answer.get("call") or "") == NEED_TOOLS:
-            return {
-                "ok": False,
-                "road": ROAD_AGENTIC,
-                "why": f"the model says it needs tools: {str(answer.get('why') or '')[:200]}",
-                "model_calls": self.calls,
-                "prompt_chars": self.prompt_chars,
-            }
-        result = self._make_the_call(ids, move, answer, payload)
-        self._note(answer, result)
-        if not result.get("ok"):
-            self.log.warning(
-                "step ask %s step %s: %s refused (%s); asking once more with the refusal",
-                move["move"], number, answer.get("call"), result.get("error"),
+        tools = step_tools(move, payload)
+        if not tools:
+            return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,
+                    "why": f"the bench publishes no form for the {move['move']} calls"}
+        definitions = [_definition(name, tool) for name, tool in tools.items()]
+        name: str | None = None
+        result: dict[str, Any] = {}
+        # Asked twice at most: once, and once more with the refusal.
+        for attempt in (1, 2):
+            if attempt == 2:
+                self.log.warning(
+                    "step ask %s step %s: %s refused (%s %s); asking once more with the refusal",
+                    move["move"], number, name, result.get("failure"), result.get("error"),
+                )
+                tail = step_tail(
+                    payload, obligation, move, changed or [], pulse_due=pulse_due, refused=result
+                )
+            response = self._ask(
+                (REFUSED_INSTRUCTION + " " + instruction)
+                if (refused or attempt == 2) else instruction,
+                tail,
+                f"{move['move']} step {number}" + (" again" if attempt == 2 else ""),
+                definitions,
             )
-            tail = step_tail(
-                payload, obligation, move, changed or [], pulse_due=pulse_due, refused=result
-            )
-            answer = self._ask(
-                REFUSED_INSTRUCTION + " " + instruction, tail, f"{move['move']} step {number} again"
-            )
-            if str(answer.get("call") or "") == NEED_TOOLS:
-                return {
-                    "ok": False,
-                    "road": ROAD_AGENTIC,
-                    "why": f"the model says it needs tools: {str(answer.get('why') or '')[:200]}",
-                    "model_calls": self.calls,
-                    "prompt_chars": self.prompt_chars,
-                }
-            result = self._make_the_call(ids, move, answer, payload)
-            self._note(answer, result)
+            picked = self._one_call(response, tools)
+            if isinstance(picked, dict):
+                name, result = picked.get("call"), picked
+            else:
+                name, answer = picked
+                if tools[name]["call"] == NEED_TOOLS:
+                    return {
+                        "ok": False,
+                        "road": ROAD_AGENTIC,
+                        "why": f"the model says it needs tools: {str(answer.get('why'))[:200]}",
+                        "model_calls": self.calls,
+                        "prompt_chars": self.prompt_chars,
+                    }
+                result = self._make_the_call(ids, tools[name], answer, payload)
+            self._note(name, result)
+            if result.get("ok"):
+                break
         ok = bool(result.get("ok"))
         self.log.info(
             "step ask %s step %s: %s %s after %d model call(s); prefix %d chars sent "
             "once and cached, tails %d chars (~%d tokens), input tokens %s, cached input %s",
-            move["move"], number, answer.get("call"),
-            "made" if ok else f"refused ({result.get('error')})",
+            move["move"], number, name,
+            "made" if ok else f"refused ({result.get('failure')} {result.get('error')})",
             self.calls, len(self.prefix), self.prompt_chars,
             (len(self.prefix) + self.prompt_chars) // 4,
             self.input_tokens or "unreported", self.cached_tokens or "unreported",
@@ -781,7 +839,8 @@ class StepAsk:
             "ok": ok,
             "road": ROAD_STEP_ASK,
             "move": move["move"],
-            "call": answer.get("call"),
+            "call": name,
+            "tool_count": len(definitions),
             "result": result,
             "model_calls": self.calls,
             "prompt_chars": self.prompt_chars,
@@ -792,5 +851,6 @@ class StepAsk:
         }
         if not ok:
             out["error"] = str(result.get("error") or "step_ask_refused")
+            out["failure"] = result.get("failure")
             out["message"] = result.get("message")
         return out

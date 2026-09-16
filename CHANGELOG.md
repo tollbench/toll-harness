@@ -8,6 +8,23 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.44.0] - 2026-09-16
+
+- The deal-step ask now uses the model tool-call contract. Each form the server
+  publishes on `submission.actions` for a call the move allows is offered as its
+  own tool (`propose_act`, `propose_act_2`, ...) with the server schema, and the
+  one returned tool call is dispatched through its existing door. A valid call
+  with empty response text is no longer lost. The text `{"call": ...}` format is
+  removed from this path.
+- Exactly one permitted tool call is required, and its arguments are validated
+  against the full server schema before anything is filed. Failures are reported
+  as `empty_response`, `malformed_response`, `disallowed_tool`,
+  `invalid_arguments` or `server_rejected`, without argument values.
+  Idempotency keys and the single retry are unchanged.
+- A server that publishes no step forms sends the step to the agentic road.
+- The Anthropic adapter omits top-level `oneOf`/`allOf`/`anyOf` from the
+  schema that API is shown; validation still uses the original schema.
+
 ## [0.43.1] - 2026-09-16
 
 - Preserve the older server response shape when no review-round field is sent.

@@ -25,6 +25,7 @@ from toll_harness.core.types import (
     ModelUsage,
     RunResult,
     RunStatus,
+    ToolCall,
 )
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench import draft
@@ -42,9 +43,20 @@ from toll_harness.tools.registry import build_standard_registry
 # ---------------------------------------------------------------------------
 # Fixtures: a step, a bench, a model that answers with JSON
 # ---------------------------------------------------------------------------
-def _says(text):
-    return ModelResponse(message=ModelMessage.text("assistant", text), text=text, tool_calls=[],
+def _says(text, calls=()):
+    return ModelResponse(message=ModelMessage.text("assistant", text), text=text,
+                         tool_calls=list(calls),
                          usage=ModelUsage(input_tokens=1500, output_tokens=200, total_tokens=1700))
+
+
+def _calls(answer):
+    """A tool-call response, text empty, from a {"call": name, ...} shorthand."""
+    if isinstance(answer, ModelResponse):
+        return answer
+    if isinstance(answer, str):
+        return _says(answer)
+    arguments = {key: value for key, value in answer.items() if key != "call"}
+    return _says("", [ToolCall(id="tc-1", name=answer["call"], arguments=arguments)])
 
 
 class CachingModel(ScriptedModelAdapter):
@@ -54,7 +66,7 @@ class CachingModel(ScriptedModelAdapter):
 
 def _model(*answers, caching=True):
     cls = CachingModel if caching else ScriptedModelAdapter
-    return cls([_says(json.dumps(a) if not isinstance(a, str) else a) for a in answers])
+    return cls([_calls(a) for a in answers])
 
 
 BRIEF = {
@@ -74,6 +86,43 @@ BRIEF = {
         },
     ],
 }
+
+
+def _form(action, schema, endpoint="/x"):
+    return {"action": action, "endpoint": endpoint, "schema": schema, "template": {},
+            "result": f"the {action} door"}
+
+
+def _obj(properties, required=()):
+    return {"type": "object", "properties": properties, "required": list(required)}
+
+
+TEXT = {"type": "string", "minLength": 1}
+# The bench's email act form, as act_submission.schema_for('email') publishes it.
+EMAIL_FORM = dict(
+    _obj({"kind": {"const": "email"}, "contact_ref": {"type": "string"},
+          "subject": {"type": "string"}, "in_reply_to": {"type": "string"},
+          "purpose": {"type": "string"}, "to": {"type": "string"},
+          "body_text": dict(TEXT, maxLength=5000)}, ("kind", "body_text")),
+    **{"if": {"required": ["in_reply_to"]},
+       "else": {"required": ["subject"], "anyOf": [{"required": ["contact_ref"]},
+                                                   {"required": ["to"]}]}},
+)
+ACTIONS = [
+    _form("post_step_message", _obj({"reply": dict(TEXT, maxLength=4000)}, ("reply",))),
+    _form("post_work_pulse", _obj({"changed": TEXT, "now": TEXT, "next": TEXT,
+                                   "progress_percent": {"enum": [0, 25, 50, 75, 100]}},
+                                  ("changed", "now", "next", "progress_percent"))),
+    _form("propose_act", EMAIL_FORM),
+    _form("wait_outside", _obj({"on": {"enum": ["email_reply", "third_party", "provider"]},
+                                "who": TEXT, "what": TEXT}, ("on", "who", "what"))),
+    _form("submit_step_outcome", _obj({"note": dict(TEXT, maxLength=280),
+                                       "step_ref": {"const": "s-1"},
+                                       "document": {"type": "object"}},
+                                      ("note", "step_ref"))),
+    _form("dismiss_reply", _obj({"reason": TEXT}, ("reason",)),
+          "/api/bench/deals/d1/steps/s-1/replies/r1/dismiss"),
+]
 
 
 def _payload(**over):
@@ -111,6 +160,7 @@ def _payload(**over):
         "acts": [], "declared_acts": [], "drafts_sent_back": [],
         "owed_replies": [], "inbound_replies": [],
         "waiting_outside": None,
+        "submission": {"completion_recorded_on_outcome": True, "actions": ACTIONS},
     }
     base.update(over)
     return base
@@ -169,17 +219,15 @@ OBLIGATION = {
 
 CAFES = {
     "call": "file_outcome",
-    "pulse": {"changed": "Picked three cafes", "now": "Filing the list", "next": "Your review"},
-    "outcome": {
-        "note": "Three quiet cafes with hours. Approve to close the step.",
-        "document": {"title": "Three quiet cafes", "blocks": [
-            {"type": "cards", "items": [
-                {"name": "Barista", "address": "1725 NE Alberta", "hours": "7-5"},
-                {"name": "Proud Mary", "address": "2012 NE Alberta", "hours": "7-4"},
-                {"name": "Case Study", "address": "1422 NE Alberta", "hours": "7-6"},
-            ]},
+    "step_ref": "s-1",
+    "note": "Three quiet cafes with hours. Approve to close the step.",
+    "document": {"title": "Three quiet cafes", "blocks": [
+        {"type": "cards", "items": [
+            {"name": "Barista", "address": "1725 NE Alberta", "hours": "7-5"},
+            {"name": "Proud Mary", "address": "2012 NE Alberta", "hours": "7-4"},
+            {"name": "Case Study", "address": "1422 NE Alberta", "hours": "7-6"},
         ]},
-    },
+    ]},
 }
 
 
@@ -259,16 +307,17 @@ def test_a_hand_back_is_one_small_ask_and_one_call_with_nothing_carried():
 
     assert out["ok"] is True and out["road"] == "step_ask" and out["call"] == "file_outcome"
     assert out["model_calls"] == 1
-    # ONE user message, no tools, no tool result from any earlier call.
+    # ONE user message carrying no tool result, and only this move's tools.
     [invocation] = model.invocations
-    assert invocation["tools"] == []
+    assert [tool.name for tool in invocation["tools"]] == [
+        "file_outcome", "reply_step_message", "wait_outside", "post_check_in", NEED_TOOLS]
     assert len(invocation["messages"]) == 1
     assert all(block.get("type") == "text" for block in invocation["messages"][0].content)
     prompt_chars = len(invocation["system"]) + sum(
         len(b["text"]) for b in invocation["messages"][0].content)
     assert prompt_chars < 8_000, prompt_chars
-    # The bench got the 100% pulse and then the outcome, on this step.
-    assert bench.pulses[0][1]["progress_percent"] == 100
+    # This bench records completion on the outcome: no separate pulse.
+    assert bench.pulses == []
     assert bench.outcomes[0][0] == "t1"
     assert bench.outcomes[0][1]["step_ref"] == "s-1"
     assert bench.outcomes[0][1]["document"]["blocks"][0]["type"] == "cards"
@@ -300,7 +349,7 @@ def test_the_tail_carries_only_this_step():
 
 def test_a_pulse_already_at_100_is_not_repeated():
     bench = FakeBench()
-    payload = _payload(latest_work_pulse={
+    payload = _payload(submission={"actions": ACTIONS}, latest_work_pulse={
             "progress_percent": 100,
             "next_due_at": "2999-01-01T00:00:00Z",
         })
@@ -334,13 +383,12 @@ def test_two_refusals_end_the_ask_with_the_benchs_error():
 
 def test_a_call_that_is_not_the_move_is_refused_before_the_bench_sees_it():
     bench = FakeBench()
-    wrong = {"call": "file_outcome", "outcome": CAFES["outcome"]}
-    out = StepAsk(_model(wrong, wrong), bench).run(
+    out = StepAsk(_model(CAFES, CAFES), bench).run(
         OBLIGATION,
         _payload(owed_replies=[{"id": "r1", "from": "ruby@x"}]),
         brief=BRIEF,
     )
-    assert out["ok"] is False and out["error"] == "call_not_the_move"
+    assert out["ok"] is False and out["error"] == "disallowed_tool"
     assert bench.outcomes == []
 
 
@@ -378,11 +426,12 @@ def test_an_owed_reply_is_answered_in_its_thread():
                 "text": "Which day?",
             }])
     out = StepAsk(
-        _model({"call": "propose_act", "act": {"in_reply_to": "r1", "body_text": "Tuesday at 2."}}),
+        _model({"call": "propose_act", "kind": "email", "in_reply_to": "r1",
+                "body_text": "Tuesday at 2."}),
         bench,
     ).run(OBLIGATION, owed, brief=BRIEF)
     assert out["ok"] and out["move"] == "answer_reply"
-    assert bench.acts[0][2] == {"in_reply_to": "r1", "body_text": "Tuesday at 2."}
+    assert bench.acts[0][2] == {"kind": "email", "in_reply_to": "r1", "body_text": "Tuesday at 2."}
 
 
 def test_a_returned_act_is_refiled_once_changed():
@@ -401,7 +450,7 @@ def test_a_returned_act_is_refiled_once_changed():
         "purpose": "book",
     }
     out = StepAsk(
-        _model({"call": "propose_act", "act": act}),
+        _model(dict(act, call="propose_act")),
         bench,
     ).run(OBLIGATION, back, brief=BRIEF)
     assert out["ok"] and out["move"] == "refile_act"
@@ -653,13 +702,13 @@ def test_the_tail_carries_what_the_person_said_verbatim():
     assert step_module.PERSON_SAID_INSTRUCTION == draft.PERSON_SAID_INSTRUCTION
 
 
-def test_email_act_prompts_use_the_picked_contact_ref_shape():
-    from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS
+def test_move_prompts_name_tools_and_carry_no_json_call_shapes():
+    from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS, PULSE_DUE_INSTRUCTION
 
-    for move in ("file_act", "refile_act"):
-        instruction = MOVE_INSTRUCTIONS[move]
-        assert '"contact_ref"' in instruction
+    for instruction in [*MOVE_INSTRUCTIONS.values(), PULSE_DUE_INSTRUCTION]:
+        assert '{"call"' not in instruction
         assert '"to": "..."' not in instruction
+    assert "`contact_ref`" in MOVE_INSTRUCTIONS["file_act"]
 
 
 def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the_tail():
@@ -681,7 +730,7 @@ def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the
 
 def test_outcome_automatically_records_completion_on_new_server():
     bench = FakeBench()
-    payload = _payload(submission={"completion_recorded_on_outcome": True})
+    payload = _payload(submission={"completion_recorded_on_outcome": True, "actions": ACTIONS})
     result = StepAsk(_model(CAFES), bench).run(OBLIGATION, payload, brief=BRIEF)
     assert result["ok"]
     assert not bench.pulses
