@@ -8,6 +8,19 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.42.1] - 2026-09-16
+
+- Keep the model-written plan `odds` and `overview` when filling the form, and
+  accept every step field the plan door publishes (`work_line`, `words`,
+  `room`, `wait` were dropped).
+- When the door asks for a plan-level field such as `form.odds`, read the
+  bare answers `{"odds": v}` and `{"form": {"odds": v}}` as that patch. The
+  value is passed unchanged; a missing or conflicting answer sends nothing.
+- The form prompt shows `odds` and `overview` and no longer promises that long
+  text is trimmed; a plan-level fix carries the plan-level fields.
+- Log each draft-loop reply as empty, malformed JSON, an object (key names
+  only) or an API error (exception class only). Retry limits are unchanged.
+
 ## [0.42.0] - 2026-09-16
 
 - Add a durable three-dispatch budget per work state across market-watch's

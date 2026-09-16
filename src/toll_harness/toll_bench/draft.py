@@ -226,9 +226,9 @@ BLANKS_INSTRUCTION = (
     "belongs there. A blank that carries `question` is asked in plain words: "
     "ANSWER THAT QUESTION. A blank that carries `choices` is a PICK -- answer "
     "with one of those words exactly as it is written and nothing else. A "
-    "blank that carries `up_to_characters` is trimmed to that length by the "
-    "bench if you go over, never refused, so write it short rather than "
-    "padding it. Fill them in your own words; leave nothing you can answer "
+    "blank that carries `up_to_characters` is a cap: stay within it, and "
+    "write short rather than padding it. Fill them in your own words; leave "
+    "nothing you can answer "
     "empty; change nothing else. A `you` blank is the person's own bullet for "
     "that part, pinned to it: write it as its note says (one line, starts with "
     "connect / approve / pick / answer, names the thing) rather than leaving "
@@ -381,12 +381,40 @@ def read_json_object(text: Any) -> dict[str, Any]:
     return {}
 
 
-def read_patches(answer: dict[str, Any]) -> list[dict[str, Any]]:
+_PLAN_FIELD_PATHS = ("form.odds", "form.overview", "form.span_days")
+
+
+def _plan_field_answer(answer: dict[str, Any], asked: str) -> list[dict[str, Any]]:
+    """The ASKED plan-level field answered bare: {"odds": 0.75} or
+    {"form": {"odds": 0.75}}. Only when the bench asked for exactly that
+    path, only when the answer names that one field, and only when the two
+    places do not disagree. The model's value goes through untouched; a
+    missing or ambiguous answer is no patch, never a stand-in."""
+    if asked not in _PLAN_FIELD_PATHS:
+        return []
+    name = asked.split(".", 1)[1]
+    found: list[Any] = []
+    if name in answer:
+        found.append(answer[name])
+    inner = answer.get("form")
+    if isinstance(inner, dict) and name in inner:
+        found.append(inner[name])
+    found = [value for value in found if value is not None]
+    if not found or any(value != found[0] for value in found[1:]):
+        return []
+    return [{"path": asked, "value": found[0]}]
+
+
+def read_patches(
+    answer: dict[str, Any], asked: str | None = None
+) -> list[dict[str, Any]]:
     """[{path, value}] out of whatever shape the model answered in.
 
     Three shapes are accepted because a raw model writes whichever one it
     read: the `patches` list the door takes, a bare {path: value} map, and a
-    single {"path": ..., "value": ...}.
+    single {"path": ..., "value": ...}. When the bench asked for a plan-level
+    field (`asked`, e.g. form.odds), {"odds": v} and {"form": {"odds": v}}
+    answer it too.
     """
     if not isinstance(answer, dict):
         return []
@@ -404,7 +432,16 @@ def read_patches(answer: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if "." in key or "[" in key:
             out.append({"path": key.strip(), "value": value})
+    if not out and asked:
+        out = _plan_field_answer(answer, asked)
     return out
+
+
+def answer_shape(answer: Any) -> str:
+    """What a reply looked like, by key NAMES only (never values), for logs."""
+    if not isinstance(answer, dict) or not answer:
+        return "no object"
+    return "keys=" + ",".join(sorted(str(key) for key in answer)[:12])
 
 
 _DROP_WORD = re.compile(r"\bdrop(?:ped|ping)?\b", re.IGNORECASE)
@@ -1665,6 +1702,7 @@ def is_small_proposal(proposal: Any) -> bool:
 FORM_STEP_FIELDS = (
     "verb",
     "do_line",
+    "work_line",
     "hand_over_line",
     "need_line",
     "declared_odds",
@@ -1674,8 +1712,18 @@ FORM_STEP_FIELDS = (
     "do_ask",
     "tool",
     "repeats",
+    "words",
+    "room",
     "bid_step",
+    "wait",
 )
+
+# THE PLAN'S OWN FIELDS (contract: blank_form is overview, odds, steps,
+# span_days). 0.42.0 read only steps and span_days, so a model that answered
+# the overall odds and the overview had both dropped here and the door asked
+# for form.odds again and again. They are carried exactly as the model wrote
+# them; the door validates them.
+FORM_PLAN_FIELDS = ("overview", "odds")
 
 FORM_INSTRUCTION = (
     "The person PICKED you. Now write the plan, and the plan is a FORM you "
@@ -1686,9 +1734,12 @@ FORM_INSTRUCTION = (
     "asked of every step you write -- and `and_for_the_plan` is what the plan "
     "itself asks. A question that lists `choices` is a PICK: answer with one "
     "of those words exactly as it is written. A question that names a number "
-    "of characters is a CAP: the bench TRIMS a long line to it and tells you "
-    "what it trimmed, it never refuses one, so write short rather than "
+    "of characters is a CAP: stay within it, and write short rather than "
     "padding to fill it.\n"
+    "The plan itself needs `overview` (the scope of work in complete "
+    "sentences: the work, the deliverables, the boundaries, what you need "
+    "from the person) and `odds` (YOUR chance of achieving the whole goal "
+    "within `span_days`, a number greater than 0 and less than 1).\n"
     "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
     "this plan does not need; a step that carries none is a normal step.\n"
     "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
@@ -1696,9 +1747,10 @@ FORM_INSTRUCTION = (
     "a connect row, a grant request, a block title, a room list, a schedule "
     "row or a pointer: the bench writes every one of those from your picks.\n"
     + WHO_STEP_SENTENCE
-    + 'Answer: {"span_days": 14, "steps": [{"verb": "finds", "do_line": "...", '
-    '"hand_over_line": "...", "need_line": "", "declared_odds": 0.4, '
-    '"proof": "text", "who": "agent"}, ...]}.'
+    + 'Answer: {"overview": "...", "odds": 0.35, "span_days": 14, "steps": '
+    '[{"verb": "finds", "do_line": "...", "hand_over_line": "...", '
+    '"need_line": "", "declared_odds": 0.4, "proof": "text", "who": "agent"}, '
+    '...]}.'
 )
 
 
@@ -1733,10 +1785,10 @@ def the_form_is_blank(answer: Any) -> bool:
 
 
 def read_form(answer: dict[str, Any]) -> dict[str, Any]:
-    """The FORM out of the model's answer: the steps and how long, no more.
+    """The FORM out of the model's answer: overview, odds, steps, span_days.
 
     FIELD NAMES ARE A CONTRACT, the same law `read_proposal` keeps: the form
-    has twelve fields and the door reads no others, so anything else the model
+    carries the fields the door publishes and no others, so anything else the model
     volunteered is dropped here rather than sent. Nothing is trimmed (the door
     owns the caps and says what it cut) and nothing is invented.
     """
@@ -1770,6 +1822,12 @@ def read_form(answer: dict[str, Any]) -> dict[str, Any]:
     if not steps:
         return {}
     form: dict[str, Any] = {"steps": steps}
+    for name in FORM_PLAN_FIELDS:
+        # Unchanged: never rounded, coerced or defaulted. Absent stays absent
+        # so the door asks for it rather than reading a stand-in.
+        value = holder.get(name, answer.get(name))
+        if value is not None:
+            form[name] = value
     span = holder.get("span_days", answer.get("span_days"))
     if isinstance(span, (int, float)) and not isinstance(span, bool):
         form["span_days"] = int(span)
@@ -1836,6 +1894,9 @@ class DraftLoop:
         self.log = logger or _LOGGER
         self.rounds = 0
         self.calls = 0
+        # What the last model reply was (empty / malformed_json / object /
+        # api_error), for the fix loop's logs.
+        self.last_reply = ""
         self.trail: list[dict[str, Any]] = []
         # Every patch sent, in order, so a repeated fix can be handed back with
         # what the agent already tried.
@@ -1943,11 +2004,18 @@ class DraftLoop:
             )
         self.calls += 1
         self.prompt_chars += len(tail)
-        response = self.model.invoke(
-            system=self.prefix,
-            messages=[ModelMessage.text("user", tail)],
-            tools=[],
-        )
+        try:
+            response = self.model.invoke(
+                system=self.prefix,
+                messages=[ModelMessage.text("user", tail)],
+                tools=[],
+            )
+        except Exception as exc:
+            # The exception CLASS only: provider messages can echo headers.
+            self.last_reply = f"api_error:{type(exc).__name__}"
+            self.log.warning("draft loop ask %s: api_error %s",
+                             what or "?", type(exc).__name__)
+            raise
         cached = cached_input_tokens(getattr(response, "usage", None))
         if cached:
             self.cached_tokens += cached
@@ -1960,7 +2028,19 @@ class DraftLoop:
             (len(self.prefix) + len(tail)) // 4,
             "unreported" if cached is None else cached,
         )
-        return read_json_object(getattr(response, "text", ""))
+        text = str(getattr(response, "text", "") or "")
+        parsed = read_json_object(text)
+        # WHAT CAME BACK, told apart: empty, not JSON, or an object (whose
+        # shape the caller judges). Lengths and key names only, never text.
+        if not text.strip():
+            self.last_reply = "empty"
+        elif not parsed:
+            self.last_reply = f"malformed_json({len(text)} chars)"
+        else:
+            self.last_reply = f"object({len(text)} chars)"
+        self.log.info("draft loop ask %s: reply %s %s", what or "?",
+                      self.last_reply, answer_shape(parsed))
+        return parsed
 
     def _head(self, answer: Any = None) -> list[tuple[str, str]]:
         """THE TWO THINGS THAT GO ABOVE THE FORM, in order.
@@ -2794,6 +2874,15 @@ class DraftLoop:
                 "plan": outline_summary(answer.get("draft")),
                 "step": _fit(self._step_for(answer, index)),
             }
+            # A PLAN-LEVEL FIX SEES THE PLAN-LEVEL FIELDS. Asked for form.odds
+            # with only a one-line outline in front of it, a model has no
+            # overview or span to forecast against.
+            if path in _PLAN_FIELD_PATHS:
+                held = form_of(answer) or {}
+                payload["the_plan"] = {
+                    name: held.get(name)
+                    for name in ("overview", "odds", "span_days")
+                }
             # THE TWO EXITS, and the whole step to choose between them with.
             # A step-level problem is answered by replacing the step or
             # dropping it, so the ask carries EVERY field of it -- `_fit`
@@ -2845,7 +2934,7 @@ class DraftLoop:
             reply = self._ask(
                 instruction, payload, f"fix {path or '?'}", head=self._head()
             )
-            patches = read_patches(reply)
+            patches = read_patches(reply, path)
             # THE STEP COMES OUT (0.38.3). A drop is not a patch: it is the
             # door's own instruction, and it is the second exit on every
             # step-level problem.
@@ -2869,7 +2958,7 @@ class DraftLoop:
                         f"fix {path} (whole step)",
                         head=self._head(),
                     )
-                    patches = read_patches(reply)
+                    patches = read_patches(reply, path)
                     dropping = read_drop(reply, index)
             if dropping is not None:
                 answer = self._drop_step(target_id, kind, dropping, path, code)
@@ -2880,22 +2969,26 @@ class DraftLoop:
                 # is the model's answer. Live on 2026-09-09 two agents lost a
                 # whole draft, ten rounds in, to one empty reply.
                 self.log.info(
-                    "draft loop %s target=%s: nothing came back for %s; asking once more",
+                    "draft loop %s target=%s: nothing usable came back for %s "
+                    "(reply=%s, answer %s); asking once more",
                     kind,
                     target_id,
                     path,
+                    self.last_reply,
+                    answer_shape(reply),
                 )
-                patches = read_patches(
-                    self._ask(EMPTY_ANSWER_INSTRUCTION + instruction, payload,
-                              f"fix {path or '?'} (again)", head=self._head())
-                )
+                reply = self._ask(EMPTY_ANSWER_INSTRUCTION + instruction, payload,
+                                  f"fix {path or '?'} (again)", head=self._head())
+                patches = read_patches(reply, path)
             if not patches:
                 self.log.warning(
-                    "draft loop %s target=%s: no patch came back for %s twice; "
-                    "stopping this draft",
+                    "draft loop %s target=%s: no patch came back for %s twice "
+                    "(reply=%s, answer %s); stopping this draft",
                     kind,
                     target_id,
                     path,
+                    self.last_reply,
+                    answer_shape(reply),
                 )
                 break
             patches = self._aim(patches, path, kind, target_id)
