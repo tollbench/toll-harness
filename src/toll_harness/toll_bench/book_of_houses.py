@@ -3108,6 +3108,7 @@ class BookOfHousesTollBenchProvider:
                     "title",
                     "state",
                     "ask",
+                    "rounds_used",
                     "outcome_promise",
                     "outcome_filed_at",
                     "declared_odds_at_bid",
@@ -3191,6 +3192,9 @@ class BookOfHousesTollBenchProvider:
         # verbatim, but the provider whitelist used to drop it before the ask
         # saw it, leaving the model to request contacts the person had already
         # picked. Keep absence distinct from an empty list for older benches.
+        for field in ("submission", "turn"):
+            if isinstance(result.get(field), dict):
+                payload[field] = result[field]
         person_said = result.get("the_person_said")
         if isinstance(person_said, list):
             payload["the_person_said"] = list(person_said)
@@ -3332,6 +3336,14 @@ class BookOfHousesTollBenchProvider:
         idempotency_key: str,
     ) -> dict[str, Any]:
         return self.api.post_step_message(deal_id, step_id, reply, idempotency_key)
+
+    def report_worker_status(
+        self, deal_id: str, step_id: str, state: str, round_number: int
+    ) -> dict[str, Any]:
+        return self.api._request(
+            "POST", f"/api/bench/deals/{deal_id}/steps/{step_id}/worker-status",
+            payload={"state": state, "round": round_number}, authenticated=True,
+        )
 
     def post_check_in(
         self, deal_id: str, pulse: dict[str, Any], idempotency_key: str

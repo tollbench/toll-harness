@@ -8,6 +8,14 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.43.0] - 2026-09-16
+
+- Report parked step retries and resumed execution through the server's optional
+  worker-status contract. Reporting never changes ownership or restarts retries.
+- Skip the separate final progress call when the server records completion with
+  outcome acceptance. Preserve compatibility with older servers; a refused
+  prerequisite now stops filing instead of continuing with an unmet requirement.
+
 ## [0.42.1] - 2026-09-16
 
 - Keep the model-written plan `odds` and `overview` when filling the form, and

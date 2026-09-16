@@ -1270,6 +1270,7 @@ def _refusal_brake_holds(
         record["road"],
         record["code"],
     )
+    _report_worker_status(resources, obligation, "parked", step_payload)
     if not record.get("blocker_posted") or _deal_step_pulse_due(step_payload):
         _post_the_blocker(resources, obligation, step_payload, record)
     return record
@@ -1659,6 +1660,14 @@ def _breaker_record_failure(
 ) -> dict[str, Any]:
     """Count one failure on this key and say how long to wait before retrying."""
     key = _obligation_key(obligation)
+    guard = _loop_guard(resources)
+    if guard is not None and obligation.get("deal_id") and obligation.get("step_id"):
+        try:
+            snapshot = resources.toll_bench.current_step(str(obligation["deal_id"]))
+            if guard.held(_loop_key(obligation), _loop_state(resources, obligation, snapshot)):
+                _report_worker_status(resources, obligation, "parked", snapshot)
+        except Exception:
+            _LOGGER.warning("Could not check parked status for worker report")
     state = _OBLIGATION_FAILURES.get(key)
     if state is None or state.get("error") != error:
         # A different failure is a different problem: the count starts over.
@@ -1744,6 +1753,27 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) ->
                     "ready": answer.get("ready"), "closed": answer.get("closed"),
                 }
     return loop_fingerprint(basis)
+
+
+def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str,
+                          snapshot: Any = None) -> None:
+    """Best-effort visibility; reporting failure must never restart model retries."""
+    report = getattr(resources.toll_bench, "report_worker_status", None)
+    deal_id, step_id = obligation.get("deal_id"), obligation.get("step_id")
+    if not callable(report) or not deal_id or not step_id:
+        return
+    try:
+        if not isinstance(snapshot, dict):
+            snapshot = resources.toll_bench.current_step(str(deal_id))
+        step = snapshot.get("current_step") or {}
+        if (str(step.get("id")) != str(step_id)
+                or not (snapshot.get("submission") or {}).get("worker_status")):
+            return
+        result = report(str(deal_id), str(step_id), state, int(step.get("rounds_used") or 0))
+        if isinstance(result, dict) and result.get("ok") is False:
+            _LOGGER.warning("Worker status report refused for step %s", step_id)
+    except Exception:
+        _LOGGER.warning("Could not report worker status for step %s", step_id)
 
 
 def _loop_parked(reachability: dict[str, Any], keys: list[str]) -> dict[str, Any]:
@@ -1939,6 +1969,7 @@ def _process_market_attention(
                 continue
             loop_states[key] = state
             if guard.held(key, state):
+                _report_worker_status(resources, item, "parked", prefetched_steps.get(deal_id))
                 loop_parked.append(key)
                 continue
         _remaining.append(item)
@@ -2024,7 +2055,15 @@ def _process_market_attention(
     if guard is not None:
         key = _loop_key(obligation)
         if not guard.reserve(key, loop_states[key]):
+            _report_worker_status(
+                resources, obligation, "parked",
+                prefetched_steps.get(str(obligation.get("deal_id") or "")),
+            )
             return _loop_parked(reachability, [key])
+    _report_worker_status(
+        resources, obligation, "running",
+        prefetched_steps.get(str(obligation.get("deal_id") or "")),
+    )
     kind = str(obligation.get("kind") or "")
     # RULE 241: the informed plan is built up in pieces too, at the same door.
     if kind == "file_informed_plan" and _draft_door_available(resources):

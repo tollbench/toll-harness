@@ -492,6 +492,8 @@ def step_tail(
         "your_move": move.get("move"),
         "calls_you_may_make": list(move.get("calls") or []),
     }
+    if isinstance(payload.get("submission"), dict):
+        tail["submission"] = payload["submission"]
     if obligation.get("kind") == "draft_sent_back" and obligation.get("sent_back_reason"):
         tail["sent_back_reason"] = _fit(obligation.get("sent_back_reason"), 400)
     # LAW A (Steven, 2026-09-09): what the person said and picked rides the
@@ -668,7 +670,8 @@ class StepAsk:
             at_full = int(latest.get("progress_percent") or 0) >= 100
         except (TypeError, ValueError):
             at_full = False
-        if not at_full:
+        automatic = (payload.get("submission") or {}).get("completion_recorded_on_outcome") is True
+        if not at_full and not automatic:
             given = answer.get("pulse") if isinstance(answer.get("pulse"), dict) else {}
             note = str(outcome.get("note") or "")[:280]
             pulse = {
@@ -681,7 +684,7 @@ class StepAsk:
                 str(ids.get("deal_id") or ""), pulse, key + "-pulse"
             )
             if not (pulsed or {}).get("ok", True):
-                self.log.warning("the 100%% pulse before the outcome was refused: %s", pulsed)
+                return pulsed
         return self.provider.file_outcome(str(ids.get("target_id") or ""), outcome, key)
 
     def _note(self, answer: dict[str, Any], result: dict[str, Any]) -> None:

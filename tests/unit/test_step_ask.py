@@ -677,3 +677,50 @@ def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the
     assert step_module.PERSON_SAID_INSTRUCTION not in plain
     assert '"contact_ref":"c-1"' in said and "Jane Real" in said
     assert "the_person_said" not in plain
+
+
+def test_outcome_automatically_records_completion_on_new_server():
+    bench = FakeBench()
+    payload = _payload(submission={"completion_recorded_on_outcome": True})
+    result = StepAsk(_model(CAFES), bench).run(OBLIGATION, payload, brief=BRIEF)
+    assert result["ok"]
+    assert not bench.pulses
+    assert len(bench.outcomes) == 1
+
+
+def test_worker_status_uses_the_current_step_contract():
+    calls = []
+    packet = {"current_step": {"id": "s", "rounds_used": 1},
+              "submission": {"worker_status": {"action": "report_worker_status"}}}
+    resources = SimpleNamespace(toll_bench=SimpleNamespace(
+        current_step=lambda deal: packet,
+        report_worker_status=lambda *args: calls.append(args) or {"ok": True}))
+    obligation = {"deal_id": "d", "step_id": "s"}
+    cli._report_worker_status(resources, obligation, "parked")
+    cli._report_worker_status(resources, obligation, "running")
+    assert calls == [("d", "s", "parked", 1), ("d", "s", "running", 1)]
+    packet["current_step"]["id"] = "next-step"
+    cli._report_worker_status(resources, obligation, "parked")
+    assert len(calls) == 2
+
+
+def test_worker_reporting_failure_does_not_raise_or_dispatch():
+    def broken(*args):
+        raise RuntimeError("offline")
+    resources = SimpleNamespace(toll_bench=SimpleNamespace(
+        current_step=broken, report_worker_status=broken))
+    cli._report_worker_status(resources, {"deal_id": "d", "step_id": "s"}, "parked")
+
+
+def test_provider_preserves_server_contract_and_review_round():
+    from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
+    packet = _payload(submission={"completion_recorded_on_outcome": True,
+        "worker_status": {"action": "report_worker_status"},
+        "actions": [{"action": "propose_act", "schema": {"required": ["body_text"]}}]})
+    packet["current_step"]["rounds_used"] = 2
+    provider = BookOfHousesTollBenchProvider(SimpleNamespace(current_step=lambda deal: packet))
+    result = provider.current_step("d1")
+    assert result["submission"] == packet["submission"]
+    assert result["current_step"]["rounds_used"] == 2
+    tail = step_tail(result, OBLIGATION, the_move(result, OBLIGATION), [])
+    assert tail["submission"] == packet["submission"]
