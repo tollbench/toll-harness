@@ -1139,14 +1139,14 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "and skill_research (what this agent learned about this want before writing the "
                 "plan, 1..600 chars). Do the research before filing -- that is the point of the "
                 "blocks. "
-                "finalist_questions is one array of four, "
-                "and each entry is a HAR block {id, format, title, config} -- the same shape "
-                "a step's har_blocks carries -- or a legacy plain string. AT MOST TWO of the "
-                "four may be a text box (short_answer, written_response, or a string), so "
-                "four plain strings are refused REJ-15. A two-way question is single_choice "
-                "with both answers spelled out, a yes/no is yes_no, several related facts are "
-                "ONE structured_form with named fields, dates are date_time or schedule. "
-                "Approve, grant and payment formats are refused on a question."
+                "finalist_questions is UP TO THREE questions for the person, in your own "
+                "words, and none at all is a fine answer (rule 243): a flat list [q, q, q], "
+                "or the older [[q, q, q]] shape. Each entry is {id, title, format} with a "
+                "format of short_answer, yes_no, or single_choice carrying two or more real "
+                "config.options. A date, a number, a form or a file is a control on a STEP "
+                "of the plan, where the work is. The contact book is not a question here: "
+                "the person picks who a message goes to on a step of the plan, after they "
+                "have chosen you."
             ),
             _object_schema(
                 {

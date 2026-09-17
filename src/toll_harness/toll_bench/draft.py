@@ -1504,6 +1504,30 @@ def tool_slugs(brief: Any) -> set[str]:
     return found
 
 
+def catalog_match(slug: Any, catalog: set[str]) -> str | None:
+    """The row of this want's tool list that `slug` names, or None.
+
+    ONE reading of "the want offers this", shared by the proposal's
+    `tools_needed` (REJ-01) and by the plan's steps (W29). An exact match, the
+    same name in another case, or the tail after a provider prefix. Nothing
+    here guesses what a made-up name meant.
+    """
+    name = str(slug or "").strip()
+    if not name or not catalog:
+        return None
+    by_lower = {row.lower(): row for row in catalog}
+    match = name if name in catalog else by_lower.get(name.lower())
+    if match is not None:
+        return match
+    for separator in ("/", ":"):
+        tail = name.rsplit(separator, 1)[-1].strip()
+        if tail and tail != name:
+            found = by_lower.get(tail.lower())
+            if found:
+                return found
+    return None
+
+
 def pick_tools(named: Any, brief: Any) -> tuple[list[str], list[str]]:
     """Only the slugs this want's list carries. Returns (kept, dropped).
 
@@ -1525,18 +1549,10 @@ def pick_tools(named: Any, brief: Any) -> tuple[list[str], list[str]]:
     if not catalog:
         # No list published: this package refuses nothing on its own opinion.
         return rows, []
-    by_lower = {slug.lower(): slug for slug in catalog}
     kept: list[str] = []
     dropped: list[str] = []
     for slug in rows:
-        match = slug if slug in catalog else by_lower.get(slug.lower())
-        if match is None:
-            for separator in ("/", ":"):
-                tail = slug.rsplit(separator, 1)[-1].strip()
-                if tail and tail != slug:
-                    match = by_lower.get(tail.lower())
-                    if match:
-                        break
+        match = catalog_match(slug, catalog)
         if match is None:
             dropped.append(slug)
         elif match not in kept:
@@ -1742,6 +1758,13 @@ FORM_INSTRUCTION = (
     "within `span_days`, a number greater than 0 and less than 1).\n"
     "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
     "this plan does not need; a step that carries none is a normal step.\n"
+    "NEVER GIVE YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR. A design "
+    "site, a browser, a phone, a shop: if it is not on this want's tool list "
+    "and you cannot do it with what you have, it is not yours. Make it the "
+    "PERSON's step -- `who`: \"person\", with `do_ask` {\"link\": the page "
+    "where they do it, \"cost_cents\", \"cost_note\"} -- or leave it out of "
+    "the plan. A step you cannot walk is a step that stops on you: the person "
+    "taps Allow and then waits for hands you do not have.\n"
     "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
     "-- so add entries to the blank form or drop them freely. You never write "
     "a connect row, a grant request, a block title, a room list, a schedule "
@@ -1832,6 +1855,74 @@ def read_form(answer: dict[str, Any]) -> dict[str, Any]:
     if isinstance(span, (int, float)) and not isinstance(span, bool):
         form["span_days"] = int(span)
     return form
+
+
+# NEVER PLAN WORK ON A SERVICE THIS AGENT HAS NO TOOL FOR (W29, 2026-09-17)
+# ---------------------------------------------------------------------------
+# WHAT FORCED IT: prod deal 4f061f54, step 3. Kai's plan put "design the
+# invite" on Canva. Nobody here has a tool for Canva, so the bench read the
+# step the way it reads any tool the catalog does not know and declared an
+# OUTSIDE act (rule 232): the person tapped Allow, the step became the
+# agent's to go and do itself -- in a browser it does not have -- and it sat
+# there while the bench said "Agent working" on every poll for seven minutes.
+# Steven failed the step by hand and the want reposted.
+#
+# A tool the want does not offer is not work this agent can do. It is work the
+# PERSON does, on a step of their own with a link they tap and what it costs
+# them before they tap (`do_ask`, the DO card), or it is not in the plan.
+SERVICE_WHO_PREFIX = "service:"
+
+
+def _service_this_want_offers_no_tool_for(step: Any, catalog: set[str]) -> str | None:
+    """The outside service this step hands the agent, or None."""
+    if not isinstance(step, dict):
+        return None
+    who = str(step.get("who") or "").strip()
+    if who.lower().startswith(SERVICE_WHO_PREFIX):
+        return who[len(SERVICE_WHO_PREFIX):].strip() or who
+    entries = step.get("tool")
+    rows = entries if isinstance(entries, list) else [entries]
+    for entry in rows:
+        slug = entry.get("tool") if isinstance(entry, dict) else entry
+        name = str(slug or "").strip()
+        if name and catalog_match(name, catalog) is None:
+            return name
+    return None
+
+
+def person_does_what_the_agent_cannot(
+    form: dict[str, Any], brief: Any
+) -> tuple[dict[str, Any], list[str]]:
+    """Hand every step that names a tool-less service back to the person.
+
+    Returns the form and one line per step that moved. The step keeps the
+    model's own lines and becomes the PERSON's: `who` is "person" and the tool
+    comes off, so the bench stamps no outside act on it. Nothing is invented
+    -- the `do_ask` link and its price are the model's to write, and the door
+    asks for them as blanks; a person step carrying none is a PROVIDE or an
+    APPROVE there, never a refusal.
+
+    A want that publishes no tool list at all changes nothing: this package
+    refuses nothing on its own opinion, the same law `pick_tools` keeps.
+    """
+    if not isinstance(form, dict) or not isinstance(form.get("steps"), list):
+        return form, []
+    catalog = tool_slugs(brief)
+    if not catalog:
+        return form, []
+    moved: list[str] = []
+    for index, step in enumerate(form["steps"], start=1):
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("who") or "").strip().lower() == "person":
+            continue
+        named = _service_this_want_offers_no_tool_for(step, catalog)
+        if named is None:
+            continue
+        step["who"] = "person"
+        step.pop("tool", None)
+        moved.append(f"step {index} ({named})")
+    return form, moved
 
 
 # THE PLAN THAT COULD NOT BE PRESENTED (rule 245, 2026-09-11)
@@ -2394,6 +2485,19 @@ class DraftLoop:
                 target_id,
             )
             return answer, "form"
+        form, handed_over = person_does_what_the_agent_cannot(form, brief)
+        if handed_over:
+            # W29. An outside act on a service with no tool is a step nobody
+            # can walk: the person tapped Allow and then waited on an agent
+            # that had no hands for it.
+            self.log.warning(
+                "draft loop %s target=%s: %d step(s) named a service this want "
+                "offers no tool for and are now the person's own DO step (%s)",
+                kind,
+                target_id,
+                len(handed_over),
+                ", ".join(handed_over),
+            )
         self.log.info(
             "draft loop %s target=%s: the form came back with %d step(s) and "
             "span_days=%s",

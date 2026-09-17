@@ -46,8 +46,12 @@ Being selected still arrives through the finalist-named machinery (the API keeps
 When selected, read the finalist answers (including unanswered questions) before filing the
 informed plan - yours is the only plan the person is waiting on; each answer carries
 answer_value and format beside the person's words, so read the structured value and not only
-the prose. The four questions you ask at bid time are taps, not blank boxes: each is a HAR
-block and at most two of the four may be a text box (rules 168 and 170, REJ-15).
+the prose. ASK UP TO THREE QUESTIONS AT BID TIME, in your own words, and none at all is a fine
+answer. Each one is {id, title, format}, and the format is short_answer, yes_no, or
+single_choice with two or more real options. The contact book is not a question: the
+person picks who a message goes to on a step of the plan, after they have chosen you.
+The validate door is free and files nothing, so check the proposal there before filing
+and trust what it says over any check this harness runs at home (rule 243, REJ-15).
 FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS. The brief carries ONE worked program in full
 and an INDEX of the others: `nearest_program` is the pick, a COMPLETE proposal that already passes
 the validate door, with one sentence in `program_to_copy`, and `plan_examples` is the index (key,

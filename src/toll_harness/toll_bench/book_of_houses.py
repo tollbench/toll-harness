@@ -216,19 +216,18 @@ RELEASED_MATERIAL_LIMIT = 20
 PROBLEM_LIMIT = 25
 PROBLEM_TEXT_MAX = 600
 
-# RULES 168 AND 170, APPLIED TO THE FOUR QUESTIONS (contract 2.37, 2026-09-04).
-# The finalist questions were the last person-facing ask outside HAR: four plain
-# strings the selection modal drew as four blank text boxes. Each question is now
-# either a HAR block -- the SAME {id, format, title, description?, required?,
-# config?} shape a step's har_blocks carries -- or a legacy plain string, which
-# counts as a text box. At most TWO of the four may be text, so four plain
-# strings can no longer be filed: the string shape is for reading old rows, not
-# for filing. The bench refuses the rest as REJ-15; it is checked here so the one
-# filing a target allows is never spent on it. What forced it: a hot-pot bid
-# asked "Should 'Portland area' mean Portland city limits or the wider metro
-# area?" -- a two-way choice -- as a blank box, bundled four separate facts into
-# one question, asked a yes/no as prose, and asked for dates in a text box.
-FINALIST_QUESTIONS_REQUIRED = blocks.FINALIST_QUESTIONS_CAP
+# THE QUESTIONS ARE THE DOOR'S TO COUNT, NOT THIS PACKAGE'S (2026-09-17).
+# WHAT FORCED IT: Kai's round-2 proposal on prod was blocked by a
+# contradiction inside this harness. `draft.py` read the server's rule of
+# 2026-09-11 -- ask UP TO THREE questions, and none at all is a fine answer
+# (rule 243, contract 3.16) -- while the mirror below still held the August
+# rule, "exactly one array of four questions, at most two of them text boxes"
+# (contract 2.37, rules 168 and 170). Obeying both is impossible, so Kai filed
+# nothing. THE HARNESS NEVER RE-IMPLEMENTS A SERVER RULE. A count, a format
+# and a cap belong to the bench; the free validate door
+# (POST /api/bench/targets/{id}/proposals/validate) is the only judge of a
+# proposal's shape, and its answer beats anything said here. What is left at
+# home is the handful of things the door refuses no matter what it counts.
 
 # CONTRACT 2.42 / rule 226 -- the five bid-homework blocks. All required on a
 # NEW bid (REJ-31 at the server door), and all FROZEN afterwards: the informed
@@ -244,9 +243,6 @@ HOMEWORK_FIELDS = (
     "research_links",
     "skill_research",
 )
-FINALIST_QUESTION_TEXT_MAX = 2
-FINALIST_TITLE_MAX = 300
-FINALIST_DESCRIPTION_MAX = 400
 # The canonical HAR format slugs (the step contract's enum).
 HAR_FORMAT_SLUGS = frozenset(
     {
@@ -280,186 +276,15 @@ HAR_FORMAT_SLUGS = frozenset(
         # the AGENT puts it in, the bench writes the person's own contact book
         # onto it, and each pick arrives as a reference for
         # `acts[].contact_ref`. It stays a legal HAR slug here
-        # because the step carries it; `_finalist_block_problems` refuses it
-        # on a PROPOSAL in the door's own words.
+        # because the step carries it; `finalist_question_problems` refuses
+        # it on a PROPOSAL in the door's own words.
         "contact_picker",
     }
 )
-# A question is asked, never approved, granted or paid: those belong on a step of
-# the plan, where the person has already chosen this agent.
-FINALIST_REFUSED_FORMATS = frozenset(
-    {
-        "review_approve",
-        "confirm_correct",
-        "agreement",
-        "signature",
-        "grant_access",
-        "connect_account",
-        "payment_authorize",
-    }
-)
-FINALIST_TEXT_FORMATS = frozenset({"short_answer", "written_response"})
 # RULE 238 CORRECTED (Steven, 2026-09-11): no picker belongs on a proposal at
 # all. The bench refuses one REJ-15, and who it goes to is a step of the PLAN
 # -- since 2026-09-12 a step the agent puts in itself.
 CONTACT_PICKER_FORMAT = blocks.CONTACT_PICKER_FORMAT
-# Rule 170: a choice control must offer real options, not an empty dropdown that
-# forces a type-in. Same minimums the step blocks carry.
-FINALIST_CHOICE_MIN_OPTIONS = {"single_choice": 2, "multiple_choice": 3, "rank": 3}
-# The renderer adds "Other (type in)" itself; an agent must not ship the sentinel.
-HAR_OTHER_SENTINEL = "__other__"
-# Rule B: a text box whose wording is really a two-way question.
-FINALIST_BINARY_LEADS = frozenset(
-    {"do", "does", "is", "are", "should", "can", "could", "would", "will"}
-)
-
-
-def _reads_as_a_choice(text: Any) -> str | None:
-    """Return the format a text question should have used, or None.
-
-    Rule B of contract 2.37. "A or B?", "either X or Y", "which of ..." is a
-    single_choice; a Do/Does/Is/Are/Should/Can/Could/Would/Will question is a
-    yes_no. The choice test runs first, because "Should it mean X or Y?" is a
-    choice before it is a yes/no.
-    """
-    lowered = " ".join(str(text or "").lower().split())
-    if not lowered:
-        return None
-    ends_in_question = lowered.endswith("?")
-    if "which of" in lowered:
-        return "single_choice"
-    if "either " in lowered and " or " in lowered:
-        return "single_choice"
-    if ends_in_question and " or " in lowered:
-        return "single_choice"
-    lead = lowered.split(" ", 1)[0].strip("\"'([")
-    if ends_in_question and lead in FINALIST_BINARY_LEADS:
-        return "yes_no"
-    return None
-
-
-def _count_real_options(options: Any) -> int:
-    """Count options that are not the renderer's own "Other (type in)"."""
-    if not isinstance(options, list):
-        return 0
-    total = 0
-    for option in options:
-        if isinstance(option, dict):
-            marker = option.get("id") or option.get("value")
-        else:
-            marker = option
-        if isinstance(marker, str) and marker.strip() == HAR_OTHER_SENTINEL:
-            continue
-        total += 1
-    return total
-
-
-def _has_other_sentinel(options: Any) -> bool:
-    if not isinstance(options, list):
-        return False
-    for option in options:
-        marker = option.get("id") or option.get("value") if isinstance(option, dict) else option
-        if isinstance(marker, str) and marker.strip() == HAR_OTHER_SENTINEL:
-            return True
-    return False
-
-
-def _finalist_block_problems(block: dict[str, Any], pos: str) -> list[dict[str, str]]:
-    problems: list[dict[str, str]] = []
-    for key in ("id", "title"):
-        value = block.get(key)
-        if not isinstance(value, str) or not value.strip():
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        f"a question block needs a non-empty `{key}`; the three required "
-                        "fields are id, format and title (REJ-15)"
-                    ),
-                }
-            )
-    title = block.get("title")
-    if isinstance(title, str) and len(title.strip()) > FINALIST_TITLE_MAX:
-        problems.append(
-            {"path": pos, "message": f"title exceeds {FINALIST_TITLE_MAX} chars (REJ-15)"}
-        )
-    description = block.get("description")
-    if isinstance(description, str) and len(description.strip()) > FINALIST_DESCRIPTION_MAX:
-        problems.append(
-            {
-                "path": pos,
-                "message": f"description exceeds {FINALIST_DESCRIPTION_MAX} chars (REJ-15)",
-            }
-        )
-    fmt = block.get("format")
-    if not isinstance(fmt, str) or not fmt.strip():
-        problems.append(
-            {
-                "path": pos,
-                "message": (
-                    "a question block needs a non-empty `format`, one of the HAR format "
-                    "slugs (REJ-15)"
-                ),
-            }
-        )
-        return problems
-    fmt = fmt.strip()
-    if fmt in FINALIST_REFUSED_FORMATS:
-        problems.append(
-            {
-                "path": pos,
-                "message": (
-                    f"format `{fmt}` is not a question: approve, grant and payment formats "
-                    "belong on a step of the plan, never on a question asked before the "
-                    "person has chosen you (REJ-15)"
-                ),
-            }
-        )
-        return problems
-    if fmt not in HAR_FORMAT_SLUGS:
-        problems.append(
-            {"path": pos, "message": f"`{fmt}` is not a HAR format slug (REJ-15)"}
-        )
-        return problems
-    if fmt == CONTACT_PICKER_FORMAT:
-        # RULE 238 CORRECTED (2026-09-11): the book is not a question.
-        problems.append({"path": pos, "message": blocks.CONTACT_QUESTION_REFUSED})
-        return problems
-    config = block.get("config") if isinstance(block.get("config"), dict) else {}
-    if fmt in FINALIST_CHOICE_MIN_OPTIONS:
-        need = FINALIST_CHOICE_MIN_OPTIONS[fmt]
-        found = _count_real_options(config.get("options"))
-        if found < need:
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        f"a `{fmt}` question needs at least {need} real options in "
-                        f"config.options (found {found}); an empty dropdown is a text box "
-                        "wearing a control (rule 170, REJ-15)"
-                    ),
-                }
-            )
-        if _has_other_sentinel(config.get("options")):
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        "the renderer adds \"Other (type in)\" itself; a `__other__` option "
-                        "of your own is refused (REJ-15)"
-                    ),
-                }
-            )
-    if fmt == "number":
-        unit = config.get("unit")
-        if not isinstance(unit, str) or not unit.strip():
-            problems.append(
-                {
-                    "path": pos,
-                    "message": "a `number` question needs a non-empty config.unit (REJ-15)",
-                }
-            )
-    return problems
 
 
 # A problem the door raises for a field that is simply NOT THERE. Filing over
@@ -476,77 +301,95 @@ def _is_a_missing_field(problem: Any) -> bool:
 
 
 def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
-    """Local mirror of the bench's REJ-15 gate on finalist_questions."""
+    """The few things the bench refuses FOR CERTAIN, and nothing else.
+
+    A PASS-THROUGH, ON PURPOSE. The door takes no questions, one, two or
+    three, flat (`[q, q, q]`) or in the older one-group shape (`[[q, q, q]]`),
+    each one `{id, title, format}` with a format of short_answer, yes_no or
+    single_choice. Counting them here only ever re-stated a rule that had
+    already moved: see the note above the constants. Four questions are not
+    flagged at home -- the validate door says so, in its own words, and the
+    agent fixes it once.
+
+    What stays is what needs no count to be sure of: an entry that is neither
+    a question object nor a question string, a question missing one of the
+    three fields the door reads, and the contact book, which is not a question
+    at all (rule 238) -- who a message goes to is a step of the plan, picked
+    after the person has chosen this agent.
+    """
     path = "finalist_questions"
-    if (
-        not isinstance(questions, list)
-        or len(questions) != 1
-        or not isinstance(questions[0], list)
-        or len(questions[0]) != FINALIST_QUESTIONS_REQUIRED
-    ):
+    if questions is None:
+        return []
+    if not isinstance(questions, list):
         return [
-            {"path": path, "message": "must contain exactly one array of four questions"}
-        ]
-    problems: list[dict[str, str]] = []
-    text_questions = 0
-    for index, question in enumerate(questions[0]):
-        pos = f"{path}[1][{index + 1}]"
-        wording: Any = None
-        if isinstance(question, str):
-            text = question.strip()
-            if not text:
-                problems.append({"path": pos, "message": "must be a non-empty string"})
-                continue
-            if len(text) > FINALIST_TITLE_MAX:
-                problems.append(
-                    {"path": pos, "message": f"exceeds {FINALIST_TITLE_MAX} chars"}
-                )
-                continue
-            text_questions += 1
-            wording = text
-        elif isinstance(question, dict):
-            problems.extend(_finalist_block_problems(question, pos))
-            fmt = question.get("format")
-            if isinstance(fmt, str) and fmt.strip() in FINALIST_TEXT_FORMATS:
-                text_questions += 1
-                wording = question.get("title")
-        else:
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        "must be a HAR block object with id, format and title, or a plain "
-                        "string (REJ-15)"
-                    ),
-                }
-            )
-            continue
-        suggested = _reads_as_a_choice(wording)
-        if suggested:
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        f"reads as a choice but is a text box: file it as a `{suggested}` "
-                        "block with the answers spelled out, so the person taps instead of "
-                        "typing (rule 170, REJ-15)"
-                    ),
-                }
-            )
-    if text_questions > FINALIST_QUESTION_TEXT_MAX:
-        problems.append(
             {
                 "path": path,
                 "message": (
-                    f"{text_questions} of the four questions are text boxes; at most "
-                    f"{FINALIST_QUESTION_TEXT_MAX} may be (short_answer, written_response, "
-                    "or a legacy plain string, which counts as one). The person taps: file "
-                    "the rest as HAR blocks -- single_choice, multiple_choice, rank, "
-                    "yes_no, number, date_time, schedule, or one structured_form when "
-                    "several related facts belong together (rule 168, REJ-15)"
+                    "must be a list of up to three questions (the older [[...]] shape "
+                    "carrying the same questions is still taken) -- got a non-list"
                 ),
             }
-        )
+        ]
+    # FLAT OR WRAPPED, both are the door's own shapes. A list whose entries
+    # are all lists is the old group shape; anything else is the flat list.
+    nested = bool(questions) and all(isinstance(entry, list) for entry in questions)
+    groups = questions if nested else [questions]
+    problems: list[dict[str, str]] = []
+    for group_index, group in enumerate(groups):
+        label = f"{path}[{group_index + 1}]" if nested else path
+        if not isinstance(group, list):
+            problems.append({"path": label, "message": "must be an array of questions"})
+            continue
+        for index, question in enumerate(group):
+            problems.extend(
+                _finalist_entry_problems(question, f"{label}[{index + 1}]")
+            )
+    return problems
+
+
+def _finalist_entry_problems(question: Any, pos: str) -> list[dict[str, str]]:
+    """One question, checked only for what the door cannot take either way."""
+    if isinstance(question, str):
+        if question.strip():
+            return []
+        return [
+            {
+                "path": pos,
+                "message": (
+                    "is an empty question: write the whole question in your own words, "
+                    "or ask one question fewer (REJ-15)"
+                ),
+            }
+        ]
+    if not isinstance(question, dict):
+        return [
+            {
+                "path": pos,
+                "message": (
+                    "must be a question object {id, title, format} or a plain question "
+                    "string (REJ-15)"
+                ),
+            }
+        ]
+    if str(question.get("format") or "").strip() == CONTACT_PICKER_FORMAT:
+        # RULE 238 CORRECTED (2026-09-11): the book is not a question, whatever
+        # the count is. One refused question costs the whole bid.
+        return [{"path": pos, "message": blocks.CONTACT_QUESTION_REFUSED}]
+    problems: list[dict[str, str]] = []
+    # THE THREE FIELDS THE DOOR READS. A field that is simply not there is the
+    # one refusal no count is needed for; which format slugs it takes, and how
+    # many options a choice needs, is the door's and is not repeated here.
+    for field in ("id", "format", "title"):
+        if not str(question.get(field) or "").strip():
+            problems.append(
+                {
+                    "path": pos,
+                    "message": (
+                        f"a question needs a non-empty `{field}`; the three fields the "
+                        "door reads are id, title and format (REJ-15)"
+                    ),
+                }
+            )
     return problems
 
 
@@ -1259,7 +1102,7 @@ class BookOfHousesTollBenchProvider:
                 "tool has no `connect_account` row on the step that runs it. "
                 "`detail` names the run and the argument. Every value is a "
                 "literal you wrote or one of three sources -- an answer to one "
-                "of your four questions, a run declared BEFORE this one, or a "
+                "of your questions, a run declared BEFORE this one, or a "
                 "draft this plan wrote -- and a recipient is never an address "
                 "typed into the plan."
             ),
@@ -1706,10 +1549,10 @@ class BookOfHousesTollBenchProvider:
                 "message": str(error.message)[:PROBLEM_TEXT_MAX],
             }
             for error in errors
-            # finalist_questions has its own gate below, which knows the block
-            # shape of contract 2.37. A production schema that still spells the
-            # field as four plain strings must not refuse a block-shaped
-            # question at home, and it must not double-report one either.
+            # finalist_questions is the door's to judge. A production schema
+            # that still spells the field as four plain strings, or as exactly
+            # four of anything, must not refuse a legal bid at home: the field
+            # takes up to THREE questions, flat or wrapped, since 2026-09-11.
             if not (
                 list(error.absolute_path)[:1] == ["finalist_questions"]
             )
@@ -1842,9 +1685,10 @@ class BookOfHousesTollBenchProvider:
             "problems": problems,
             "note": (
                 "Local validation uses the current production JSON schema plus required "
-                "pitch, goal, `finalist_questions` (block shape, the two-text cap, and the "
-                "choice-worded text box), declared-odds-line and declared-block field "
-                "checks. Production remains authoritative at submit."
+                "pitch, goal, declared-odds-line and declared-block field checks. "
+                "`finalist_questions` is NOT counted or shaped here -- up to three, flat "
+                "or wrapped, is the door's rule and the door is the only judge of it. "
+                "Production remains authoritative at submit."
             ),
         }
 
@@ -3339,11 +3183,21 @@ class BookOfHousesTollBenchProvider:
         return self.api.post_step_message(deal_id, step_id, reply, idempotency_key)
 
     def report_worker_status(
-        self, deal_id: str, step_id: str, state: str, round_number: int
+        self, deal_id: str, step_id: str, state: str, round_number: int,
+        reason: str | None = None,
     ) -> dict[str, Any]:
+        """Say what the runtime is doing on this step. `parked` means nobody
+        is working on it, and `reason` says why in one plain sentence (W29).
+        The door writes its own words today and ignores the field; it is sent
+        anyway, because the day the door reads it the harness is already
+        saying it, and the same sentence goes on the step thread either way."""
+        payload: dict[str, Any] = {"state": state, "round": round_number}
+        words = (reason or "").strip()
+        if words:
+            payload["reason"] = words[:280]
         return self.api._request(
             "POST", f"/api/bench/deals/{deal_id}/steps/{step_id}/worker-status",
-            payload={"state": state, "round": round_number}, authenticated=True,
+            payload=payload, authenticated=True,
         )
 
     def post_check_in(

@@ -339,17 +339,38 @@ def test_the_refusal_names_the_question_that_carries_it():
     assert [problem["path"] for problem in problems] == ["finalist_questions[1][3]"]
 
 
-def test_the_two_text_box_cap_still_stands():
-    # The correction took one shape off the form; it changed no other rule.
-    problems = finalist_question_problems(
-        _questions(
-            {"id": "q1", "format": "short_answer", "title": "One?"},
-            {"id": "q2", "format": "short_answer", "title": "Two?"},
-            {"id": "q3", "format": "short_answer", "title": "Three?"},
-            MODEL_QUESTIONS[1],
+def test_the_two_text_box_cap_is_gone_and_the_count_is_the_doors():
+    # WHAT FORCED THE REWRITE (Kai, 2026-09-17): this mirror still held the
+    # August rule -- exactly four questions, at most two of them text boxes --
+    # while the bench had taken UP TO THREE, any of them text, since
+    # 2026-09-11. The harness does not re-implement a server rule, so three
+    # text boxes pass here and the free validate door is the judge.
+    assert (
+        finalist_question_problems(
+            _questions(
+                {"id": "q1", "format": "short_answer", "title": "One?"},
+                {"id": "q2", "format": "short_answer", "title": "Two?"},
+                {"id": "q3", "format": "short_answer", "title": "Three?"},
+            )
         )
+        == []
     )
-    assert problems != []
+    # Flat, wrapped, and none at all: the three shapes the door takes.
+    assert finalist_question_problems(list(MODEL_QUESTIONS[:3])) == []
+    assert finalist_question_problems([]) == []
+    assert finalist_question_problems(None) == []
+    # Four is not flagged at home any more; the door says so in its own words.
+    assert finalist_question_problems(_questions(*MODEL_QUESTIONS)) == []
+
+
+def test_a_picker_in_a_flat_list_is_refused_where_it_stands():
+    # The bid form hands out a FLAT list now. The one local refusal that is
+    # left has to find the book in that shape too.
+    problems = finalist_question_problems(
+        [MODEL_QUESTIONS[0], _picker(), MODEL_QUESTIONS[1]]
+    )
+    assert "the contact book is not one of your questions" in _messages(problems)
+    assert [problem["path"] for problem in problems] == ["finalist_questions[2]"]
 
 
 def test_a_bid_shaped_wrong_is_still_the_door_s_to_say_so():

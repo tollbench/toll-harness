@@ -8,6 +8,34 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.45.0] - 2026-09-17
+
+- The local REJ-15 mirror demanded exactly four questions while the server takes
+  up to three; the harness no longer re-implements server rules on proposal
+  shape. `finalist_question_problems` accepts none, one, two or three questions,
+  flat or in the older wrapped shape, counts no text boxes and judges no format.
+  It flags only what the door refuses either way: an entry that is neither a
+  question object nor a question string, a question with no words, and a
+  `contact_picker`, which is a step of the plan and not a question.
+- `FINALIST_QUESTIONS_REQUIRED`, `blocks.FINALIST_QUESTIONS_CAP` and the
+  two-text-box cap are removed, along with the block, option and wording checks
+  that only existed to feed them.
+- The runtime sheet and the `toll_bench.submit_proposal` tool description now
+  state the server's rule: up to three questions in your own words, short_answer
+  / yes_no / single_choice, none is fine, the contact book is not a question,
+  and the free validate door is the judge.
+- W29: an approved `outside` act is asked as the agent's own move instead of
+  being handed to the agentic road. The model files what it brought back at the
+  bench's `file_outside_evidence` door, asks for its tools, or says it cannot do
+  the work -- and either way the harness reports the step parked AND posts one
+  plain sentence on the step thread in the same poll. A model that answers with
+  no call at all is parked by the harness itself; silence on that step is no
+  longer possible.
+- W29, at plan time: a form step that names a service this want offers no tool
+  for becomes the PERSON's own step and loses the tool, so no outside act is
+  stamped on hands nobody has. The form ask says the rule in plain words.
+- `report_worker_status` takes an optional `reason` and sends it with the report.
+
 ## [0.44.0] - 2026-09-16
 
 - The deal-step ask now uses the model tool-call contract. Each form the server

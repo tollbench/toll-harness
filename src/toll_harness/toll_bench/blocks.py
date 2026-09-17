@@ -1209,9 +1209,12 @@ def _align_grant_steps(
 # --------------------------------------------------------------------------
 
 CONTACT_PICKER_FORMAT = "contact_picker"
-# The whole cap on finalist questions on the old whole-plan bid -- read by
-# `book_of_houses` so there is a single four.
-FINALIST_QUESTIONS_CAP = 4
+# THE CAP ON FINALIST QUESTIONS IS GONE FROM THIS PACKAGE (2026-09-17). It was
+# 4, "so there is a single four", and the single four was wrong: the door has
+# taken UP TO THREE since 2026-09-11 and takes none at all. A number kept here
+# is a server rule re-implemented at home, which is how Kai's bid ended up
+# refused by the harness and accepted by the bench. `draft.PROPOSAL_QUESTIONS_MAX`
+# is what the ask is written against; the validate door decides.
 # The act fields that name a human being. Read off the DECLARATION, exactly as
 # the bench reads it, and never off a list of kind names: a kind that grows
 # either shape tomorrow is covered the day it ships.

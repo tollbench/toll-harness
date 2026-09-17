@@ -80,6 +80,20 @@ AGENT_FILED_ACT_KINDS = frozenset({"email", "calendar_event"})
 # needs the run folder and the delivery doors: the old road.
 BYTES_CHANNELS = frozenset({"file", "link"})
 
+# W29 (prod deal 4f061f54 step 3, 17 September). The bench's own names for the
+# two doors an approved outside act needs: the one that brings the work back,
+# and the one that says out loud that nobody is working on it.
+OUTSIDE_EVIDENCE_ACTION = "file_outside_evidence"
+WORKER_STATUS_ACTION = "report_worker_status"
+# What the harness posts on the thread when it parks a step itself, because
+# the model made no call at all. The model's own sentence is better and is
+# used when there is one; this is the floor, and silence is not an option.
+OUTSIDE_PARKED_SENTENCE = (
+    "I cannot do this one myself and I have stopped rather than sit on it: "
+    "the work has to happen on a service I have no tool for. Nothing is "
+    "moving on this step until you decide what to do with it."
+)
+
 ROAD_STEP_ASK = "step_ask"
 ROAD_AGENTIC = "agentic"
 NEED_TOOLS = "need_tools"
@@ -195,6 +209,48 @@ def _unfiled_declared_kinds(payload: dict[str, Any]) -> list[str]:
     return out
 
 
+def outside_evidence_form(payload: Any) -> dict[str, Any] | None:
+    """The bench's `file_outside_evidence` form on this step, or None.
+
+    Published on `submission.actions` since the server's f5e7085f2 (rule 232,
+    W26). A bench that does not publish it has no door for the work to come
+    back through, and the step takes the old road as it always did.
+    """
+    submission = (payload or {}).get("submission") if isinstance(payload, dict) else None
+    for action in (submission or {}).get("actions") or []:
+        if (isinstance(action, dict)
+                and action.get("action") == OUTSIDE_EVIDENCE_ACTION
+                and isinstance(action.get("schema"), dict)):
+            return action
+    return None
+
+
+def worker_status_form(payload: Any) -> dict[str, Any] | None:
+    """The bench's worker-status form on this step, or None. It rides
+    `submission.worker_status`, beside `actions` rather than in it."""
+    submission = (payload or {}).get("submission") if isinstance(payload, dict) else None
+    form = (submission or {}).get("worker_status")
+    if isinstance(form, dict) and isinstance(form.get("schema"), dict):
+        return form
+    return None
+
+
+def parked_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The worker-status form, narrowed to the one report this move makes.
+
+    `running` is the runtime's own word and is reported by the watch loop, not
+    by the model; the only thing the model says here is that it has stopped,
+    and why. The reason rides the same call: the door ignores a field it does
+    not read, and the words also go on the thread where the person can see
+    them.
+    """
+    properties = dict(schema.get("properties") or {})
+    properties["state"] = {"const": "parked"}
+    properties["reason"] = {"type": "string", "minLength": 1, "maxLength": 280}
+    return {"type": "object", "properties": properties,
+            "required": ["state", "round", "reason"]}
+
+
 def the_move(payload: dict[str, Any], obligation: dict[str, Any] | None = None) -> dict[str, Any]:
     """The one thing the agent produces on this step, and the calls that file it.
 
@@ -226,10 +282,23 @@ def the_move(payload: dict[str, Any], obligation: dict[str, Any] | None = None) 
     if acts and _state(acts[-1]) in RETURNED_ACT_STATES:
         return {"move": "refile_act", "calls": ["propose_act", "reply_step_message"]}
     if any(_kind(act) == OUTSIDE_KIND and _state(act) == "approved" for act in acts):
+        # W29 (prod deal 4f061f54, 17 September). WHAT FORCED IT: the person
+        # tapped Allow, the bench said "Agent working ... file what you
+        # brought back" on every poll for seven minutes, and this branch sent
+        # the step to the old road, where the model filed nothing, posted
+        # nothing and never reported itself parked. The step was failed by
+        # hand. An approved outside act IS the agent's move, so it is asked
+        # as one: bring the work back, say you cannot and be parked in the
+        # same round, or ask for tools and take the old road deliberately.
+        if outside_evidence_form(payload) is not None:
+            return {
+                "move": "outside_work",
+                "calls": ["file_outside_evidence", "reply_step_message", "report_parked"],
+            }
         return {
             "move": None,
             "road": ROAD_AGENTIC,
-            "why": "an approved outside act is the agent's to go and do itself",
+            "why": "an approved outside act and no evidence form on this bench",
         }
     deliverable = step.get("deliverable")
     if isinstance(deliverable, dict):
@@ -290,6 +359,23 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "it and never ask them to. If you do not know the recipient, ask the "
         "person with reply_step_message."
     ),
+    "outside_work": (
+        "The person tapped Allow on an outside act: this piece of the work is "
+        "yours to go and do YOURSELF, off this site, in your own name (rule "
+        "232). Nothing on this step moves until you bring it back.\n"
+        "IF YOU HAVE DONE IT, file what you brought back with "
+        "file_outside_evidence: what you did in your own plain words, who you "
+        "dealt with, how it ended, and up to five links the person can open.\n"
+        "IF YOU HAVE A TOOL FOR IT and have not used it yet, answer "
+        "need_tools and say which service; you will be handed your tools and "
+        "asked again.\n"
+        "IF YOU CANNOT DO IT AT ALL -- no tool for that service, no browser, "
+        "no phone -- DO NOT SIT SILENT and do not wait for yourself. Answer "
+        "report_parked with the reason in one plain sentence: that stops the "
+        "clock out loud, posts your sentence on the step so the person reads "
+        "it, and hands them the decision. Silence on this step is the one "
+        "answer that is always wrong."
+    ),
     "hand_back": (
         "Hand this step back: write the thing the step promised, from what is "
         "in front of you, and file it with file_outcome. If "
@@ -325,6 +411,7 @@ BENCH_ACTIONS: dict[str, str] = {
     "post_check_in": "post_work_pulse",
     "wait_outside": "wait_outside",
     "file_outcome": "submit_step_outcome",
+    "file_outside_evidence": OUTSIDE_EVIDENCE_ACTION,
 }
 NEED_TOOLS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -352,7 +439,17 @@ def step_tools(move: dict[str, Any], payload: dict[str, Any]) -> dict[str, dict[
         for index, action in enumerate(forms, start=1):
             name = call if index == 1 else f"{call}_{index}"
             tools[name] = {"call": call, "schema": action["schema"], "action": action}
-    if tools and move.get("move") == "hand_back":
+    if "report_parked" in (move.get("calls") or []):
+        # The parked report is not on `actions`; it rides `submission.
+        # worker_status`, so it is picked up by name rather than by the loop.
+        form = worker_status_form(payload)
+        if form is not None:
+            tools["report_parked"] = {
+                "call": "report_parked",
+                "schema": parked_schema(form["schema"]),
+                "action": form,
+            }
+    if tools and move.get("move") in ("hand_back", "outside_work"):
         tools[NEED_TOOLS] = {"call": NEED_TOOLS, "schema": NEED_TOOLS_SCHEMA, "action": {}}
     return tools
 
@@ -698,6 +795,18 @@ class StepAsk:
                 result = self.provider.post_check_in(deal_id, answer, key)
             elif call == "wait_outside":
                 result = self.provider.wait_outside(deal_id, step_id, answer, key)
+            elif call == "file_outside_evidence":
+                result = self.provider.file_evidence(
+                    deal_id, step_id,
+                    summary=str(answer.get("summary") or ""),
+                    links=list(answer.get("links") or []),
+                    receipt_ids=list(answer.get("receipt_ids") or []),
+                )
+            elif call == "report_parked":
+                result = self._park_the_step(
+                    deal_id, step_id, answer.get("round"),
+                    str(answer.get("reason") or ""), key,
+                )
             else:
                 result = self._file_the_outcome(ids, answer, payload, key)
         except Exception as error:  # noqa: BLE001 - a refusal is an answer, not a crash
@@ -710,6 +819,30 @@ class StepAsk:
         if isinstance(result, dict) and not result.get("ok", True):
             result = dict(result, failure="server_rejected")
         return result
+
+    def _park_the_step(
+        self, deal_id: str, step_id: str, round_number: Any, reason: str, key: str
+    ) -> dict[str, Any]:
+        """SAY IT TWICE, IN ONE ROUND (W29): stopped, and why, where the
+        person can read it.
+
+        The worker-status door is machine-facing -- it moves nothing, owns no
+        review round and the person never sees it -- so a parked report alone
+        is still silence as far as the person is concerned. The same sentence
+        goes on the step thread. The thread is what makes this honest, so a
+        refused status report does not stop it and does not fail the move.
+        """
+        words = (reason or "").strip() or OUTSIDE_PARKED_SENTENCE
+        try:
+            number = int(round_number)
+        except (TypeError, ValueError):
+            number = 0
+        try:
+            self.provider.report_worker_status(
+                deal_id, step_id, "parked", number, reason=words)
+        except Exception:  # noqa: BLE001 - visibility must never fail the move
+            self.log.warning("could not report parked on step %s", step_id)
+        return self.provider.reply_step_message(deal_id, step_id, words[:4000], key)
 
     def _file_the_outcome(
         self, ids: dict[str, Any], answer: dict[str, Any], payload: dict[str, Any], key: str
@@ -826,6 +959,22 @@ class StepAsk:
             if result.get("ok"):
                 break
         ok = bool(result.get("ok"))
+        if not ok and move["move"] == "outside_work" and name != "report_parked":
+            # W29: THE ONE STEP THAT MAY NOT END IN SILENCE. The model
+            # answered with nothing, with a tool it was not given, or with
+            # arguments the door refused, twice. Whatever it was, nobody is
+            # doing this work and the person is owed that sentence in this
+            # same poll, not after seven minutes of nothing.
+            self.log.warning(
+                "step ask outside_work step %s: no call landed (%s); parking the step",
+                number, result.get("failure") or result.get("error"),
+            )
+            self._park_the_step(
+                str(ids.get("deal_id") or ""), str(ids.get("step_id") or ""),
+                step.get("rounds_used"), "",
+                self._key(str(ids.get("step_id") or ""), "report_parked", result),
+            )
+            result = dict(result, parked=True)
         self.log.info(
             "step ask %s step %s: %s %s after %d model call(s); prefix %d chars sent "
             "once and cached, tails %d chars (~%d tokens), input tokens %s, cached input %s",

@@ -162,7 +162,7 @@ def _valid_proposal():
 
 
 def _block_questions():
-    """Contract 2.37: four questions the person taps, one of them a text box."""
+    """An old four-question bid, kept because the door still reads one."""
     return [
         {
             "id": "q1",
@@ -214,81 +214,73 @@ def test_block_shaped_finalist_questions_pass_local_validation():
     assert _finalist_problems(result) == []
 
 
-def test_four_plain_strings_are_refused_because_a_question_is_a_tap():
-    # Contract 2.37 (rules 168 and 170). The legacy string shape reads old rows;
-    # it is no longer a way to file, because four strings are four blank boxes.
+def test_the_count_and_the_shapes_are_the_doors_to_say():
+    """WHAT FORCED IT (Kai, 2026-09-17): this mirror demanded exactly four
+    questions with at most two text boxes while the bench had taken UP TO
+    THREE since 2026-09-11. The harness does not count questions any more --
+    four plain strings are filed and the free validate door answers."""
     provider = BookOfHousesTollBenchProvider(FakeApi())
 
     result = provider.validate_proposal(
         _with_questions(["How many seats?", "Who owns it?", "What budget?", "What tone?"])
     )
 
-    assert result["ok"] is False
-    messages = [problem["message"] for problem in _finalist_problems(result)]
-    assert any("4 of the four questions are text boxes" in m for m in messages)
-    assert any("REJ-15" in m for m in messages)
+    assert _finalist_problems(result) == []
 
 
-def test_a_third_text_question_trips_the_two_text_cap():
-    questions = _block_questions()
+def test_a_flat_list_of_three_questions_passes_at_home():
+    # The shape the door hands out now: [q, q, q], no wrapping group.
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+    questions = _block_questions()[:3]
+
+    result = provider.validate_proposal(
+        {**_valid_proposal(), "finalist_questions": questions}
+    )
+
+    assert _finalist_problems(result) == []
+
+
+def test_no_questions_at_all_is_a_fine_answer():
+    # Rule 243: an agent with nothing to ask files none and is not refused.
+    provider = BookOfHousesTollBenchProvider(FakeApi())
+
+    for empty in ([], [[]], None):
+        result = provider.validate_proposal(
+            {**_valid_proposal(), "finalist_questions": empty}
+        )
+        assert _finalist_problems(result) == [], empty
+
+
+def test_three_text_boxes_are_no_longer_a_problem_at_home():
+    questions = _block_questions()[:3]
     questions[0] = {"id": "q1", "format": "written_response", "title": "Tell me about it."}
     questions[1] = "And what else should I know about it, in your own words?"
     provider = BookOfHousesTollBenchProvider(FakeApi())
 
-    result = provider.validate_proposal(_with_questions(questions))
-
-    assert result["ok"] is False
-    assert any(
-        "3 of the four questions are text boxes" in problem["message"]
-        for problem in _finalist_problems(result)
+    result = provider.validate_proposal(
+        {**_valid_proposal(), "finalist_questions": questions}
     )
 
+    assert _finalist_problems(result) == []
 
-def test_a_text_question_that_reads_as_a_choice_names_the_format():
-    # What forced the rule: a hot-pot bid asked a two-way choice as a blank box.
-    questions = _block_questions()
-    questions[3] = (
-        "Should 'Portland area' mean Portland city limits or the wider metro area?"
-    )
+
+def test_an_entry_that_is_not_a_question_at_all_is_still_flagged():
+    # The one thing no count is needed for: the door cannot read it either way.
     provider = BookOfHousesTollBenchProvider(FakeApi())
 
-    result = provider.validate_proposal(_with_questions(questions))
+    result = provider.validate_proposal(_with_questions([12, {"id": "q2", "title": ""}]))
 
-    assert result["ok"] is False
-    assert any(
-        "single_choice" in problem["message"] and "reads as a choice" in problem["message"]
-        for problem in _finalist_problems(result)
-    )
+    messages = [problem["message"] for problem in _finalist_problems(result)]
+    assert any("must be a question object" in m for m in messages)
+    assert any("non-empty `title`" in m for m in messages)
 
 
-def test_a_yes_no_worded_text_question_names_yes_no():
-    questions = _block_questions()
-    questions[3] = "Does one representative bowl at each restaurant count?"
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(_with_questions(questions))
-
-    assert any(
-        "`yes_no`" in problem["message"] for problem in _finalist_problems(result)
-    )
-
-
-def test_an_approve_format_is_refused_on_a_question():
-    questions = _block_questions()
+def test_which_formats_a_question_may_wear_is_the_doors_answer():
+    # An approve format and a one-option dropdown are both refused -- BY THE
+    # BENCH, in its own words. A second opinion here is how the harness and
+    # the door came to disagree about the count in the first place.
+    questions = _block_questions()[:3]
     questions[1] = {"id": "q2", "format": "review_approve", "title": "Approve this plan"}
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(_with_questions(questions))
-
-    assert result["ok"] is False
-    assert any(
-        "is not a question" in problem["message"]
-        for problem in _finalist_problems(result)
-    )
-
-
-def test_a_choice_question_needs_real_options_and_no_other_sentinel():
-    questions = _block_questions()
     questions[0] = {
         "id": "q1",
         "format": "single_choice",
@@ -297,11 +289,11 @@ def test_a_choice_question_needs_real_options_and_no_other_sentinel():
     }
     provider = BookOfHousesTollBenchProvider(FakeApi())
 
-    result = provider.validate_proposal(_with_questions(questions))
+    result = provider.validate_proposal(
+        {**_valid_proposal(), "finalist_questions": questions}
+    )
 
-    messages = [problem["message"] for problem in _finalist_problems(result)]
-    assert any("at least 2 real options" in m for m in messages)
-    assert any("__other__" in m for m in messages)
+    assert _finalist_problems(result) == []
 
 
 def test_a_question_block_needs_id_format_and_title():
@@ -314,11 +306,13 @@ def test_a_question_block_needs_id_format_and_title():
     messages = [problem["message"] for problem in _finalist_problems(result)]
     assert any("non-empty `id`" in m for m in messages)
     assert any("non-empty `format`" in m for m in messages)
+    # The three fields are a missing-field check, not a shape rule.
+    assert all("text box" not in m for m in messages)
 
 
 def test_a_stale_production_schema_never_refuses_a_block_question():
     # The bench's own JSON schema may still spell the field as four strings.
-    # finalist_questions has its own gate here, so a block shape passes at home.
+    # finalist_questions is the door's to judge, so a block shape passes here.
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
     schema = api.proposal_schema()
