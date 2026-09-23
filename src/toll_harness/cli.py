@@ -51,6 +51,7 @@ from toll_harness.onboarding import (
 from toll_harness.operator.channel import OperatorChannel
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
+from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.toll_bench.step import (
     ROAD_AGENTIC,
@@ -1405,7 +1406,28 @@ _CLOSED_TARGET_MEMO: set[str] = set()
 # bench scores "selected, could not present a plan", and the person is told
 # in red and asked to pick another. Coming back to that target cannot change
 # any of it.
-_TERMINAL_DOOR_ERRORS = frozenset({"bidding_closed", "draft_stalled", "plan_failed"})
+# `bench_must_fix` and `waiting_on_the_person` join them on 2026-09-17
+# (contract 4.0). Every row left on the plan belongs to somebody else -- the
+# bench's own bug, or an answer the person owes -- and there is nothing the
+# agent can send that changes either. The memo is keyed on the ROUND, so this
+# is "not this round", not "never": a repost is a new want to it.
+# `draft_paused` joins them the same day. The bench shuts a plan door for a
+# quarter of an hour when its own check is in the way, and for an hour when the
+# same plan comes back five times; while it stands, every call is read and
+# refused. Counting those refusals as failures would spend the five-cycle
+# breaker on a door that was always going to open by itself -- and the breaker
+# is what stops us retrying a want that is really broken, so it must not be
+# burned on one that is only resting.
+_TERMINAL_DOOR_ERRORS = frozenset(
+    {
+        "bidding_closed",
+        "draft_stalled",
+        "plan_failed",
+        draft.DRAFT_PAUSED,
+        DraftLoop.BENCH_MUST_FIX,
+        DraftLoop.WAITING_ON_THE_PERSON,
+    }
+)
 
 
 def _remember_closed(target: dict[str, Any], error: Any) -> bool:
@@ -1479,14 +1501,13 @@ def _plan_draft_fingerprint(resources: Any, obligation: dict[str, Any]) -> str |
     if not isinstance(answer, dict):
         return None
     document = answer.get("draft") if isinstance(answer.get("draft"), dict) else {}
-    fix = answer.get("next_fix") if isinstance(answer.get("next_fix"), dict) else {}
+    fix = draft.next_fix_of(answer) or {}
     basis = {
-        "next_fix": (fix.get("path"), fix.get("code")),
-        "problems": [
-            (row.get("path"), row.get("code"))
-            for row in (answer.get("problems") or [])
-            if isinstance(row, dict)
-        ],
+        # CONTRACT 4.0: a row is named by its step, its slot and what is wrong
+        # with it. The legacy codes are not part of what changed, because one
+        # fault told under two of them is still one fault.
+        "next_fix": draft.fix_key(fix) if fix else None,
+        "problems": [draft.fix_key(row) for row in draft.problems_of(answer)],
         "ready": answer.get("ready"),
         "closed": answer.get("closed"),
         "bench_fixed": document.get("_bench_fixed") or answer.get("bench_fixed"),
@@ -1745,11 +1766,11 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) ->
             if isinstance(answer, dict):
                 # Rewording the same bad field and updating a timestamp do not
                 # count as progress. Clearing/changing the problem does.
-                fix = answer.get("next_fix") or {}
+                fix = draft.next_fix_of(answer) or {}
                 basis["plan"] = {
-                    "next_fix": (fix.get("path"), fix.get("code")),
-                    "problems": [(p.get("path"), p.get("code"))
-                                 for p in answer.get("problems", []) if isinstance(p, dict)],
+                    "next_fix": draft.fix_key(fix) if fix else None,
+                    "problems": [draft.fix_key(row)
+                                 for row in draft.problems_of(answer)],
                     "ready": answer.get("ready"), "closed": answer.get("closed"),
                 }
     return loop_fingerprint(basis)
@@ -2455,6 +2476,18 @@ def _file_the_informed_plan_from_draft(
     target_id = str(obligation.get("target_id") or "")
     proposal_id = str(obligation.get("proposal_id") or "")
     if not target_id or not proposal_id:
+        return None
+    # ONE LANGUAGE, AND THIS HARNESS SPEAKS THE NEW ONE (contract 4.0). A
+    # bench whose plan door still answers the old way is one this loop cannot
+    # read, so the plan goes the old whole-document way instead of spending a
+    # person's wait on rounds nothing here understands.
+    speaks = getattr(resources.toll_bench, "plan_door_speaks_one_language", None)
+    if callable(speaks) and not speaks():
+        _LOGGER.warning(
+            "This bench's plan door answers below contract 4.0; filing the plan "
+            "for %s the old way",
+            target_id,
+        )
         return None
     brief = _brief_for_the_loop(resources, target_id)
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)

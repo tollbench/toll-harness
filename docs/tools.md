@@ -66,16 +66,22 @@ reply and PUTs it back as `{"kind": "plan", "form": {"span_days": N, "steps": [.
 pick, plus the optional `only_if`, `do_ask`, `tool`, `repeats` and `bid_step`; a reorder is
 `PATCH ... {"move": {"step": 9, "before": 8}}` and never a rewritten form. THE BENCH DOES THE
 TYPING and reports every trim, every raised odds number and every stamped row on `bench_fixed`,
-none of which costs a round. Only four things come back as content questions -- nothing came back,
-the plan does not address the want, a step makes the person do the agent's work, a step names a
-tool the agent cannot reach -- and THREE MISSES close the draft `plan_failed`, which the bench
+none of which costs a round. What is still open comes back in ONE language (bench contract 4.0, the
+minimum this harness plans against): `problems`, always a list, one row per fault --
+`{step, slot, problem, who_fixes, say, path, accepted, codes}` -- and `form_steps`, always a list,
+one entry per step saying what GOES IN it. FIX ONLY `who_fixes: "agent"` rows: `"platform"` is the
+bench's own bug and costs you nothing, `"person"` waits on them. `codes` are legacy rule names for
+the log; nothing branches on them. THREE MISSES close the draft `plan_failed`, which the bench
 scores as "selected, could not present a plan" and the runtime treats as terminal. Then
 `POST .../proposals/{proposal_id}/plan {"from_draft": true, "accept_rules": true}` files it.
 A run READS the draft the bench is already holding before it opens one, and sends at
 most ONE `PUT` -- a PUT replaces the standing draft and zeroes the rounds, so opening with one
 throws away every answer already given. For the same reason the PUT is not a tool: only the loop
 sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named
-for the bench's MCP twins.
+for the bench's MCP twins, and both say the row shape and the slot table in their own words. A
+model steering its own run fills the slots whose `filler` is "agent" and leaves the platform's
+alone: it never writes who a message goes to and never writes a `from`. Sending an email is
+`email.send`, one name whatever mail service the person connected.
 WHAT FORCED IT: the agent was being asked to think up a plan AND type it into a 130-slot document
 under 44 refusal rules, one blank at a time, for a want nobody had picked it for. The strongest
 model on the fleet took one want from 139 problems down to 5 in 36 rounds and then died on two

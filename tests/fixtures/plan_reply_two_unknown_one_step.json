@@ -1,0 +1,329 @@
+{
+ "answer": {
+  "bench_connected": [],
+  "bench_dropped": [],
+  "bench_fixed": [],
+  "bench_wrote": [],
+  "blanks": [],
+  "closed": null,
+  "correction_attempts": {
+   "instruction": "Follow next_fix. Only an unsuccessful reply to that one thing uses an attempt; other unfinished fields do not, and a row we have to fix never does. The first returned plan uses no correction attempt.",
+   "left": 3,
+   "limit": 3,
+   "used": 0
+  },
+  "draft": {
+   "allocation": {
+    "ad_spend": 0,
+    "agent_work": 0,
+    "tools": 0
+   },
+   "finalist_questions": [],
+   "finish_line": "The introductions, sent.",
+   "finish_line_cents": 0,
+   "model_declared": "test-model",
+   "odds": 0.5,
+   "pitch_body": "",
+   "pitch_title": "",
+   "research_links": [
+    {
+     "kind": "finding",
+     "note": "",
+     "plan_use": "",
+     "url": ""
+    },
+    {
+     "kind": "skill",
+     "note": "",
+     "plan_use": "",
+     "skill": {
+      "decision": "selected",
+      "name": "",
+      "readiness": "",
+      "readiness_note": "",
+      "requirements": "",
+      "safety_notes": ""
+     },
+     "url": ""
+    }
+   ],
+   "span_days": 21,
+   "steps": [
+    {
+     "_authored_text": true,
+     "_form_step": 0,
+     "actor": "agent",
+     "agent_court_estimate": 4,
+     "ask": "APPROVE",
+     "declared_odds": 0.6,
+     "deliverable": {
+      "channel": "text",
+      "family": null,
+      "fields": [
+       "what came back"
+      ],
+      "min_count": 1,
+      "store": null,
+      "types": []
+     },
+     "examples": [],
+     "har_blocks": [
+      {
+       "ask": "approve",
+       "format": "review_approve",
+       "id": "document-1",
+       "required": true,
+       "title": "Is this right?",
+       "you": ""
+      }
+     ],
+     "line_item_amount": 0,
+     "materials": [],
+     "minor_detail": "Write the introduction note for the three people",
+     "outcome_promise": "The finished note, ready to send",
+     "person_minutes": 15,
+     "rounds": 2,
+     "service_setup": [],
+     "title": "Write the introduction note for the three people",
+     "wait": {
+      "conditions": [
+       {
+        "after_step": 1,
+        "observation": "they replied",
+        "source": "email_reply"
+       }
+      ],
+      "days": 5
+     },
+     "you": ""
+    }
+   ],
+   "strategy": "Write the introduction note, hand it over for you to read, and send it when you say so.",
+   "subsidy_declared": "none_planned",
+   "timeline_days": 21,
+   "total_ask_cents": 0
+  },
+  "drop_call": "PATCH this door with {\"kind\": \"plan\", \"drop\": {\"step\": 4}} to take step 4 off the plan; the bench re-expands the whole plan and renumbers what pointed at it. A drop costs one round, like a move.",
+  "example_plan": {
+   "form": {
+    "overview": "Pick both people on the one contact question, run the same message once per person from the connected mailbox, and stop at your approval before anything sends.",
+    "span_days": 14,
+    "steps": [
+     {
+      "declared_odds": 0.8,
+      "do_line": "Who should this go to?",
+      "hand_over_line": "the people this goes to, picked from your own contact book",
+      "need_line": "Pick who this goes to from your contact book.",
+      "proof": "text",
+      "verb": "who",
+      "who": "person",
+      "work_line": "picking the people this goes to, from your own contact book, so no address ever rides the plan"
+     },
+     {
+      "declared_odds": 0.8,
+      "do_line": "Send the introduction to both of them",
+      "hand_over_line": "Both people have the same introduction in their inbox, sent from your own address, with each other on it.",
+      "need_line": "Connect email",
+      "proof": "text",
+      "verb": "emails",
+      "who": "agent",
+      "work_line": "Sending one message per person, the same words, from your address"
+     }
+    ]
+   },
+   "key": "02-email-intro",
+   "more": "GET /api/bench/plan-examples/02-email-intro for the whole program.",
+   "steps_shown": 2,
+   "steps_total": 2,
+   "title": "Connect two people by email",
+   "why": "One finished plan for a want like this one, written in the same form you are filling. Copy its shape, not its words."
+  },
+  "expires_at": "2026-09-18T23:49:23.211872Z",
+  "file_call": "POST /api/bench/targets/0ab19490-940c-4ed7-9fc2-22860c06f474/proposals/<proposal_id>/plan with {\"from_draft\": true, \"accept_rules\": true}",
+  "forecast_context": {
+   "deadline_days": 30,
+   "goal": "An introduction email to three people I have not met.",
+   "instruction": "Give your own chance of achieving this goal within form.span_days in form.odds. It may differ from the system forecast. Each step forecasts the same outcome and deadline after that step succeeds; keep it equal to or above your starting forecast and the preceding step.",
+   "system_forecast": 0.3
+  },
+  "form": {
+   "odds": 0.5,
+   "overview": "Write the introduction note, hand it over for you to read, and send it when you say so.",
+   "span_days": 21,
+   "steps": [
+    {
+     "ask": [],
+     "declared_odds": 0.6,
+     "do_ask": null,
+     "do_line": "Write the introduction note for the three people",
+     "hand_over_line": "The finished note, ready to send",
+     "need_line": "",
+     "only_if": null,
+     "proof": "text",
+     "repeats": null,
+     "room": "",
+     "room_number": 12,
+     "tool": "",
+     "verb": "prepares",
+     "wait": {
+      "conditions": [
+       {
+        "after_step": 1,
+        "observation": "they replied",
+        "source": "email_reply"
+       }
+      ],
+      "days": 5
+     },
+     "who": "agent",
+     "words": "",
+     "work_line": ""
+    }
+   ]
+  },
+  "form_steps": [
+   {
+    "action": "",
+    "person_slot": null,
+    "slots": [],
+    "step": 1
+   }
+  ],
+  "insert_call": "PATCH this door with {\"kind\": \"plan\", \"insert\": {\"before\": 4, \"step\": {\"verb\": \"who\", \"who\": \"person\", \"declared_odds\": 0.5}}} to put a new step in front of step 4; the bench re-expands the whole plan and renumbers what pointed at or past it. An insert costs one round, like a move.",
+  "kind": "plan",
+  "next": "form",
+  "next_fix": {
+   "accepted": [],
+   "codes": [
+    "invalid_conditions"
+   ],
+   "key": "s1|-|wrong_kind|agent|form.steps.0.wait|invalid_conditions|6181e0b2",
+   "path": "form.steps.0.wait",
+   "problem": "wrong_kind",
+   "say": "Name each condition in at most 140 characters.",
+   "slot": null,
+   "step": 1,
+   "who_fixes": "agent"
+  },
+  "ok": true,
+  "optional_picks": [
+   {
+    "field": "only_if",
+    "says": "Run this step only when an earlier step came out a certain way. {\"step\": 3, \"outcome\": \"no_reply\"}. The outcome is one of: replied, no_reply, done, not_done, yes, no. Add \"after_days\" (1 to 30) to wait that long before it is decided, e.g. {\"step\": 3, \"outcome\": \"no_reply\", \"after_days\": 3}. On a step that repeats for each item of that same step, it is checked for each item."
+   },
+   {
+    "field": "do_ask",
+    "says": "Only when who is \"person\". What the person does, with a link they tap and what it costs them before they tap: {\"link\": \"https://...\", \"cost_cents\": 10000, \"cost_note\": \"about $100 a month\"}. The link is the page where the person does it, in the service itself, not a help article."
+   },
+   {
+    "field": "tool",
+    "says": "A tool from this want's list, or any service by name. A name that is not on the list is declared as an outside act for you: you say what you will do, the person taps Allow, and your evidence comes back through the evidence door. IT ALSO TAKES A LIST, in the order the calls should run, all on ONE account: [\"composio:<service>/<TOOL_A>\", \"composio:<service>/<TOOL_B>\"]. One account row, one card, one approval, and a later call can read what an earlier one came back with. To bind one, write the entry with its own arguments: {\"tool\": \"composio:<service>/<TOOL_B>\", \"args\": {\"id\": {\"$from\": \"<tool_a>.id\"}}} where <tool_a> is the earlier tool's name in lower case with underscores. Supply required arguments as actual values or valid bindings; missing inputs return their field schema. A typed binding is a JSON object {\"$from\":\"source.field\"}, not \"$ref\" or a quoted JSON object. It preserves the source value's type; {{source.field}} interpolates text and cannot carry an object. Sources are person.<question id> for an actual answer, draft.words for the words you supplied, or <earlier run name>.<field> for an actual result on this same step. The document shows the generated run names. Never invent a source or use steps.N.output. For values produced by an earlier STEP, have that step file structured cards items containing the needed fields, then set the consuming form step's repeats to {\"cadence\":\"for_each\",\"of_step\":N}, where N is that earlier step's one-based document number. Bind its fields with {\"$from\":\"item.<field>\"}. This also works for one item. The platform supplies handover.N as the list; do not bind handover.N.<field>. The producer must actually supply the required value in the tool's expected shape before execution. Do not invent a date or other value just to pass validation."
+   },
+   {
+    "field": "room",
+    "says": "Only on a \"posts\" step whose room needs a name (a Slack channel, a Discord channel id, a subreddit): which one. The form asks it as a blank there; LinkedIn and X never need it."
+   },
+   {
+    "field": "repeats",
+    "says": "How often this step runs: {\"cadence\": \"for_each\", \"of_step\": 4} to do it once for every item step 4 handed over, or {\"cadence\": \"for_each\", \"of_step\": \"who\"} to do it once for each person picked on the who step. By default you write every item as soon as the step opens and the person approves them one at a time; add \"pace\": \"all_at_once\" for one approval of the whole list, or \"pace\": \"after_each\" if the next item depends on how the last one came out. Each item's result (replied, no_reply, done, not_done, yes, no) can be read by a later step's only_if. \"daily\", \"weekly\" and \"each_time\" are recorded on the step but not run yet: the step runs once. For a daily drip of content, hand over the whole package and the platform delivers it on its schedule."
+   },
+   {
+    "field": "words",
+    "says": "ONLY on a `posts` step, and there it is asked as a blank: the words that go in the post. The person reads those exact words and taps once; we add the line saying an AI wrote it and who for. Nobody but you can write them, so they are the one piece of a post the bench cannot stamp for you."
+   },
+   {
+    "field": "ask",
+    "says": "What you need FROM THE PERSON before this step can run, one entry per thing: [{\"name\": \"shop_link\", \"label\": \"The exact link to your shop\", \"kind\": \"link\"}]. `kind` is one of: text, number, yes_no, choice, file, link (text is the default); a `choice` carries two or more \"options\", a `number` may carry a \"unit\". A plain string is an ask too and means a text one. Up to 8 per step, labels up to 140 characters. THE BENCH BUILDS THE STEP: the person gets a step of their own, right before yours, with one box per entry, and their answers come back to you by name -- bind one in an act's arguments as {\"$from\": \"person.<name>\"}, the same way person.who works. Never ask the person for information on a step of YOURS: your step is where they approve what you did with their answers."
+   },
+   {
+    "field": "bid_step",
+    "says": "The number of the step in your own proposal this came from, if it came from one. Everything you already wrote on that step is carried across."
+   }
+  ],
+  "paused_reason": null,
+  "paused_until": null,
+  "problems": [
+   {
+    "accepted": [],
+    "codes": [
+     "invalid_conditions"
+    ],
+    "key": "s1|-|wrong_kind|agent|form.steps.0.wait|invalid_conditions|6181e0b2",
+    "path": "form.steps.0.wait",
+    "problem": "wrong_kind",
+    "say": "Name each condition in at most 140 characters.",
+    "slot": null,
+    "step": 1,
+    "who_fixes": "agent"
+   },
+   {
+    "accepted": [
+     "verb",
+     "do_line",
+     "work_line",
+     "hand_over_line",
+     "need_line",
+     "declared_odds",
+     "proof",
+     "who",
+     "only_if",
+     "do_ask",
+     "tool",
+     "repeats",
+     "words",
+     "room",
+     "bid_step",
+     "wait",
+     "ask",
+     "count"
+    ],
+    "codes": [],
+    "key": "s1|step|unknown_field|agent|form.steps.0|-|-",
+    "path": "form.steps.0",
+    "problem": "unknown_field",
+    "say": "Step 1: room_number is not a field step has; move it or take it off.",
+    "slot": "step",
+    "step": 1,
+    "who_fixes": "agent"
+   },
+   {
+    "accepted": [
+     "source",
+     "label",
+     "thread_id",
+     "send_request_id",
+     "after_step",
+     "authorization_id",
+     "id",
+     "status"
+    ],
+    "codes": [],
+    "key": "s1|wait.conditions.0|unknown_field|agent|form.steps.0.wait|-|-",
+    "path": "form.steps.0.wait",
+    "problem": "unknown_field",
+    "say": "Step 1: observation is not a field wait.conditions has; move it or take it off.",
+    "slot": "wait.conditions.0",
+    "step": 1,
+    "who_fixes": "agent"
+   }
+  ],
+  "proposal_id": "fcd4f5f4-6db9-4d10-91e3-8f391651db61",
+  "ready": false,
+  "remaining": 3,
+  "reorder_call": "PATCH this door with {\"kind\": \"plan\", \"move\": {\"step\": 9, \"before\": 8}} to move one step; the bench re-expands the whole plan.",
+  "rounds": {
+   "cap": 42,
+   "left": 42,
+   "used": 0
+  },
+  "send": "PUT this door again with {\"kind\": \"plan\", \"form\": {\"overview\": \"...\", \"span_days\": 14, \"steps\": [...]}}: one entry per step, and on each one answer the questions in `blanks`. THE BLANK FORM SHOWS THREE STEPS AS A SHAPE, NOT AS A COUNT: send as many steps as this plan needs and no more. Two is fine, twenty is fine, and there is no cap either way -- the old step-count band was dropped. A step that carries the `bid_step` number (or the title) of one of `your_proposal` keeps everything you already wrote on it. You never write a connect row, a grant request, a block title, a schedule row or a $from pointer: the bench writes all of that from your picks. THE PERSON PICKS WHO THIS GOES TO on a step of their own, and YOU place that step: a step with {\"verb\": \"who\", \"who\": \"person\", \"declared_odds\": 0.5} in front of the first step that emails, meets or calls them (one per plan; the bench writes its words and the contact book); never plan a step to find or list them. A plan that reaches somebody with no who step above it comes back as `missing_who` with the exact insert call. Too long is trimmed, not refused, and a falling odds line is fixed for you; both come back in `bench_fixed`.",
+  "stance": "",
+  "the_person_said": [
+   {
+    "answer": "An introduction email to three people I have not met.",
+    "question": "What do you want?"
+   }
+  ]
+ },
+ "status": 200
+}

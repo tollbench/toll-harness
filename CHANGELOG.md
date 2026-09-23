@@ -8,6 +8,80 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.47.0] - 2026-09-22
+
+- **A token is enough to connect.** WHAT FORCED IT: an outside agent (registered
+  against the bench by hand, then wiring this harness to its token) sat blocked
+  for days on `Connected Toll Bench agent token or maker ID is missing`, a value
+  no document in this release mentions and the bench never asks for. The bearer
+  token alone identifies the agent; `maker_id` is an optional cross-check header
+  that the harness-registers-you path always had for free and used as an
+  "onboarded" sentinel. `toll_bench.maker_id` is now optional at runtime, and
+  `init --resume` with a stored token and no `maker_id` asks `GET /api/bench/me`
+  who the token is, records `maker_id` + `registry_no`, and never files a second
+  registration. `BookOfHousesApiClient.authenticated(token)` no longer needs a
+  maker id.
+
+## [0.46.0] - 2026-09-17
+
+- **ONE LANGUAGE AT THE PLAN DOOR (bench contract 4.0).** Steven: "The form says
+  what goes in. It never lists what is wrong." WHAT FORCED IT: on 17 September a
+  fleet agent fixed 21 of 24 plan problems in three minutes and died on the last
+  three, all on one email step -- the same missing subject came back under two
+  codes, with a paragraph of advice, and one of the fields was something the
+  platform fills itself. Three tries per problem is what ended that plan. The
+  bench REPLACED the plan door's reply rather than extending it, so this harness
+  reads the new one and only the new one: there is no shim reading both shapes,
+  deliberately, because two languages side by side is the thing that cost those
+  three tries.
+- The old plan rows -- `code`, `path`, `detail`, `question`, `fix`, `step_index`,
+  `field` -- are gone from this side. A row is now `{step, slot, problem,
+  who_fixes, say, path, accepted, codes}`; `problems` carries every row at once
+  and `next_fix` only says which to start with. `codes` are the legacy rule names
+  and go to the RUN LOG only -- nothing branches on them, because one fault told
+  under three codes is still one fault. THE PROPOSAL DOOR IS UNTOUCHED.
+- **The fix round shows the model what GOES IN the step, not what is wrong with
+  it.** The door's own `form_steps` entry rides the ask: every named input, its
+  kind, who fills it, whether it is wired or still needed, what it accepts and
+  the path to patch, with the bench's own sentences underneath. No rule code ever
+  reaches a prompt again.
+- **`who_fixes` is honoured.** A `platform` row is the bench's own bug: no model
+  call, no try, and it shouts in the log with its step, slot, path and codes;
+  when nothing else is left the run stops `bench_must_fix`. A `person` row is a
+  wait, not a failure: `waiting_on_the_person`. Both park the want for the ROUND
+  on the brake that was already there -- three refusals on an unchanged state --
+  rather than a second brake, and a repost asks again.
+- **Two rows are answered with no model at all.** A key the form has no room for
+  is taken off and the object at the row's `path` is sent back, read off the
+  row's own `accepted` list -- including a key nested inside a `wait` condition,
+  which is where Marcia's plan wrote two of them in silence. A step that reaches
+  somebody with no who step above it gets the insert call, now read off the SLOT
+  TABLE (a `contact` slot the platform fills from `person.who`, and no step
+  marked `person_slot: "who"`) instead of off a rule code.
+- **The stall brake uses the bench's own key** (step, slot, problem), so the
+  harness and `plan_form.count_tries` agree on what "the same problem" is. It
+  used to key on (path, code), which counted one fault three times.
+- **Deleted, because the reply carries the answer now**: the four who/restating
+  content codes and the whole-step code set; the restating coaching paragraph;
+  and `blocks.band_floor`, this package's copy of the bench's step-count band
+  (REJ-12), which the bench retired to a scoreboard that blocks nothing. A plan
+  with nothing left once the blank form steps are dropped still does not file --
+  that is about an empty page, not a band. Nothing anticipates REJ-12 or REJ-44
+  any more; neither appears in `problems`.
+- **`email.send` is the one name taught for sending mail**, whatever service the
+  person has connected; the platform picks the connector off their account. The
+  provider-shaped names are still accepted by the bench and are no longer taught
+  here.
+- **The minimum server contract for the plan road is 4.0**
+  (`book_of_houses.PLAN_DOOR_MIN_CONTRACT`). A bench below it is not planned
+  against through this loop: the run says so and falls back to the old
+  whole-document road rather than spending a person's wait on rounds nothing
+  here can read. The bid road is not gated on it.
+- Six REAL plan-door replies are captured under `tests/fixtures/` from the
+  bench's own code, with a note on how each was produced, and the affected unit
+  tests are rewritten against them. A test can now only pass against a shape the
+  server actually produces.
+
 ## [0.45.0] - 2026-09-17
 
 - The local REJ-15 mirror demanded exactly four questions while the server takes

@@ -25,8 +25,7 @@ filing is spent on it, every step the model copied and never filled is DROPPED
 here -- unless the platform wrote it (an act kind, or a grant request), in
 which case its blanks are the platform's and it stays. Nothing here ever
 writes a word of the agent's: hands off applies to the harness too. A plan
-that falls below the band floor once the blanks are gone is not filed, and
-says so.
+with nothing left once the blanks are gone is not filed, and says so.
 
 RULES 228 (original) AND 229 (contract 2.44) -- the want names its blocks, and
 a declared block files itself. Still live for an OLDER bench, which may send a
@@ -330,16 +329,22 @@ def blank_form_steps(steps: Any) -> list[int]:
 
 
 def drop_blank_form_steps(
-    proposal: dict[str, Any], *, floor: int | None = None
+    proposal: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str], bool]:
     """Strip every step that is still the form's blank. Never writes a word.
 
-    Returns ``(proposal, dropped, below_floor)``. ``dropped`` is one label per
-    removed step, for the log. ``below_floor`` is True when what is left is
-    shorter than ``floor`` -- the band minimum, which is exactly the length of
-    the brief's own skeleton -- and the caller must then NOT file: a plan whose
-    every step was the blank form is not a plan, and the honest move is to hand
-    the model back its own empty page rather than spend the round.
+    Returns ``(proposal, dropped, nothing_left)``. ``dropped`` is one label per
+    removed step, for the log. ``nothing_left`` is True when EVERY step was the
+    blank form, and the caller must then NOT file: an empty page is not a plan,
+    and the honest move is to hand the model back its own empty page rather
+    than spend the round.
+
+    THE BAND FLOOR IS GONE (bench contract 4.0, 2026-09-17). This used to
+    compare what was left against the length of the brief's skeleton, which
+    was this package's copy of the bench's step-count band. That band no
+    longer blocks anything: the bench counts it on a scoreboard nobody is
+    shown, and a harness holding a number the server has stopped enforcing is
+    a rule with no owner.
     """
     original = proposal.get("steps")
     steps = list(original) if isinstance(original, list) else []
@@ -348,22 +353,9 @@ def drop_blank_form_steps(
         return proposal, [], False
     kept = [step for index, step in enumerate(steps) if index not in set(blanks)]
     dropped = [f"step {index + 1} (blank form step)" for index in blanks]
-    below = floor is not None and len(kept) < int(floor)
     trimmed = dict(proposal)
     trimmed["steps"] = kept
-    return trimmed, dropped, below
-
-
-def band_floor(plan_template: Any) -> int | None:
-    """The fewest steps this target's band allows, per the brief's own form.
-
-    The skeleton IS the floor: the bench builds it at exactly the band minimum
-    (REJ-12). Reading it off the template keeps the number the server's rather
-    than a copy of it here.
-    """
-    if not isinstance(plan_template, list) or not plan_template:
-        return None
-    return len(plan_template)
+    return trimmed, dropped, not kept
 
 
 def step_kinds(step: Any) -> list[str]:

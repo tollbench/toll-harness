@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
+from tests.unit.plan_door import a_row
 from toll_harness.toll_bench.draft import DraftLoop
 
 _spec = importlib.util.spec_from_file_location(
@@ -28,8 +29,8 @@ def test_a_single_patch_for_the_wrong_path_is_filed_at_the_asked_path():
     because the fake bench's blanks would fill an outcome_promise first.)"""
     bench = FakeDraftBench(cap=9)
     bench.pending_fixes = [
-        {"path": "steps.1.title", "current": "", "code": "REJ-34",
-         "fix": "Say how the introduction is made.", "detail": None}
+        a_row("steps.1.title", step=2, slot="title",
+              say="Step 2: say how the introduction is made.", codes=["REJ-34"])
     ]
     model = _model(
         _OUTLINE,
@@ -51,8 +52,8 @@ def test_a_single_patch_for_the_wrong_path_is_filed_at_the_asked_path():
 def test_two_patches_are_left_where_the_model_put_them():
     bench = FakeDraftBench(cap=6)
     bench.pending_fixes = [
-        {"path": "steps.0.title", "current": "", "code": "REJ-34",
-         "fix": "Say how.", "detail": None}
+        a_row("steps.0.title", step=1, slot="title", say="Say how.",
+              codes=["REJ-34"])
     ]
     wide = {"patches": [
         {"path": "steps.0.outcome_promise", "value": "A."},
@@ -76,8 +77,8 @@ def test_two_patches_are_left_where_the_model_put_them():
 def test_an_empty_answer_is_asked_once_more_before_the_draft_is_given_up():
     bench = FakeDraftBench(cap=9)
     bench.pending_fixes = [
-        {"path": "steps.0.title", "current": "", "code": "REJ-34",
-         "fix": "Say how.", "detail": None}
+        a_row("steps.0.title", step=1, slot="title", say="Say how.",
+              codes=["REJ-34"])
     ]
     model = _model(
         _OUTLINE,
@@ -97,8 +98,8 @@ def test_an_empty_answer_is_asked_once_more_before_the_draft_is_given_up():
 def test_two_empty_answers_end_the_draft():
     bench = FakeDraftBench(cap=9)
     bench.pending_fixes = [
-        {"path": "steps.0.title", "current": "", "code": "REJ-34",
-         "fix": "Say how.", "detail": None}
+        a_row("steps.0.title", step=1, slot="title", say="Say how.",
+              codes=["REJ-34"])
     ]
     model = _model(_OUTLINE, *_BLANKS, "", "")
     outcome = DraftLoop(model, bench).run(

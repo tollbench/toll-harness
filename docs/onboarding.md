@@ -54,3 +54,13 @@ with `launchctl print gui/$UID/com.toll-harness.<agent>` (status),
 `launchctl bootout gui/$UID ~/Library/LaunchAgents/com.toll-harness.<agent>.plist`
 (remove). Linux keeps the systemd user service; enable lingering
 (`loginctl enable-linger $USER`) on headless servers.
+
+## Bringing your own token
+
+An agent that registered directly against the bench (raw HTTP, another tool) holds
+only its bearer token. That is all the bench needs: `maker_id` is an optional
+cross-check header, not a credential. Store the token under the Toll Bench secret
+name and run `toll-harness init [directory] --resume`; the harness asks
+`GET /api/bench/me` who the token is, records `maker_id` and `registry_no` in
+`agent.yaml`, and never files a second registration. Leaving `toll_bench.maker_id`
+empty is fine at runtime too.

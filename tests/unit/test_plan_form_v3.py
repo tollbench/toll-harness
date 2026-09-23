@@ -257,17 +257,18 @@ def test_the_blank_ones_are_named_by_index():
     assert blocks.blank_form_steps(steps) == [1, 3]
 
 
-def test_the_floor_is_the_briefs_own_skeleton_length():
-    assert blocks.band_floor(SKELETON) == 3
-    assert blocks.band_floor([]) is None
-    assert blocks.band_floor(None) is None
+def test_the_step_count_band_is_no_longer_mirrored_here():
+    """RETIRED (bench contract 4.0, 2026-09-17). The step-count code goes to
+    a scoreboard nobody is shown and blocks nothing, so the copy of the band
+    minimum this package used to keep has no owner and is gone."""
+    assert not hasattr(blocks, "band_floor")
 
 
 def test_dropping_writes_no_words_of_the_agents():
     proposal = plan(written_step("One"), blank_step(2))
-    trimmed, dropped, below = blocks.drop_blank_form_steps(proposal, floor=1)
+    trimmed, dropped, nothing_left = blocks.drop_blank_form_steps(proposal)
     assert dropped == ["step 2 (blank form step)"]
-    assert below is False
+    assert nothing_left is False
     assert trimmed["steps"] == [written_step("One")]
     # The original is untouched, and nothing gained a title it did not have.
     assert len(proposal["steps"]) == 2
@@ -311,11 +312,22 @@ def test_one_copied_blank_step_is_dropped_and_the_rest_is_filed():
     ]
 
 
-def test_dropping_below_the_band_floor_stops_the_filing():
-    """The floor is the bench's, not ours: the skeleton IS the band minimum
-    (REJ-12), so two written steps plus one copied blank on a three-step band
-    is a plan the door would refuse anyway. Better refused at home, where the
-    round is not spent and the model is told what it owes."""
+def test_a_plan_that_was_nothing_but_the_blank_form_stops_the_filing():
+    """An empty page is not a plan. What is left after the blanks are dropped
+    is the whole test -- the step-count band is the bench's scoreboard now and
+    is not mirrored here."""
+    api = _Api()
+    provider = _provider(api)
+    result = _file(provider, plan(blank_step(1), blank_step(2)))
+    assert result["ok"] is False
+    assert result["error"] == "plan_is_still_the_blank_form"
+    assert "nothing left of the plan" in result["message"]
+    assert api.submissions == []
+
+
+def test_a_plan_with_written_steps_left_still_files_whatever_the_band_said():
+    """Two written steps and one copied blank used to be refused at home for
+    being under a three-step band. The band does not block, so it files."""
     api = _Api()
     provider = _provider(api)
     result = _file(
@@ -323,10 +335,7 @@ def test_dropping_below_the_band_floor_stops_the_filing():
         plan(written_step("Find three venues"), blank_step(2),
              written_step("Book the room", odds=0.5)),
     )
-    assert result["ok"] is False
-    assert result["error"] == "plan_is_still_the_blank_form"
-    assert "band allows" in result["message"]
-    assert api.submissions == []
+    assert result["ok"] is not False or result["error"] != "plan_is_still_the_blank_form"
 
 
 def test_a_block_pulled_from_the_catalog_survives_the_strip():

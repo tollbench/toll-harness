@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit.plan_door import a_row
 from toll_harness import cli
 from toll_harness.loop_guard import LoopGuard, fingerprint
 from toll_harness.storage.local import SQLiteStore
@@ -78,17 +79,20 @@ def test_dispatch_is_bounded_across_restarts_and_different_errors(tmp_path, monk
 
 
 def test_plan_rewording_is_not_progress():
-    answer = {
-        "next_fix": {"path": "title", "code": "invalid", "current": "a"},
-        "draft": {"title": "a"},
-    }
+    """What counts as movement is which ROW the door names (contract 4.0): its
+    step, its slot and what is wrong with it. New words in the same hole are
+    the same hole, and so is the same fault under a different legacy code."""
+    fix = a_row("form.steps.0.do_line", step=1, slot="do_line",
+                say="the do line is empty", codes=["REJ-01"])
+    answer = {"next_fix": fix, "problems": [fix], "draft": {"title": "a"}}
     resources = SimpleNamespace(toll_bench=SimpleNamespace(read_draft=lambda *a, **k: answer))
     obligation = {"kind": "file_informed_plan", "target_id": "t"}
     first = cli._loop_state(resources, obligation)
-    answer["next_fix"]["current"] = "different wording"
+    fix["say"] = "the do line is still empty"
+    fix["codes"] = ["REJ-01", "tool_input"]
     answer["draft"]["title"] = "another bad title"
     assert cli._loop_state(resources, obligation) == first
-    answer["next_fix"]["path"] = "steps.0"
+    fix["slot"] = "hand_over_line"
     assert cli._loop_state(resources, obligation) != first
 
 

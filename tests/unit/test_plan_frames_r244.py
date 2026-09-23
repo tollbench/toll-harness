@@ -9,13 +9,16 @@ other, so the harness asks the model to write it in the same call it already
 makes, with the bench's note as the instruction. The bench prints a flat line
 only when the slot is left empty.
 
-The bench also refuses (REJ-44) a promise that starts in the first person, a
-work item not starting with an -ing word, or a `you` line that is a status
-phrase; the refusal quotes the frame. It takes the generic fix path: nothing
-is repaired at home.
+The bench used to refuse (REJ-44) a promise that starts in the first person or
+a work item not starting with an -ing word. Contract 4.0 RETIRED that code to
+a scoreboard nobody is shown: it no longer appears in `problems` and blocks
+nothing, so the harness holds no workaround for it. A bench that names it
+anyway is answered like every other row -- its sentence, its path, and no code
+in front of the model.
 """
 from __future__ import annotations
 
+from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import FakeDraftBench, _model
 from toll_harness import cli
 from toll_harness.toll_bench import blocks, book_of_houses, programs
@@ -101,17 +104,32 @@ def test_the_instruction_carries_the_frame_in_the_benchs_words():
     assert "-ing word" in BLANKS_INSTRUCTION
 
 
-def test_rej_44_is_named_and_takes_the_generic_fix_path():
+def test_the_two_retired_codes_are_not_anticipated_anywhere():
+    """RETIRED (bench contract 4.0, 2026-09-17). The line-wording code and the
+    step-count code go to a scoreboard the agent is never shown: they no
+    longer appear in `problems` and they block nothing. So the harness holds
+    no workaround for either -- no re-wording a line to fit a frame, no
+    copy of the band minimum -- and the names stay only where the FILE door
+    still uses them.
+    """
+    import inspect
+
+    from toll_harness.toll_bench import draft
+
     assert blocks.REJ_FRAME == "REJ-44" == book_of_houses.REJ_FRAME
-    refusal = ("step 1 minor_detail line 1 does not start with an -ing word: "
-               '"Book of Houses runs the invitation." Write it to its frame -- ' + WORK_FRAME)
-    bench = FakeDraftBench(fixes=[{
-        "path": "steps.0.minor_detail",
-        "current": "Book of Houses runs the invitation.",
-        "code": "REJ-44",
-        "fix": refusal,
-        "detail": None,
-    }])
+    # Nothing in the draft loop reads either code.
+    source = inspect.getsource(draft)
+    assert "REJ-44" not in source and "REJ-12" not in source
+    assert not hasattr(blocks, "band_floor")
+
+
+def test_a_retired_code_on_a_row_is_still_answered_like_any_other():
+    """A bench that names one anyway is not a special case: the row carries
+    its own sentence and path, and the loop answers that."""
+    bench = FakeDraftBench(fixes=[a_row(
+        "steps.0.minor_detail", step=1, slot="minor_detail",
+        say="Step 1: the work line does not start with an -ing word.",
+        codes=["REJ-44"])])
     model = _model(
         _OUTLINE,
         {"patches": [{"path": "steps.0.outcome_promise", "value": _PROMISE}]},
@@ -122,11 +140,13 @@ def test_rej_44_is_named_and_takes_the_generic_fix_path():
     )
 
     DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
-    brief={"want": "Introduce me to Grant"},
+                                brief={"want": "Introduce me to Grant"},
                                 idempotency_key="k")
 
     texts = _asks(model)
-    assert any("REJ-44" in t and "-ing word" in t for t in texts), texts
+    assert any("-ing word" in t for t in texts), texts
+    # The code itself never reaches the model.
+    assert not any("REJ-44" in t for t in texts)
     assert bench.filed[2]["steps"][0]["minor_detail"].startswith("Offering ")
 
 

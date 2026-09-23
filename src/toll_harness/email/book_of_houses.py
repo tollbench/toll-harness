@@ -194,7 +194,7 @@ class BookOfHousesApiClient:
         protocol = self.protocol()
         return self._request_text(str(protocol.get("skill") or "/static/agent-skill.md"))
 
-    def authenticated(self, token: str, maker_id: str) -> BookOfHousesApiClient:
+    def authenticated(self, token: str, maker_id: str | None = None) -> BookOfHousesApiClient:
         return BookOfHousesApiClient(
             base_url=self.base_url,
             token=token,
@@ -291,10 +291,11 @@ class BookOfHousesApiClient:
             authenticated=True,
         )
 
-    # THE DRAFT DOOR (rule 241, contract 3.11). Three calls under the same
-    # bearer and the same `proposals:write` scope as filing a bid, and none of
-    # them file anything: the outline in, one piece back at a time, and a read
-    # that costs no round. MCP twins: put_proposal_draft, patch_proposal_draft,
+    # THE DRAFT DOOR (rule 241, contract 3.11; the PLAN door's reply is
+    # contract 4.0). Three calls under the same bearer and the same
+    # `proposals:write` scope as filing a bid, and none of them file anything:
+    # the outline in, one piece back at a time, and a read that costs no
+    # round. MCP twins: put_proposal_draft, patch_proposal_draft,
     # get_proposal_draft -- named the same here so an operator reading one
     # surface recognises the other.
     def put_proposal_draft(
@@ -352,8 +353,13 @@ class BookOfHousesApiClient:
         kind: str = "bid",
         document: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """ONE PIECE BACK. Merge by path, re-validate, one `next_fix`. Spends
-        one round."""
+        """ONE PIECE BACK. Merge by path, re-validate, answer. Spends one
+        round.
+
+        A PLAN answers in the ONE row shape (contract 4.0): `problems` always
+        a list, `next_fix` the row to start with, `form_steps` what goes in
+        each step. A BID still answers the way it always has.
+        """
         target = urllib.parse.quote(str(target_id), safe="")
         payload: dict[str, Any] = {"kind": kind}
         if patches is not None:

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit.plan_door import a_row
 from toll_harness import cli
 from toll_harness.core.types import (
     AutonomyMode,
@@ -1346,8 +1347,9 @@ def test_the_stall_lifts_when_the_bench_is_holding_a_different_draft(monkeypatch
     stalled anyway until someone restarted it. The draft read costs no round,
     so a stalled plan is re-tested every cycle."""
     monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    held = {"ok": True, "problems": [{"path": "form.steps.0", "code": "REJ-16"}],
-            "next_fix": {"path": "form.steps.0", "code": "REJ-16"},
+    named = a_row("form.steps.0", step=1, slot="hand_over_line",
+                  say="Step 1: the hand-over line is empty.", codes=["REJ-16"])
+    held = {"ok": True, "problems": [named], "next_fix": named,
             "draft": {"steps": [{"title": "one"}]}}
     goals = []
     resources = _breaker_resources(
@@ -1383,7 +1385,9 @@ def test_a_stalled_plan_tries_again_after_the_bounded_wait(monkeypatch):
         _plan_obligation(),
         failure={"error": "REJ-16 on a step the bench stamped"},
         goals=goals,
-        draft={"ok": True, "problems": [{"path": "form.steps.0", "code": "REJ-16"}]},
+        draft={"ok": True, "problems": [
+            a_row("form.steps.0", step=1, slot="hand_over_line",
+                  say="Step 1: the hand-over line is empty.", codes=["REJ-16"])]},
     )
 
     for _ in range(2):

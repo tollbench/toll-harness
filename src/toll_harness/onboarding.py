@@ -382,6 +382,24 @@ def advance_connected_onboarding(
     token_name = toll_bench.get("token_secret") or TOKEN_SECRET_NAME
     token = store.get(token_name)
     maker_id = state.get("maker_id") or toll_bench.get("maker_id")
+    if token and not maker_id:
+        # Bring-your-own-token: the agent registered outside this harness (raw
+        # HTTP, another tool) and holds only the bearer token. The bench needs
+        # nothing else; ask it who the token is and record the answer instead
+        # of registering a second identity.
+        me = public_api.authenticated(token).me()
+        who = me.get("agent") or {}
+        maker_id = who.get("maker_id")
+        if not maker_id:
+            raise RuntimeError(
+                "The stored agent token authenticated but production returned no maker_id"
+            )
+        state.update({"maker_id": maker_id, "registry_no": who.get("registry_no")})
+        save_onboarding(path, config, state)
+        _save_connected_metadata(
+            path, config, status=toll_bench.get("status") or LOCAL_CONFIGURED,
+            maker_id=maker_id, registry_no=who.get("registry_no"),
+        )
     if not maker_id:
         payload = registration_payload(config, protocol)
         validation = public_api.validate_registration(payload)

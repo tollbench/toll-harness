@@ -57,6 +57,19 @@ REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
 # and open_bid_count does not move. A bench that reports a contract below this
 # has no such route and the local mirror is the whole pre-check there.
 VALIDATE_DOOR_MIN_CONTRACT_MAJOR = 3
+
+# THE PLAN DOOR'S REPLY IS CONTRACT 4.0 (2026-09-17). Steven: "The form says
+# what goes in. It never lists what is wrong." The bench REPLACED that reply
+# rather than extending it -- the old problem rows are gone, `problems` is one
+# row shape and `form_steps` is new -- and this harness reads the new one and
+# only the new one, on purpose: two languages side by side is what made one
+# fault cost three tries. So a bench below 4.0 cannot be planned against, and
+# the run says so out loud instead of quietly filing nothing.
+#
+# The BID door is untouched by 4.0 and still answers the way it always has, so
+# nothing below gates a proposal on this number.
+PLAN_DOOR_MIN_CONTRACT = "4.0"
+PLAN_DOOR_MIN_CONTRACT_MAJOR = 4
 # One repair pass. The door is free, so the model gets its list of problems
 # back once and files on the next call; a harness that kept bouncing the same
 # plan would spend the run and teach itself nothing.
@@ -812,6 +825,25 @@ class BookOfHousesTollBenchProvider:
             available = False
         self._validate_door = available
         return available
+
+    def plan_door_speaks_one_language(self) -> bool:
+        """Whether this bench's PLAN door answers in the contract 4.0 shape.
+
+        Read off the protocol call that already rides every run. This harness
+        reads the new reply and nothing else -- no shim, no second language --
+        so a bench below 4.0 is a bench it cannot plan against, and saying so
+        is better than a loop that files nothing and never explains why.
+
+        An unreadable protocol reads as "yes": a probe that cannot answer must
+        never be the thing that stops a plan the door would have taken.
+        """
+        try:
+            version = str((self.protocol() or {}).get("contract_version") or "")
+            return int(version.split(".")[0]) >= PLAN_DOOR_MIN_CONTRACT_MAJOR
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Contract version unreadable; assuming the plan door "
+                            "speaks contract %s", PLAN_DOOR_MIN_CONTRACT)
+            return True
 
     def validate_at_the_door(
         self, target_id: str, proposal: dict[str, Any]
@@ -2158,9 +2190,7 @@ class BookOfHousesTollBenchProvider:
         # them, and NOTHING is written in their place: the model's words or
         # nothing (rule 228 amended, Steven 2026-09-05). A platform-written
         # block step keeps its blanks, because they are the platform's.
-        proposal, dropped, below_floor = blocks.drop_blank_form_steps(
-            proposal, floor=blocks.band_floor(brief.get("plan_template"))
-        )
+        proposal, dropped, nothing_left = blocks.drop_blank_form_steps(proposal)
         if dropped:
             _LOGGER.warning(
                 "Plan for target %s copied the brief's form without filling it; "
@@ -2168,7 +2198,7 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(dropped),
             )
-        if below_floor:
+        if nothing_left:
             _LOGGER.warning(
                 "Plan for target %s was the blank form and nothing else; "
                 "nothing filed",
@@ -2183,7 +2213,7 @@ class BookOfHousesTollBenchProvider:
                     "Nothing was filed. The brief's plan_template is a blank FORM, "
                     "not a plan: every step arrived with an empty `title` and an "
                     "empty `outcome_promise` for you to write. Those steps were "
-                    "dropped and what is left is shorter than this band allows. "
+                    "dropped and there is nothing left of the plan. "
                     "Write each step in your own words -- the harness will not "
                     "write them for you -- and submit again. bid_template_notes "
                     "on the brief lists every blank."
@@ -2783,9 +2813,8 @@ class BookOfHousesTollBenchProvider:
         # CONTRACT 3.0, at the SECOND door: the same blank form reaches the
         # informed plan, and this is the filing the person is already waiting
         # on. Drop what was copied and never filled; write nothing in its place.
-        submitted_plan, dropped, below_floor = blocks.drop_blank_form_steps(
-            submitted_plan, floor=blocks.band_floor(brief.get("plan_template"))
-        )
+        submitted_plan, dropped, nothing_left = blocks.drop_blank_form_steps(
+            submitted_plan)
         if dropped:
             _LOGGER.warning(
                 "Informed plan for target %s copied the brief's form without "
@@ -2793,7 +2822,7 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(dropped),
             )
-        if below_floor:
+        if nothing_left:
             return {
                 "ok": False,
                 "error": "plan_is_still_the_blank_form",

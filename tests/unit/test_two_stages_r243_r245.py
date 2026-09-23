@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 
+from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import _model
 from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.draft import (
@@ -31,6 +32,7 @@ from toll_harness.toll_bench.draft import (
     DraftLoop,
     block_grammar_summary,
     example_plan,
+    fix_key,
     is_small_proposal,
     mend_the_small_proposal,
     pick_tools,
@@ -96,7 +98,8 @@ class _Naming:
             "remaining": 2,
             "ready": False,
             "rounds": {"used": len(self.patches), "left": 100, "cap": 100},
-            "next_fix": {"path": path, "code": code, "current": "whatever is there now"},
+            "next_fix": a_row(path, step=1, slot=None, say="change this",
+                              codes=[code]),
         }
 
 
@@ -109,7 +112,7 @@ def _reworded_loop(bench):
         # progress here for ever.
         return {"patches": [{"path": "form.steps.0.do_line", "value": next(words) * 20}]}
 
-    def patch(_target, _kind, patches, _what):
+    def patch(_target, _kind, patches, _what, **_kw):
         bench.patches.append(list(patches))
         return bench.answer(len(bench.patches))
 
@@ -822,7 +825,7 @@ class FormBench:
         self.form: dict | None = None
         self.puts: list[dict] = []
         self.patches: list[list[dict]] = []
-        self.tries: dict[tuple[str, str], int] = {}
+        self.tries: dict[str, int] = {}
         self.closed: str | None = None
         self.plan_filed = None
         self.reads = 0
@@ -853,16 +856,18 @@ class FormBench:
             "send": SEND,
             "draft": {},
             "blanks": _form_questions(form),
-            "next_fix": {"path": "form", "current": None, "code": "FORM",
-                         "detail": "This plan has not been written yet.", "fix": SEND},
-            "problems": [], "bench_fixed": [], "remaining": 1, "ready": False,
+            "next_fix": a_row("form", problem="empty",
+                              say="This plan has not been written yet. " + SEND,
+                              codes=["FORM"]),
+            "problems": [], "form_steps": [],
+            "bench_fixed": [], "remaining": 1, "ready": False,
             "rounds": {"used": 1, "left": 99, "cap": 100}, "closed": None,
         }
 
     def _form_answer(self):
         questions = _form_questions(self.form or {})
         content = [row for row in self.content
-                   if self.tries.get((row["path"], row["code"]), 0) < 3]
+                   if self.tries.get(fix_key(row), 0) < 3]
         first = content[0] if content else (questions[0] if questions else None)
         remaining = len(content) + len([q for q in questions if q.get("required")])
         return {
@@ -873,11 +878,13 @@ class FormBench:
             "draft": self._expanded(),
             "blanks": questions,
             "next_fix": None if self.closed else (
-                {"path": first["path"], "code": first.get("code", "blank"),
-                 "current": None,
-                 "fix": first.get("question") or first.get("note")}
+                first if first in content else
+                a_row(first["path"], step=1, slot="do_line",
+                      say=first.get("question") or first.get("note") or "",
+                      codes=["blank"])
                 if first else None),
             "problems": content,
+            "form_steps": [],
             "bench_fixed": list(self.trims),
             "remaining": remaining,
             "ready": self.closed is None and remaining == 0,
@@ -919,9 +926,9 @@ class FormBench:
         return self._form_answer()
 
     def _count(self):
-        """THREE TRIES ON THE SAME (path, code), the bench's own rule."""
+        """THREE TRIES ON THE SAME (step, slot, problem), the bench's rule."""
         for row in self.content:
-            key = (row["path"], row["code"])
+            key = fix_key(row)
             self.tries[key] = self.tries.get(key, 0) + 1
             if self.tries[key] >= 3:
                 self.closed = "plan_failed"
@@ -1078,9 +1085,9 @@ def test_three_content_misses_close_the_plan_and_that_is_the_end_of_it():
     to pick another, and the runtime never comes back to that want."""
     from toll_harness import cli
 
-    bench = FormBench(content=[{"path": "form.steps.0.do_line",
-                                "code": "does_not_address",
-                                "question": "This plan does not answer the want."}])
+    bench = FormBench(content=[a_row(
+        "form.steps.0.do_line", step=1, slot="do_line",
+        say="This plan does not answer the want.", codes=["does_not_address"])])
     model = _model(
         _filled(2),
         {"patches": [{"path": "form.steps.0.do_line", "value": "Something else"}]},
@@ -1098,9 +1105,10 @@ def test_three_content_misses_close_the_plan_and_that_is_the_end_of_it():
 
 
 def test_the_content_question_reaches_the_model_in_the_benchs_own_words():
-    bench = FormBench(content=[{"path": "form.steps.0.do_line",
-                                "code": "person_does_the_work",
-                                "question": "Step 1 asks the person to hand over the work."}])
+    bench = FormBench(content=[a_row(
+        "form.steps.0.do_line", step=1, slot="do_line",
+        say="Step 1 asks the person to hand over the work.",
+        codes=["person_does_the_work"])])
     model = _model(
         _filled(2),
         {"patches": [{"path": "form.steps.0.do_line", "value": "I do it myself"}]},
@@ -1112,7 +1120,8 @@ def test_the_content_question_reaches_the_model_in_the_benchs_own_words():
 
     fix = model.invocations[1]["messages"][0].content[0]["text"]
     assert "Step 1 asks the person to hand over the work." in fix
-    assert "person_does_the_work" in fix
+    # AND NOT ITS CODE (contract 4.0): codes go to the log, never the model.
+    assert "person_does_the_work" not in fix
 
 
 def test_the_stance_and_the_example_are_the_doors_when_it_sends_them():

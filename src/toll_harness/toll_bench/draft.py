@@ -45,8 +45,11 @@ So this is what the harness asks the model for, and it is all it asks for:
   2. one STEP's blanks at a time — the step's mechanics exactly as the bench
      expanded them, plus that step's blank paths with the bench's own sentence
      on each — answered as {path: value} patches.
-  3. one NEXT_FIX at a time — one path, its current value, the code and the
-     bench's one sentence of fix, with the step around it for context.
+  3. one ROW at a time — WHAT GOES IN the step it names (the door's own slot
+     table: each named input, its kind, who fills it, whether it is wired or
+     still needed, what it accepts and the path to patch) and the bench's own
+     sentences for that step. Never a rule code: the plan door answers in ONE
+     language since contract 4.0, and the legacy `codes` go to the log alone.
 
 THE BOUNDS ARE THE BENCH'S AND THERE ARE NO KNOBS HERE. The bench caps the
 rounds (three per opening problem, ceiling 200) and expires a draft at 24
@@ -76,12 +79,20 @@ import json
 import logging
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from toll_harness.core.types import ModelMessage
 from toll_harness.toll_bench import blocks, programs
 
 _LOGGER = logging.getLogger("toll_harness.draft")
+
+# ONE NAME FOR SENDING AN EMAIL (bench contract 4.0, 2026-09-17). The bench
+# takes the provider-shaped names quietly and no longer teaches them: the
+# person's connected account decides which mail service actually runs, so an
+# agent that writes the provider into the plan is guessing at something it
+# cannot know. `form_steps[].action` on every plan answer reads this name.
+EMAIL_SEND = "email.send"
 
 # THE BENCH'S BOUND IS THE ONLY BOUND (Steven, 2026-09-09: "we don't have to
 # have a three strike rule ... 3 strikes on a 30 step job is too little", "I
@@ -148,7 +159,10 @@ FRONT_DOOR = (
     "platform -- an email, a booking, a calendar event, a publish, a purchase -- "
     "also names the tool it runs and the service it runs `on`: "
     '{"ask": "APPROVE", "title": "Offer the times and book it", "tool": '
-    '"gmail.message.send", "on": "google-gmail"}. A step that touches nothing '
+    '"' + EMAIL_SEND + '", "on": "google-gmail"}. SENDING AN EMAIL IS '
+    '"' + EMAIL_SEND + '" -- one name, whatever mail service the person has '
+    "connected; the platform picks the connector off their account. A step "
+    "that touches nothing "
     "outside names its block instead, or just its ask: "
     '{"ask": "APPROVE", "title": "Find three cafes", "block": "research"}.\n'
     "THE BENCH FILLS EVERY MECHANIC IT OWNS -- the account row for each service, "
@@ -238,27 +252,19 @@ BLANKS_INSTRUCTION = (
     "...]}."
 )
 
-# THE CONTENT CODE THAT IS ABOUT THE WHOLE STEP, not a line of it.
-RESTATES_THE_PICK = "restates_the_pick"
-
 # THE WHO STEP IS THE AGENT'S PICK (rule 238, amended 2026-09-12).
 #
 # WHAT FORCED IT: on production, 2026-09-12, the bench INSERTED its own who
 # step after the agent's step 4 and then refused its own document as "step 5"
 # -- a step the agent never wrote. So the bench stopped inserting. The agent
 # picks the step like it picks `emails` or `meeting`, and a plan that reaches
-# somebody with no who step above it is REFUSED WITH THE BLOCK and the exact
-# call that puts one in. Step numbers never move under the agent again.
-MISSING_WHO = "missing_who"
-ONE_WHO_PER_PLAN = "one_who_per_plan"
-WHO_REACHES_NOBODY = "who_reaches_nobody"
-
-# Every content code that is about the STEP and not a line of it. A bench that
-# names a field path under one of these is still naming the step: there is no
-# line on it to reword.
-WHOLE_STEP_CODES = frozenset(
-    {RESTATES_THE_PICK, MISSING_WHO, ONE_WHO_PER_PLAN, WHO_REACHES_NOBODY}
-)
+# somebody with no who step above it is refused, and the step that puts one in
+# is the agent's to send. Step numbers never move under the agent again.
+#
+# NOTHING HERE READS A CODE ANY MORE (contract 4.0). The plan door's own slot
+# table says it: a step whose recipient slot is the platform's, wired to
+# `person.who`, and no step anywhere on the form standing as the who step.
+# That is `who_step_is_missing` below.
 
 # The door's 422 when the insert it named cannot be made (no `step` object,
 # `before` out of range). Logged with its reason and never retried blindly.
@@ -280,8 +286,8 @@ WHO_STEP_SENTENCE = (
     "contact book, its minutes and its cost. ONE who step per plan -- every "
     "send below it reads the same picks -- and never plan a step to find, get "
     "or list the people: say what you DO with the ones they pick. A plan that "
-    "reaches somebody with no who step above it is refused `missing_who`, and "
-    "the door hands back the exact call that puts one in.\n"
+    "reaches somebody with no who step above it is refused, and the step that "
+    "puts one in is yours to send.\n"
 )
 
 WHOLE_STEP_FIX_INSTRUCTION = (
@@ -296,19 +302,6 @@ WHOLE_STEP_FIX_INSTRUCTION = (
     '{"drop": {"step": <step_number below>}}\n'
     "Answer with one or the other and nothing else. A patch to ONE FIELD of "
     "this step is not an answer to this question.\n"
-)
-
-RESTATING_STEP_INSTRUCTION = (
-    "WHAT IS WRONG WITH THIS STEP: its whole work is handing back people the "
-    "person already picked. WHO IT GOES TO IS ITS OWN STEP -- a step YOU put "
-    "in the plan, verb `who`, where the person opens their own private "
-    "contact book and picks -- so there is nothing here for a step of yours "
-    "to find, get, identify or list. A step that stays must DO SOMETHING WITH "
-    "those people -- email them, meet them, call them, post to them, book "
-    "something for them -- and its `verb` must say so (emails, meeting, "
-    "calls, posts, books). If this step was only getting you the names, DROP "
-    "IT: the step after it reads the picks straight off the who step, and no "
-    "address ever rides the plan.\n"
 )
 
 REPEATED_STEP_EXITS_INSTRUCTION = (
@@ -326,23 +319,74 @@ REPEATED_FIX_INSTRUCTION = (
     "THE BENCH IS NAMING THE SAME THING AGAIN. Your last patch did not clear "
     "it. `you_sent_last_round` is exactly what you sent and "
     "`what_is_in_the_document_now` is what the bench has for that path after "
-    "it. Sending the same value a third time cannot work: read the code and "
-    "the fix sentence again and send something DIFFERENT -- a different "
-    "value, or the same idea in the shape the code asks for. If the path is "
-    "a list, send the whole list, not one entry of it.\n"
+    "it. Sending the same value a third time cannot work: read what the bench "
+    "says again and send something DIFFERENT -- a different value, or the "
+    "same idea in the shape the step asks for. If the path is a list, send "
+    "the whole list, not one entry of it.\n"
 )
+# THE SLOTS THE STEP IS MISSING, FILLED BEFORE ANYTHING IS REWORDED.
+#
+# WHAT FORCED IT (checker, 2026-09-17). The fix ask says "change exactly the
+# one thing named in `change_this`; do not touch any other path", which is
+# right for a fix and wrong for a hole. So a plan whose email step had no
+# subject and no body was filed with no subject and no body: the door said
+# both were the agent's and still needed, in as many words, and nothing ever
+# asked for them. This ask is what asks for them, in one call for however many
+# there are, before a single word is reworded.
+#
+# SHORT AND PLAIN, because weak models are in this fleet.
+NEEDED_SLOTS_INSTRUCTION = (
+    "Your plan has holes in it. `needs` lists every one: which step it is on, "
+    "the `name` of the thing to write, what `kind` of thing it is, what it "
+    "accepts, and the exact `path` to patch. Write all of them.\n"
+    "Write real words the person will read, in their own right: a subject is "
+    "a subject, a body is a message. Never leave one empty and never write "
+    "the word yet or TBD.\n"
+    "Write NOTHING else. Do not write who a message goes to and do not write "
+    "who it is from: the platform fills those from the step where the person "
+    "picks, and an address you write is a person you invented.\n"
+    'Answer: {"patches": [{"path": "<the path from needs>", "value": "<your '
+    'words>"}, ...]} -- one patch for each thing in `needs`, and no other '
+    "path."
+)
+
+# ONE LINE, ONCE. A stand-in is dropped and asked for again, and this is what
+# is added the second time.
+STAND_IN_REMINDER = (
+    "\nA STAND-IN IS NOT WORDS. Your last answer left one of these as a "
+    "placeholder. Write the real words for this want; do not write TBD, TODO, "
+    "a name in brackets, or the name of the slot itself.\n"
+)
+
 EMPTY_ANSWER_INSTRUCTION = (
     "NOTHING CAME BACK LAST TIME. Answer with ONE patch for the path named in "
-    "`fix_this`, as JSON: {\"patches\": [{\"path\": <that path>, \"value\": ...}]}. "
+    "`change_this`, as JSON: {\"patches\": [{\"path\": <that path>, \"value\": ...}]}. "
 )
 
 
+# THE FORM SAYS WHAT GOES IN; IT NEVER LISTS WHAT IS WRONG (contract 4.0).
+#
+# WHAT FORCED IT (2026-09-17). Marcia fixed 21 of 24 plan problems in three
+# minutes and died on the last three, all on one email step: one missing
+# subject came back under two codes with a paragraph of advice, and one of the
+# fields was something the platform fills itself. Three tries per problem is
+# what ended her plan. So the ask below hands the model the STEP'S OWN SLOT
+# TABLE -- every named input, what fills it, whether it is wired or still
+# needed, what it accepts and the path to patch -- and the bench's own
+# sentences underneath. No codes, no advice, no list of faults.
 FIX_INSTRUCTION = (
-    "The bench read the plan and named ONE thing to change. Change exactly that "
-    "one thing. Do not touch any other path and do not resend the document. "
-    "`plan` below is the shape of the whole plan, one line per step, so you can "
-    "see where this sits; `step` is the only step you are changing.\n"
-    'Answer: {"patches": [{"path": "<the path named below>", '
+    "The bench read your plan and this is the step to work on.\n"
+    "`this_step` is the form's own statement of that step: each named input, "
+    "what kind of thing goes in it, WHO fills it (`filler`), whether it is "
+    "already wired or still `needed` (`state`), what it accepts, and the exact "
+    "`path` to patch. FILL ONLY the inputs whose `filler` is \"agent\". Never "
+    "write who a message goes to and never write who it is from: those are "
+    "the platform's, wired from the step where the person picks.\n"
+    "`what_the_bench_says` is one sentence per thing still open on this step, "
+    "in the bench's own words. `step` is what you sent.\n"
+    "Change exactly the one thing named in `change_this`. Do not touch any "
+    "other path and do not resend the plan.\n"
+    'Answer: {"patches": [{"path": "<the path in change_this>", '
     '"value": <the new value>}]}.'
 )
 
@@ -588,17 +632,16 @@ def who_step(odds: Any = None) -> dict[str, Any]:
 
 
 def who_insert(fix: Any, step: Any = None, index: int | None = None) -> dict[str, Any] | None:
-    """THE CALL THAT ANSWERS `missing_who`, built from the door's own words.
+    """THE CALL THAT PUTS THE WHO STEP IN, built from the row the door gave.
 
-    The door writes the whole call into its question, so that is read first
-    and sent back as it came. When the words carry no call -- an older bench,
-    a question reworded -- the same call is BUILT from what the problem
-    already says: the path names the step that reaches a person (0-based), the
-    who step goes in front of it (`before` counts from ONE, like move and
-    drop), and its odds are that step's own.
+    A door that writes the whole call into its sentence is read first and the
+    call is sent back as it came. Contract 4.0 cuts that sentence to one line,
+    so the call is BUILT instead from what the row already says: the step that
+    reaches a person, the who step in front of it (`before` counts from ONE,
+    like move and drop), and its odds are that step's own.
     """
     fix = fix if isinstance(fix, dict) else {}
-    for key in ("question", "fix", "detail", "message", "current"):
+    for key in ("say", "question", "fix", "detail", "message", "current"):
         found = read_insert(fix.get(key))
         if found is None:
             continue
@@ -610,6 +653,462 @@ def who_insert(fix: Any, step: Any = None, index: int | None = None) -> dict[str
     if index is None:
         return None
     return {"before": index + 1, "step": who_step(who_odds(step))}
+
+
+# ---------------------------------------------------------------------------
+# THE PLAN DOOR SPEAKS IN SLOTS (bench contract 4.0, 2026-09-17)
+# ---------------------------------------------------------------------------
+# ONE LANGUAGE, NOT TWO. The plan door's reply was REPLACED, not extended: the
+# old `{code, path, detail, question, fix, step_index, field}` rows are gone
+# and nothing here reads them. A row now says what step, what slot, what is
+# wrong with it, WHO FIXES IT, one sentence, the path to patch and what that
+# slot accepts. `codes` carries the legacy names for the LOG ONLY -- branching
+# on them is what let one fault cost three tries.
+#
+# Beside the rows, `form_steps` says what GOES IN each step: every named
+# input, its kind, its filler (agent / person / platform), its state (wired /
+# needed / filled), where its value comes from, what it accepts and its path.
+# That table is what the model is shown, because a form that says what goes in
+# is answerable and a list of faults is not.
+#
+# The PROPOSAL door is untouched and still answers the old way; nothing in
+# this section is used on it.
+AGENT = "agent"
+PERSON = "person"
+PLATFORM = "platform"
+
+UNKNOWN_FIELD = "unknown_field"
+STATE_NEEDED = "needed"
+KIND_CONTACT = "contact"
+PERSON_SLOT_WHO = "who"
+
+# A SLOT WRITTEN LATER IS NOT A HOLE NOW. The bench marks a slot on a step that
+# walks a list or a schedule `source: "at_the_step"`: its words are written one
+# item at a time, when the step runs, and approved there. Filling those at
+# filing time writes one sentence over a hundred different ones.
+SOURCE_AT_THE_STEP = "at_the_step"
+
+# NEVER WRITTEN BY THE AGENT, UNDER ANY NAME. Who a message goes to and who it
+# comes from are the platform's, wired from the step where the person picks
+# out of their own contact book. An agent that writes an address has invented a
+# person, and that is the one mistake this market cannot allow.
+NEVER_WRITTEN = frozenset({"to", "from", "cc", "bcc"})
+
+# THE SAME LAW READ OFF A PATH, ON EVERY ROAD. `slots_the_agent_owes` reads a
+# slot NAME, which only covers the slots road; a patch that came back off a
+# fix, or off the blanks, has nothing but its path to go on, and the address
+# can sit anywhere along it: `...args.cc_emails`,
+# `...args.to_recipients.0.emailAddress.address`.
+#
+# AN ADDRESS IS AN ADDRESS UNDER ANY NAME (2026-09-17). The rule here used to
+# be a LIST -- to, from, cc, bcc, sender, and anything starting `recipient` or
+# `attendee` -- and a service spells the same thing its own way. Read against
+# the server's own answer (`act_kinds.calls.address_roles` asked of all 616
+# tools in the catalog: 31 marked names), that list missed thirteen of them,
+# `extra_recipients`, `to_number`, `email`, `bcc_recipients`, `cc_recipients`,
+# `toRecipients`, `from_email`, `reply_to` and the rest. The door refuses
+# every one of them, so none of it ever escaped -- it cost the agent a round,
+# and a round is the thing this loop has least of.
+#
+# So the rule is DERIVED the way the server derives it, not listed: a name's
+# WORDS are read (snake_case and camelCase both), and it is an address when it
+# opens with an addressing word, or carries an addressing noun anywhere, and
+# says none of the words that mean it is something else. Too strict beats too
+# loose on anything that decides who receives a message -- but only just, both
+# ways: a name wrongly refused costs a round the model spends writing it
+# again, and a name wrongly allowed costs the round the door spends refusing
+# it.
+_ADDRESS_HEADS = frozenset(
+    {"to", "cc", "bcc", "recipient", "recipients", "attendee", "attendees",
+     "invitee", "invitees", "email", "emails", "address", "addresses",
+     "phone", "phones", "msisdn", "msisdns", "mobile", "mobiles",
+     "whatsapp", "personalization", "personalizations"}
+)
+# The sending side is the person's own account and just as much theirs: a name
+# that opens `from` or `sender`, or the phrases `send as` and `reply to`.
+_SENDER_HEADS = frozenset({"from", "sender"})
+_SENDER_PHRASES = (("send", "as"), ("reply", "to"))
+# A word that says address wherever it sits: `recipient_email`, `cc_emails`,
+# `emailAddress`. Short words are heads only, so `bcc` inside something else
+# and the `to` in `in_reply_to` are not addresses.
+_ADDRESS_NOUNS = frozenset(
+    {"address", "addresses", "mail", "email", "emails", "recipient",
+     "recipients", "attendee", "attendees", "invitee", "invitees",
+     "personalization", "personalizations", "phone", "phones", "msisdn",
+     "msisdns", "mobile", "mobiles", "whatsapp", "cell"}
+)
+# A display name rides beside an address and is not one; an id is the row's,
+# never a person's; and a subject, a body, a count, a date or a label cannot
+# hold one. `from_date`, `attendee_count`, `email_subject` and `message_id`
+# are ordinary names and stay ordinary.
+_NOT_AN_ADDRESS = frozenset(
+    {"name", "names", "id", "ids", "count", "counts", "subject", "body",
+     "text", "date", "dates", "time", "times", "note", "notes", "label",
+     "labels"}
+)
+# THE ONE THE WORDS CANNOT READ, and it is the server's, not ours: `updates`
+# on OUTLOOK_BATCH_UPDATE_MESSAGES says nothing in its name and is marked
+# because a Graph batch update can set `toRecipients` INSIDE it. Anything the
+# server marks that its own name does not say belongs here; the test walks the
+# server's captured list and fails if another one appears.
+_MARKED_BUT_UNSPOKEN = frozenset({"updates"})
+_WORD_RE = re.compile(r"[A-Za-z][a-z0-9]*|\d+")
+
+
+def _words_of(name: str) -> tuple[str, ...]:
+    """One argument name's words, snake_case and camelCase alike."""
+    return tuple(word.lower() for word in _WORD_RE.findall(name))
+
+
+def _singular(word: str) -> str:
+    return word[:-1] if word.endswith("s") and len(word) > 3 else word
+
+
+def _names_an_address(name: str) -> bool:
+    """True when this ONE name is who something goes to or comes from.
+
+    THE CASE IS PART OF THE NAME, so nothing here lowers it before the words
+    are read: `toRecipients` is two words and `torecipients` is one.
+    """
+    if name.lower() in _MARKED_BUT_UNSPOKEN:
+        return True
+    words = _words_of(name)
+    if not words:
+        return False
+    tokens = set(words) | {_singular(word) for word in words}
+    if tokens & _NOT_AN_ADDRESS:
+        return False
+    for phrase in _SENDER_PHRASES:
+        if words[: len(phrase)] == phrase:
+            return True
+    if words[0] in _SENDER_HEADS:
+        # `from` alone is the sending address; `from_email` and `from_phone`
+        # say so; `from_date` says something else entirely.
+        return len(words) == 1 or bool(tokens & (_ADDRESS_NOUNS | {"number"}))
+    return words[0] in _ADDRESS_HEADS or bool(tokens & _ADDRESS_NOUNS)
+
+
+def writes_a_person(path: Any) -> bool:
+    """True when any part of this path is who something goes to or comes from."""
+    return any(
+        _names_an_address(segment.strip())
+        for segment in str(path or "").split(".")
+        if segment.strip()
+    )
+
+
+# A STAND-IN IS NOT AN ANSWER. The ask already says not to write one and
+# nothing read it back, so a model with nothing to say could put `TBD` in the
+# subject line of a real message. Short on purpose: these are the shapes a
+# model reaches for when it has no words, not a list of words to police.
+STAND_IN_WORDS = frozenset(
+    {"tbd", "todo", "to do", "yet", "n/a", "na", "none", "null", "...",
+     "…", "[]", "[ ]"}
+)
+TEXT_SLOT_KINDS = frozenset({"", "text", "short_text", "long_text", "string"})
+
+
+def is_a_stand_in(value: Any, name: Any = "", kind: Any = "") -> bool:
+    """True when a value is a blank wearing words: ``TBD``, ``[subject]``, ``<name>``.
+
+    Only a string is read. A number, a list or a map is somebody's real answer
+    in its own shape and nothing here should touch it.
+    """
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return True
+    low = text.lower()
+    if low in STAND_IN_WORDS:
+        return True
+    if low == str(name or "").strip().lower():
+        return True
+    if (low[0], low[-1]) in (("[", "]"), ("<", ">")):
+        return True
+    return len(text) < 2 and str(kind or "").strip().lower() in TEXT_SLOT_KINDS
+
+
+def problems_of(answer: Any) -> list[dict[str, Any]]:
+    """Every row the plan door named. ALWAYS A LIST, including []."""
+    rows = answer.get("problems") if isinstance(answer, dict) else None
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def next_fix_of(answer: Any) -> dict[str, Any] | None:
+    """The row the door says to start on, or None."""
+    row = answer.get("next_fix") if isinstance(answer, dict) else None
+    return row if isinstance(row, dict) else None
+
+
+def form_steps_of(answer: Any) -> list[dict[str, Any]]:
+    """What goes in each step, in form order. ALWAYS A LIST, including []."""
+    rows = answer.get("form_steps") if isinstance(answer, dict) else None
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def step_entry(answer: Any, number: Any) -> dict[str, Any] | None:
+    """The `form_steps` entry for one 1-based step number, or None."""
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None
+    for entry in form_steps_of(answer):
+        if entry.get("step") == number:
+            return entry
+    return None
+
+
+def slots_of(entry: Any) -> list[dict[str, Any]]:
+    """One step's named inputs. ALWAYS A LIST: a plain step has none."""
+    slots = (entry or {}).get("slots") if isinstance(entry, dict) else None
+    return [s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else []
+
+
+def slots_the_agent_owes(answer: Any, number: Any) -> list[dict[str, Any]]:
+    """The slots on ONE step that the agent must write, and has not.
+
+    SLOTS BEFORE WORDS. The door says what goes in every step and who fills
+    it. Four things have to be true before a slot is the agent's to write now:
+    the agent fills it (`filler`), it is still empty (`state: needed`), the
+    step cannot stand without it (`required`), and it is written at FILING and
+    not per item at the step (`source`). Everything else is somebody else's or
+    later.
+
+    Nothing named `to`, `from`, `cc` or `bcc` is ever in this list, whatever
+    the door says about it: those are people, and people come from the
+    person's own picks.
+    """
+    out: list[dict[str, Any]] = []
+    for slot in slots_of(step_entry(answer, number)):
+        name = str(slot.get("name") or "").strip()
+        if not name or name.lower() in NEVER_WRITTEN:
+            continue
+        if slot.get("filler") != AGENT or slot.get("state") != STATE_NEEDED:
+            continue
+        if not slot.get("required"):
+            continue
+        if str(slot.get("source") or "") == SOURCE_AT_THE_STEP:
+            continue
+        out.append(slot)
+    return out
+
+
+def fixed_by(rows: Any, who: str) -> list[dict[str, Any]]:
+    """The rows one party has to fix, in the order the door listed them."""
+    return [row for row in (rows or []) if row.get("who_fixes") == who]
+
+
+def rows_on_step(rows: Any, number: Any) -> list[dict[str, Any]]:
+    """Every row that sits on one step, including the rows with no slot."""
+    return [row for row in (rows or []) if row.get("step") == number]
+
+
+def fix_key(row: Any) -> str:
+    """ONE FAULT, ONE KEY -- and the bench's own key when it sends one.
+
+    THE BENCH NAMES ITS OWN ROWS NOW (`key`, 2026-09-17). It is what
+    `plan_form.count_tries` counts tries under, so reading it is the only way
+    the two sides can agree on what "the same problem" is; a key this package
+    works out for itself is a second opinion, and a second opinion is how one
+    side stops a draft the other thinks is still moving.
+
+    The old key -- the step, the slot and what is wrong with it, plus the
+    codes when there is no slot -- is the fallback for a bench that sends none,
+    and for a row this package builds in a test. Never the legacy codes alone:
+    the same missing subject came back as three of them and cost three of the
+    three tries.
+
+    What is NOT in either key: the sentence, the accepted list, and anything
+    the bench adds later. A reworded row is the same row.
+    """
+    row = row if isinstance(row, dict) else {}
+    named = str(row.get("key") or "").strip()
+    if named:
+        return named
+    key = "{}|{}|{}".format(row.get("step"), row.get("slot"), row.get("problem"))
+    if row.get("slot"):
+        return key
+    return "{}|{}".format(key, ",".join(sorted(str(c) for c in (row.get("codes") or []))))
+
+
+def says_on_step(rows: Any, number: Any) -> list[str]:
+    """The bench's own sentences for one step's agent rows, in order."""
+    out: list[str] = []
+    for row in fixed_by(rows_on_step(rows, number), AGENT):
+        said = str(row.get("say") or "").strip()
+        if said and said not in out:
+            out.append(said)
+    return out
+
+
+def who_step_is_missing(answer: Any, number: Any) -> bool:
+    """True when this step reaches a person and no step asks who first.
+
+    Read off the slot table, never off a code: a step that reaches somebody
+    carries a `contact` slot the PLATFORM fills from `person.who`, and the
+    step the person picks on is the one `form_steps` marks `person_slot`
+    "who". One who step per plan, so a form that already has one is never
+    given another.
+    """
+    entry = step_entry(answer, number)
+    if entry is None:
+        return False
+    reaches = any(
+        slot.get("kind") == KIND_CONTACT and slot.get("filler") == PLATFORM
+        for slot in slots_of(entry)
+    )
+    if not reaches:
+        return False
+    return not any(
+        row.get("person_slot") == PERSON_SLOT_WHO for row in form_steps_of(answer)
+    )
+
+
+def _walk(value: Any, parts: Sequence[str]) -> Any:
+    for part in parts:
+        if isinstance(value, dict):
+            value = value.get(part)
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return None
+    return value
+
+
+def unknown_key_rows(rows: Any, number: Any) -> list[dict[str, Any]]:
+    """The agent's own unknown-key rows on ONE step, in the door's order."""
+    return [
+        row
+        for row in fixed_by(rows_on_step(rows, number), AGENT)
+        if row.get("problem") == UNKNOWN_FIELD
+    ]
+
+
+def _slot_parts(row: Any) -> list[str]:
+    """The container a row names, as a path inside the step. [] is the step."""
+    slot = str((row or {}).get("slot") or "")
+    if slot in ("", "step"):
+        return []
+    return [part for part in slot.split(".") if part]
+
+
+def _keys_named_by(row: dict[str, Any], container: dict[str, Any]) -> list[str]:
+    """Exactly the keys this row is about, and no sibling of theirs.
+
+    The bench names them outright on `keys` when it knows them -- an argument
+    a send does not take. The structural rows (a key on the step, in a wait
+    condition, in an ask) give `accepted` instead, the names that container
+    DOES have room for, and the offenders are what is left over. With neither,
+    nothing comes off: emptying a container we cannot read is how a wait ends
+    up as `{}` and the bench refuses it for having no conditions.
+    """
+    named = row.get("keys")
+    if isinstance(named, list) and named:
+        return sorted({str(key) for key in named if str(key) in container})
+    allowed = {str(name) for name in (row.get("accepted") or [])}
+    if not allowed:
+        return []
+    return sorted(key for key in container if key not in allowed)
+
+
+def _prune_empty(step: dict[str, Any], parts: Sequence[str]) -> None:
+    """Take a container that is now empty off its parent, and so on upward.
+
+    A wait condition stripped down to `{}` is not a fix: the bench reads it as
+    a condition with no source and refuses the wait for it. An empty thing is
+    a thing that is not there, so it goes, and if that empties its parent the
+    parent goes too. The step itself is never taken off here -- dropping a
+    step is the door's own call and a different decision.
+    """
+    for depth in range(len(parts), 0, -1):
+        node = _walk(step, parts[:depth])
+        if node not in ({}, []):
+            return
+        parent = step if depth == 1 else _walk(step, parts[: depth - 1])
+        last = parts[depth - 1]
+        if isinstance(parent, dict):
+            parent.pop(last, None)
+        elif isinstance(parent, list) and last.isdigit() and int(last) < len(parent):
+            parent.pop(int(last))
+        else:
+            return
+
+
+def _value_at(step: Any, number: int, path: str) -> tuple[bool, Any]:
+    """(is it still there, what it holds) for a door path inside one step."""
+    tail = path.split(f"steps.{number - 1}", 1)[-1]
+    parts = [part for part in tail.split(".") if part]
+    if not parts:
+        return True, step
+    value = _walk(step, parts)
+    return value is not None, value
+
+
+def keys_to_take_off(rows: Any, form: Any) -> tuple[list[str], str, Any] | None:
+    """Every unknown-key row on ONE step as ONE patch: (keys, path, value).
+
+    The row names the container -- the step itself, its `wait`, one of its
+    conditions -- on `slot`, and says which keys are the offenders: outright on
+    `keys`, or by giving the names that container DOES have room for on
+    `accepted`. So the fix needs no model call, and it needs no guess either:
+    ONLY the keys named come off. What it used to do was rebuild the value out
+    of the whole cleaned step and pop whatever was not in one row's accepted
+    list, which put back a key another row had flagged, and emptied a wait
+    condition to `{}` -- which the bench then refused for having no conditions
+    (checker, 2026-09-17).
+
+    ALL THE ROWS ON ONE STEP, IN ONE PATCH. Two unknown keys on one step used
+    to cost two rounds, and the second patch was built off a step the first
+    had already changed. Several rows are answered by sending the whole step
+    back once; one row alone is still answered at its own narrow path, because
+    replacing a step to take one key off it loses everything the same round
+    wrote.
+
+    A key that was carrying meaning is not lost silently -- the keys are
+    logged, and what they meant belongs in one of `accepted`.
+
+    None when there is nothing here to do without a model: no unknown-key row,
+    a row this answer's form does not hold, or a row that names no keys at all.
+    """
+    rows = [row for row in (rows or []) if isinstance(row, dict)]
+    rows = [row for row in rows if row.get("problem") == UNKNOWN_FIELD]
+    if not rows:
+        return None
+    number = rows[0].get("step")
+    steps = (form or {}).get("steps") if isinstance(form, dict) else None
+    if not isinstance(number, int) or isinstance(number, bool):
+        return None
+    if not isinstance(steps, list) or not 0 < number <= len(steps):
+        return None
+    if not isinstance(steps[number - 1], dict):
+        return None
+    rows = [row for row in rows if row.get("step") == number and row.get("path")]
+    if not rows:
+        return None
+    step = json.loads(json.dumps(steps[number - 1], default=str))
+    taken: list[str] = []
+    for row in rows:
+        parts = _slot_parts(row)
+        container = step if not parts else _walk(step, parts)
+        if not isinstance(container, dict):
+            continue
+        named = _keys_named_by(row, container)
+        if not named:
+            continue
+        for key in named:
+            container.pop(key, None)
+        taken.extend(named)
+        _prune_empty(step, parts)
+    if not taken:
+        return None
+    prefix = "form." if str(rows[0]["path"]).startswith("form.") else ""
+    whole = f"{prefix}steps.{number - 1}"
+    if len(rows) == 1:
+        path = str(rows[0]["path"])
+        there, value = _value_at(step, number, path)
+        # A path we pruned away is not a path to patch: send the step instead.
+        if there:
+            return sorted(set(taken)), path, value
+    return sorted(set(taken)), whole, step
 
 
 def _step_path(path: Any, index: int | None) -> str:
@@ -1952,6 +2451,57 @@ def closed_error(answer: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# A PAUSED DOOR (contract 4.0, 2026-09-17)
+# ---------------------------------------------------------------------------
+# A PAUSE IS NOT A CLOSE. The bench shuts a plan for an hour when the same plan
+# comes back five times, and for a quarter of an hour when the thing in the way
+# is the bench's OWN bug. Both open again by themselves and the selection
+# stands the whole time, so a harness that read a pause as a close threw away a
+# plan the person is still waiting on.
+#
+# EVERY PLAN-DOOR BODY CARRIES IT, including the 409s: `paused_until` is the
+# instant it opens again and `paused_reason` is the word for why. While it
+# stands there is nothing to send -- every call is read and refused -- so a
+# paused draft must cost NO model call and NO door call at all.
+DRAFT_PAUSED = "draft_paused"
+# The bench's word for a pause the agent did not cause. It is our bug, it is
+# logged like one, and the agent is never charged for it.
+BENCH_FAULT_PAUSE = "platform_fault"
+
+
+def paused_until(answer: Any) -> str:
+    """When this door opens again, as the bench wrote it, or ""."""
+    value = answer.get("paused_until") if isinstance(answer, dict) else None
+    return str(value or "").strip()
+
+
+def pause_reason(answer: Any) -> str:
+    """The bench's word for why the door is shut, or ""."""
+    value = answer.get("paused_reason") if isinstance(answer, dict) else None
+    return str(value or "").strip()
+
+
+def is_paused(answer: Any, now: datetime | None = None) -> bool:
+    """True while the bench says this door is shut and will open by itself.
+
+    An instant that has already passed is not a pause any more. An instant
+    that cannot be read is treated AS a pause: the bench only writes the field
+    while one stands, and spending rounds against a shut door is the failure
+    this reader exists to stop.
+    """
+    stamp = paused_until(answer)
+    if not stamp:
+        return False
+    try:
+        until = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return until > (now or datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
 # THE LOOP
 # ---------------------------------------------------------------------------
 def rounds_left(answer: dict[str, Any]) -> int | None:
@@ -2189,8 +2739,9 @@ class DraftLoop:
         """ONE LINE PER ROUND. Round, what is left, and the one thing the
         bench named -- so a stuck loop is readable in the run log without
         turning the log into a copy of the plan."""
-        fix = answer.get("next_fix") or {}
+        fix = next_fix_of(answer) or {}
         rounds = answer.get("rounds") or {}
+        rows = problems_of(answer)
         line = {
             "target": target_id,
             "kind": kind,
@@ -2201,7 +2752,12 @@ class DraftLoop:
             "used": rounds.get("used"),
             "left": rounds.get("left"),
             "next_fix": fix.get("path"),
-            "code": fix.get("code"),
+            # THE LEGACY CODES LIVE HERE AND NOWHERE ELSE (contract 4.0): a
+            # log line is where a person looks a fault up, and a prompt is not.
+            "problem": fix_key(fix) if fix else None,
+            "codes": list(fix.get("codes") or []),
+            "rows": {who: len(fixed_by(rows, who))
+                     for who in (AGENT, PERSON, PLATFORM)},
             "closed": answer.get("closed"),
         }
         fixed = self._note_bench_fixed(target_id, kind, answer)
@@ -2219,7 +2775,7 @@ class DraftLoop:
             line["used"],
             rounds.get("cap"),
             line["next_fix"],
-            line["code"],
+            line["problem"],
             " CLOSED" if line["closed"] else (" READY" if line["ready"] else ""),
         )
 
@@ -2231,8 +2787,11 @@ class DraftLoop:
         return answer
 
     PREVIEW = 120
-    # The third consecutive round on the SAME (path, code) ends the draft.
-    # Two is the better prompt (see `_answer_the_fixes`); three is an answer.
+    # The third naming of one key in a run ends the draft -- the bench's own
+    # `fix_key`, so both sides count one fault once. Cumulative, not
+    # consecutive: two problems taking turns never repeat in a row and used to
+    # run for ever. Two is the better prompt (see `_answer_the_fixes`); three
+    # is an answer.
     SAME_PROBLEM_ROUNDS = 3
 
     def _last_sent_for(self, path: str) -> dict[str, Any] | None:
@@ -2265,8 +2824,52 @@ class DraftLoop:
         return text if len(text) <= self.PREVIEW else text[: self.PREVIEW - 1] + "\u2026"
 
     def _patch(
-        self, target_id: str, kind: str, patches: Sequence[dict[str, Any]], what: str
+        self,
+        target_id: str,
+        kind: str,
+        patches: Sequence[dict[str, Any]],
+        what: str,
+        standing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # THE ONE GATE EVERY ROAD GOES THROUGH. Who a message goes to and who
+        # it comes from are the person's own picks, wired by the platform. The
+        # slots road read that off the slot table, which left the fix road and
+        # the blanks road with no guard at all: a model asked to reword a
+        # do_line could answer `...args.to` and it went out. The path is
+        # refused whatever road it came down, and wherever along the path the
+        # address sits. The path is logged; the value never is.
+        sending: list[dict[str, Any]] = []
+        for entry in patches:
+            if writes_a_person(entry.get("path")):
+                self.log.warning(
+                    "draft loop %s target=%s: %s says who something goes to or "
+                    "comes from; that is the person's pick and never the "
+                    "agent's to write, so it was not sent",
+                    kind,
+                    target_id,
+                    str(entry.get("path") or "?"),
+                )
+                continue
+            sending.append(entry)
+        if not sending:
+            self.log.warning(
+                "draft loop %s target=%s: nothing was left to send for %s; the "
+                "door keeps the draft it has",
+                kind,
+                target_id,
+                what,
+            )
+            if standing is not None:
+                return standing
+            return {
+                "ok": False,
+                "error": "nothing_to_send",
+                "message": (
+                    "Every patch named who something goes to or comes from, so "
+                    "nothing was sent."
+                ),
+            }
+        patches = sending
         # WHAT WENT OUT, EVERY ROUND. A stall is unreadable without it: on
         # 2026-09-09 a run spent rounds 123-132 on one REJ-15 and the log could
         # say only that the bench kept naming the same path, never what the
@@ -2831,6 +3434,10 @@ class DraftLoop:
         for index, rows in group_blanks(answer.get("blanks")):
             if answer.get("closed") or answer.get("ready") or _spent(answer):
                 break
+            if is_paused(answer):
+                # Nothing sent while the door is shut: the fix loop after this
+                # says so properly, with the reason and the hour.
+                break
             payload = {
                 "want": want,
                 "step_number": None if index is None else index + 1,
@@ -2867,117 +3474,527 @@ class DraftLoop:
                 kind,
                 patches,
                 "blanks" if index is None else f"step {index + 1}",
+                standing=answer,
             )
         return answer
+
+    def _fill_what_the_steps_need(
+        self,
+        target_id: str,
+        kind: str,
+        answer: dict[str, Any],
+        want: Any,
+        numbers: Sequence[int],
+        already: set[int],
+    ) -> dict[str, Any]:
+        """SLOTS BEFORE WORDS: write the holes the door named, then fix.
+
+        The door states what goes in every step. A slot the AGENT fills, that
+        is still `needed`, that the step is `required` to have, and that is
+        written at filing rather than per item at the step, is a hole -- and a
+        hole is not answered by rewording something else. One ask covers every
+        such slot on the steps given, one patch each, one round.
+
+        Each step is asked for ONCE per run. A door that keeps naming a slot
+        after it has been written is a fix, not a hole, and the fix road with
+        its brake is what answers that.
+        """
+        needs: list[dict[str, Any]] = []
+        for number in numbers:
+            if number in already:
+                continue
+            already.add(number)
+            entry = step_entry(answer, number)
+            owed = slots_the_agent_owes(answer, number)
+            if not owed:
+                continue
+            needs.append(
+                {
+                    "step_number": number,
+                    "action": (entry or {}).get("action") or "",
+                    "step": _fit(self._step_for(answer, number - 1)),
+                    "needs": [
+                        {
+                            "name": slot.get("name"),
+                            "kind": slot.get("kind"),
+                            "accepted": list(slot.get("accepted") or []),
+                            "path": slot.get("path"),
+                        }
+                        for slot in owed
+                    ],
+                }
+            )
+        if not needs:
+            return answer
+        wanted = {
+            str(slot["path"]): slot["name"]
+            for step in needs
+            for slot in step["needs"]
+            if slot.get("path")
+        }
+        kinds = {
+            str(slot["path"]): slot.get("kind") or ""
+            for step in needs
+            for slot in step["needs"]
+            if slot.get("path")
+        }
+        self.log.info(
+            "draft loop %s target=%s: the form says %d thing(s) are still the "
+            "agent's to write (%s); writing them before anything is reworded",
+            kind,
+            target_id,
+            len(wanted),
+            ", ".join(sorted(wanted.values())),
+        )
+        payload: dict[str, Any] = {
+            "want": want,
+            "plan": outline_summary(answer.get("draft")),
+            "needs": needs,
+        }
+        instruction = with_the_person_said(
+            NEEDED_SLOTS_INSTRUCTION, payload, answer
+        )
+        # The stance rides; the bench's whole example PLAN does not. What is
+        # being asked for here is a subject and a message, and a finished plan
+        # printed above that question is a page of shape nobody needs to write
+        # one sentence.
+        reply = self._ask(
+            instruction, payload, f"write {len(wanted)} needed slot(s)",
+            head=self._head(),
+        )
+        patches, stand_ins = self._words_for_the_holes(reply, wanted, kinds)
+        if stand_ins:
+            # A PLACEHOLDER IS A HOLE THAT LEARNED TO TYPE. Ask once more,
+            # once, saying so; whatever comes back a placeholder the second
+            # time is not sent, and the door names the slot again as an
+            # `empty` row next round.
+            self.log.info(
+                "draft loop %s target=%s: %s came back as a placeholder and not "
+                "words; asking once more",
+                kind,
+                target_id,
+                ", ".join(sorted(stand_ins)),
+            )
+            again = self._ask(
+                instruction + STAND_IN_REMINDER,
+                payload,
+                f"write {len(stand_ins)} needed slot(s) again",
+                head=self._head(),
+            )
+            second, still = self._words_for_the_holes(again, wanted, kinds)
+            if still:
+                self.log.warning(
+                    "draft loop %s target=%s: %s is still a placeholder after "
+                    "the second ask; it was not sent and stays a hole",
+                    kind,
+                    target_id,
+                    ", ".join(sorted(still)),
+                )
+            have = {entry["path"] for entry in patches}
+            patches = patches + [
+                entry for entry in second if entry["path"] not in have
+            ]
+        if not patches:
+            self.log.warning(
+                "draft loop %s target=%s: nothing usable came back for the "
+                "%d hole(s) the form named; the door will name them as rows",
+                kind,
+                target_id,
+                len(wanted),
+            )
+            return answer
+        return self._patch(
+            target_id, kind, patches, f"write {len(patches)} needed slot(s)",
+            standing=answer,
+        )
+
+    def _words_for_the_holes(
+        self,
+        reply: Any,
+        wanted: dict[str, str],
+        kinds: dict[str, str],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """The usable answers off one ask, and the names that came back blank.
+
+        A path nobody asked for is not an answer to this question. A value
+        that is a placeholder is a hole in a costume: the ask says not to
+        write one, and until this read it back a plan could be filed with the
+        word TBD where its subject line goes.
+        """
+        patches: list[dict[str, Any]] = []
+        stand_ins: list[str] = []
+        for entry in read_patches(reply):
+            path = str(entry.get("path") or "")
+            value = entry.get("value")
+            if path not in wanted:
+                continue
+            if value is None or value == [] or value == {}:
+                stand_ins.append(wanted[path])
+                continue
+            if is_a_stand_in(value, wanted[path], kinds.get(path, "")):
+                stand_ins.append(wanted[path])
+                continue
+            patches.append({"path": path, "value": value})
+        return patches, stand_ins
+
+    # THE TWO ANSWERS THAT ARE NOT THE AGENT'S (contract 4.0).
+    BENCH_MUST_FIX = "bench_must_fix"
+    WAITING_ON_THE_PERSON = "waiting_on_the_person"
+
+    def _paused(self, target_id: str, kind: str, answer: Any) -> dict[str, Any] | None:
+        """Stop the moment the bench says this door is shut for now.
+
+        THE DOOR IS READ OFF EVERY BODY, INCLUDING THE 409s. While a pause
+        stands nothing the agent sends is read, so one more round is one more
+        model call and one more door call spent on a refusal we were told
+        about. The want is not lost: the pause lifts by itself and the
+        selection stands the whole time.
+
+        A pause the bench blames on ITSELF is our bug, and it shouts here the
+        way a platform row does, because nobody finds it otherwise.
+        """
+        if not is_paused(answer):
+            return None
+        reason = pause_reason(answer) or "no reason given"
+        when = paused_until(answer)
+        if reason == BENCH_FAULT_PAUSE:
+            self.log.error(
+                "draft loop %s target=%s: THE BENCH MUST FIX THIS -- the door "
+                "is paused on our own fault until %s; nothing the agent sends "
+                "is read until then",
+                kind,
+                target_id,
+                when,
+            )
+        else:
+            self.log.info(
+                "draft loop %s target=%s: the door is paused until %s (%s); "
+                "nothing sent, and the want is not given up",
+                kind,
+                target_id,
+                when,
+                reason,
+            )
+        return dict(
+            answer,
+            ok=False,
+            error=DRAFT_PAUSED,
+            message=(
+                f"The plan door is paused until {when} ({reason}). Nothing was "
+                "sent: while a pause stands the bench reads nothing, and it "
+                "opens again by itself."
+            ),
+        )
+
+    def _not_the_agents_rows(
+        self, target_id: str, kind: str, answer: dict[str, Any], rows: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Stop when every row still standing belongs to somebody else.
+
+        A `platform` row is the BENCH'S OWN BUG. The agent is told "we are
+        fixing this"; it is never charged a try and there is nothing it can
+        send that clears it, so a loop that keeps asking a model about one is
+        spending the owner's money on our mistake. It shouts here, with
+        everything a person needs to find it, and the draft is left alone
+        until the next round.
+
+        A `person` row is a WAIT, not a failure: the plan is fine and somebody
+        has to answer before it can move.
+
+        None means there is still work of the agent's own to do.
+        """
+        ours = fixed_by(rows, PLATFORM)
+        theirs = fixed_by(rows, PERSON)
+        if ours:
+            for row in ours:
+                self.log.error(
+                    "draft loop %s target=%s: THE BENCH MUST FIX THIS -- step=%s "
+                    "slot=%s problem=%s path=%s codes=%s say=%s",
+                    kind,
+                    target_id,
+                    row.get("step"),
+                    row.get("slot"),
+                    row.get("problem"),
+                    row.get("path"),
+                    row.get("codes"),
+                    self._preview(row.get("say")),
+                )
+            return dict(
+                answer,
+                ok=False,
+                error=self.BENCH_MUST_FIX,
+                message=(
+                    f"{len(ours)} row(s) left on this plan are the bench's own to "
+                    "fix and none of them is the agent's. Nothing was sent; the "
+                    "rows are in the run log with their step, slot and codes."
+                ),
+            )
+        if theirs:
+            self.log.info(
+                "draft loop %s target=%s: %d row(s) left are waiting on the "
+                "person (%s); nothing for the agent to do this round",
+                kind,
+                target_id,
+                len(theirs),
+                "; ".join(self._preview(row.get("say")) for row in theirs),
+            )
+            return dict(
+                answer,
+                ok=False,
+                error=self.WAITING_ON_THE_PERSON,
+                message=(
+                    f"{len(theirs)} row(s) left on this plan wait on the person. "
+                    "That is not a failure and nothing was sent."
+                ),
+            )
+        return None
+
+    def _patch_path(self, answer: Any, row: dict[str, Any]) -> str:
+        """Where this row is PATCHED -- the narrowest address that is real.
+
+        The row gives the nearest path the door will take. When that is the
+        bare step and the row names a slot the step's own table has an address
+        for (`subject` on an email step is
+        `form.steps.1.tool.args.subject`), the table's address is the narrower
+        and truer one: replacing a whole step to change one argument is how a
+        fix round loses the rest of the step.
+
+        NO PATH AT ALL MEANS THE STEP, NOT AN EMPTY STRING (checker,
+        2026-09-17). `path: null` says this row has no patchable address: the
+        answer is to send the step back whole. It used to come out as `""`,
+        and the model was asked to patch a path of nothing, which no door
+        takes. A step number turns it into that step's own path, which is
+        already the whole-step road -- the model is shown every field and
+        given the two exits, replace it or drop it.
+        """
+        path = str(row.get("path") or "")
+        slot = str(row.get("slot") or "")
+        if slot and (not path or whole_step_path(path) is not None):
+            for entry in slots_of(step_entry(answer, row.get("step"))):
+                if entry.get("name") == slot and entry.get("path"):
+                    return str(entry["path"])
+        if path:
+            return path
+        index = row.get("step")
+        if isinstance(index, int) and not isinstance(index, bool) and index > 0:
+            return f"{self._form_prefix(answer)}steps.{index - 1}"
+        return path
+
+    @staticmethod
+    def _form_prefix(answer: Any) -> str:
+        """`form.` when this door writes its paths that way, else "".
+
+        Read off the answer rather than assumed: the plan door names
+        `form.steps.0` and the older bid door names `steps.0`, and a path in
+        the wrong dialect is a path the door cannot find.
+        """
+        for row in problems_of(answer):
+            path = str(row.get("path") or "")
+            if path.startswith("form."):
+                return "form."
+            if path.startswith("steps."):
+                return ""
+        for entry in form_steps_of(answer):
+            for slot in slots_of(entry):
+                path = str(slot.get("path") or "")
+                if path.startswith("form."):
+                    return "form."
+                if path.startswith("steps."):
+                    return ""
+        return "form."
 
     def _answer_the_fixes(
         self, target_id: str, kind: str, answer: dict[str, Any], want: Any
     ) -> dict[str, Any]:
-        """ONE problem at a time, for as long as the bench names one.
+        """ONE ROW AT A TIME, for as long as the door names one the agent owns.
 
-        Advancing the draft is useful work. Being named for the same problem
-        over and over is not: the THIRD consecutive round on the same
-        (path, code) stops the draft and lets the watcher move to another
-        target. There is no total step/round cap.
+        WHAT THE MODEL IS SHOWN IS WHAT GOES IN, NOT WHAT IS WRONG (contract
+        4.0, 2026-09-17). The door's `form_steps` entry for the step is the
+        ask: every named input, its kind, who fills it, whether it is wired or
+        still needed, what it accepts and the path to patch. The bench's own
+        sentences for that step ride underneath. The legacy `codes` go to the
+        log and never to the model -- on 17 September one missing subject came
+        back under two codes with a paragraph of advice, and three tries on
+        one fault is what ended Marcia's plan.
 
-        THE GUARD IS THE PROBLEM'S NAME, NOT THE DRAFT'S TEXT (2026-09-11).
-        It used to hash the whole draft with the next fix and the remaining
-        count, so a model that REWORDED the same bad field looked like
-        progress and the guard never tripped: the document changed every
-        round while the bench named the same field every round. On 2026-09-11
-        GPT-6 Astra died that way on `research_links[0].plan_use` -- two
-        identical asks, two rewordings, no end -- and Jan, Alice and Bobby
-        each burned the full 200-round ceiling on one want. Now the count is
-        keyed on the (path, code) the bench names, and a reworded answer to
-        the same named problem counts as the repeat it is.
+        WHO FIXES IT IS HONOURED. A `platform` row is our bug and never costs
+        a model call or a try; a `person` row is a wait. When nothing of the
+        agent's own is left, the draft stops and the watcher moves on.
 
-        WHAT THE FIRST REPEAT GETS IS A BETTER PROMPT, NOT A LIMIT. When the
-        bench names the same path with the same code twice running, the second
-        ask carries what was sent last round and what the bench has for that
-        path now. Live on 2026-09-09, Greg spent rounds 123-132 on one REJ-15
-        on `finalist_questions.0.0`, asked the same question in the same words
-        every time, and answered it the same way every time. Only the THIRD
-        naming of that same pair stops the draft.
+        TWO ROWS ARE ANSWERED WITHOUT A MODEL AT ALL: a key the form has no
+        room for is taken off, and a step that reaches somebody with no who
+        step above it gets the insert call.
+
+        THE BRAKE IS THE BENCH'S OWN KEY, AND IT COUNTS ACROSS THE WHOLE RUN,
+        NOT ROUND BY ROUND. The THIRD naming of one key stops the draft and
+        lets the watcher move to another target -- the same key
+        `plan_form.count_tries` counts on, so the harness and the bench agree
+        on what "the same problem" is. The count is CUMULATIVE on purpose and
+        the tests pin it that way: a door that alternates between two problems
+        it never clears ran for ever under a consecutive count, because
+        neither one was ever named twice in a row.
+        Before that, the second naming gets a BETTER PROMPT, not a limit: what
+        was sent last round beside what the door has now. Live on 2026-09-09,
+        Greg spent rounds 123-132 on one problem, asked in the same words
+        every time, and answered it the same way every time.
         """
-        last_named: tuple[str, str] | None = None
-        named_before: dict[tuple[str, str], int] = {}
+        last_named: str | None = None
+        named_before: dict[str, int] = {}
+        # SLOTS BEFORE WORDS. The steps whose holes have been written, and
+        # whether this run has yet written any: the FIRST time a model is
+        # asked anything about this plan, every step's holes go in that one
+        # ask, because the door has just said what goes in all of them.
+        written: set[int] = set()
+        first_write = True
         while (
             not answer.get("ready")
             and not answer.get("closed")
             and not _spent(answer)
-            and isinstance(answer.get("next_fix"), dict)
         ):
-            fix = answer["next_fix"]
-            path = str(fix.get("path") or "")
-            code = str(fix.get("code") or "")
-            named_before[(path, code)] = named_before.get((path, code), 0) + 1
-            if named_before[(path, code)] >= self.SAME_PROBLEM_ROUNDS:
+            stopped = self._paused(target_id, kind, answer)
+            if stopped is not None:
+                return stopped
+            rows = problems_of(answer)
+            mine = fixed_by(rows, AGENT)
+            fix = next_fix_of(answer)
+            if fix is not None and fix.get("who_fixes") != AGENT:
+                # The door only ever points at the agent's own rows. A door
+                # that pointed elsewhere is not followed there.
+                fix = None
+            if fix is None:
+                fix = mine[0] if mine else None
+            if fix is None:
+                stopped = self._not_the_agents_rows(target_id, kind, answer, rows)
+                if stopped is not None:
+                    return stopped
+                break
+            # A KEY THE FORM HAS NO ROOM FOR IS TAKEN OFF FIRST, whether or not
+            # the door pointed at it. It costs no model call, so waiting for
+            # the door to work its way down to it is paying for a fix we
+            # already have in hand.
+            unknown = [entry for entry in mine if entry.get("problem") == UNKNOWN_FIELD]
+            if unknown and fix.get("problem") != UNKNOWN_FIELD:
+                fix = unknown[0]
+            key = fix_key(fix)
+            named_before[key] = named_before.get(key, 0) + 1
+            if named_before[key] >= self.SAME_PROBLEM_ROUNDS:
                 return dict(
                     answer,
                     ok=False,
                     error="draft_stalled",
                     message=(
-                        f"The bench named {path or 'the same path'} "
-                        f"({code or 'no code'}) three times and the patches "
-                        "did not clear it; paused to avoid repeated model "
-                        "spending."
-                        + (f" The door said this shape would pass: {fix.get('shape')!r}."
-                           if isinstance(fix.get("shape"), dict) else "")
+                        f"The bench named {key} three times and the patches did "
+                        "not clear it; paused to avoid repeated model spending. "
+                        f"It said: {self._preview(fix.get('say'))}"
                     ),
                 )
-            index = step_of(path)
-            # THE WHOLE STEP, OR ONE LINE OF IT (0.38.3). `form.steps.2` with
-            # no field after it is the STEP being named, and rewording a line
-            # of it cannot clear that.
-            whole = whole_step_path(path)
-            # THE WHO CODES ARE ALWAYS ABOUT THE STEP (0.39.0). A bench that
-            # names a field path under one of them is naming the step anyway.
-            if whole is None and index is not None and code in WHOLE_STEP_CODES:
-                whole = index
-            # `missing_who` IS NOT A QUESTION FOR THE MODEL (0.39.0). The door
-            # named the call that answers it -- a who step in front of the
-            # step that reaches somebody -- so the call goes out and the model
-            # is never asked to reword a step that is not wrong.
-            if code == MISSING_WHO:
+            number = fix.get("step")
+            index = (
+                number - 1
+                if isinstance(number, int) and not isinstance(number, bool)
+                else None
+            )
+
+            # A KEY THE FORM HAS NO ROOM FOR IS TAKEN OFF, not asked about.
+            # The row names the container and which keys are the offenders:
+            # there is nothing here a model knows that the answer has not
+            # already said. EVERY such row on this step goes in one patch, so
+            # two stray keys cost one round and the second is not built off a
+            # step the first already changed.
+            taken = keys_to_take_off(unknown_key_rows(rows, number), form_of(answer))
+            if taken is not None:
+                extra, where, value = taken
+                self.log.info(
+                    "draft loop %s target=%s: step %s has no room for %s; taking "
+                    "it off and sending %s back",
+                    kind,
+                    target_id,
+                    number,
+                    ", ".join(extra),
+                    where,
+                )
+                last_named = key
+                answer = self._patch(
+                    target_id,
+                    kind,
+                    [{"path": where, "value": value}],
+                    "take off " + ", ".join(extra),
+                    standing=answer,
+                )
+                continue
+
+            # NO WHO STEP ABOVE A STEP THAT REACHES SOMEBODY. The slot table
+            # says so, the call that answers it is known, and asking a model
+            # to reword a step that is not wrong is how the old contact loop
+            # burned its rounds.
+            if who_step_is_missing(answer, number):
                 inserted = self._insert_the_who_step(
-                    target_id, kind, fix, answer, index, path
+                    target_id, kind, fix, answer, index, str(fix.get("path") or "")
                 )
                 if inserted is not None:
-                    last_named = (path, code)
+                    last_named = key
                     answer = inserted
+                    # AN INSERT RENUMBERS EVERY STEP BELOW IT, and `written`
+                    # is kept by step NUMBER. Step 3's holes, written before
+                    # the insert, would mark the OLD step 3 as done while the
+                    # step now wearing that number has never been asked for.
+                    # The fresh reply says which slots are still needed, so
+                    # forgetting the numbers costs nothing: a step whose holes
+                    # are filled owes none and is skipped anyway.
+                    written.clear()
                     continue
-            repeated = (path, code) == last_named and bool(path)
-            # A PROBLEM COMES BACK AS A QUESTION, NOT A CODE (2026-09-11).
-            # Where the door asks one -- "Step 1, what do you do? Choose one:
-            # finds, prepares, ..." -- the question and its choices ride in
-            # front of the model exactly as the door wrote them. `code` and
-            # `fix` still ride for a door that speaks the old way; neither is
-            # reworded here.
-            fix_this: dict[str, Any] = {
-                "path": fix.get("path"),
-                "current_value": fix.get("current"),
-                "code": fix.get("code"),
-                "fix": fix.get("fix"),
-                "detail": fix.get("detail"),
-            }
-            # `shape` (bench contract 3.21, rule 246): one form step that would
-            # pass, when the door can say so. Three refusals of the same code
-            # on the same path used to offer two fixes, neither of which
-            # could pass for a phone call; the shape is the third exit.
-            for name in ("question", "choices", "cap", "kind", "shape"):
-                value = fix.get(name)
-                if value not in (None, "", [], {}):
-                    fix_this[name] = value
+
+            # SLOTS BEFORE WORDS. Everything above this point is answered with
+            # no model at all; from here a model is asked, and a HOLE is not
+            # answered by rewording the row above it. The first ask of a run
+            # covers every step, because the door has just stated what goes in
+            # all of them; after that, the step the door is naming.
+            if first_write:
+                first_write = False
+                owing = [
+                    entry.get("step")
+                    for entry in form_steps_of(answer)
+                    if isinstance(entry.get("step"), int)
+                ]
+            else:
+                owing = [number] if isinstance(number, int) else []
+            filled = self._fill_what_the_steps_need(
+                target_id, kind, answer, want, owing, written
+            )
+            if filled is not answer:
+                last_named = key
+                answer = filled
+                continue
+
+            path = self._patch_path(answer, fix)
+            repeated = key == last_named
+            # THE WHOLE STEP, OR ONE THING ON IT. A path that stops at
+            # `form.steps.2` is the STEP being named, and rewording a line of
+            # it cannot clear that.
+            whole = whole_step_path(path)
             payload: dict[str, Any] = {
                 "want": want,
-                "fix_this": fix_this,
-                "step_number": None if index is None else index + 1,
+                "change_this": {
+                    "path": path,
+                    "say": fix.get("say"),
+                    "accepted": list(fix.get("accepted") or []),
+                },
+                "step_number": number,
                 # The plan in one line per step, and the ONE step being
                 # changed. Never the draft: a thirty-step document in front of
                 # a one-field fix is the cost this loop exists to avoid.
                 "plan": outline_summary(answer.get("draft")),
                 "step": _fit(self._step_for(answer, index)),
             }
+            # WHAT GOES IN THIS STEP, as the door states it. A plain step has
+            # no slots and says so; an email step names every argument, who
+            # fills it and where its value comes from.
+            entry = step_entry(answer, number)
+            if entry is not None:
+                payload["this_step"] = entry
+            said = says_on_step(rows, number)
+            if said:
+                payload["what_the_bench_says"] = said
             # A PLAN-LEVEL FIX SEES THE PLAN-LEVEL FIELDS. Asked for form.odds
             # with only a one-line outline in front of it, a model has no
             # overview or span to forecast against.
@@ -2995,17 +4012,9 @@ class DraftLoop:
             if whole is not None or (repeated and index is not None):
                 payload["step"] = self._whole_step_for(answer, index)
                 payload["steps_path"] = _step_path(path, index)
-                payload["step_number"] = index + 1 if index is not None else None
-            # SAME PATH, SAME CODE AS LAST ROUND: say so, and hand back what
-            # was sent beside what the bench has now. No strike rule and no
-            # round limit -- a model that is told its last answer did not land,
-            # and shown it, can send something else; a model that is asked the
-            # same question in the same words answers it the same way.
             instruction = FIX_INSTRUCTION
             if whole is not None:
                 instruction = WHOLE_STEP_FIX_INSTRUCTION
-            if code == RESTATES_THE_PICK and (whole is not None or index is not None):
-                instruction = RESTATING_STEP_INSTRUCTION + instruction
             if repeated:
                 # REWORDING DID NOT WORK. Say it plainly and name both exits,
                 # whichever path the bench used: the prod loop on 2026-09-11
@@ -3015,24 +4024,20 @@ class DraftLoop:
                 head = REPEATED_FIX_INSTRUCTION
                 if index is not None:
                     head = REPEATED_STEP_EXITS_INSTRUCTION
-                    if code == RESTATES_THE_PICK:
-                        head = RESTATING_STEP_INSTRUCTION + head
                 instruction = head + instruction
                 payload["your_last_patch_did_not_clear_this"] = {
                     "path": path,
                     "you_sent_last_round": self._last_sent_for(path),
-                    "what_is_in_the_document_now": fix.get("current"),
                 }
                 self.log.info(
-                    "draft loop %s target=%s round=%d: %s (%s) again; telling "
-                    "the agent what it sent last round",
+                    "draft loop %s target=%s round=%d: %s again; telling the "
+                    "agent what it sent last round",
                     kind,
                     target_id,
                     self.rounds + 1,
-                    path,
-                    code or "?",
+                    key,
                 )
-            last_named = (path, code)
+            last_named = key
             # LAW A: and the tail of every fix ask.
             instruction = with_the_person_said(instruction, payload, answer)
             reply = self._ask(
@@ -3065,7 +4070,7 @@ class DraftLoop:
                     patches = read_patches(reply, path)
                     dropping = read_drop(reply, index)
             if dropping is not None:
-                answer = self._drop_step(target_id, kind, dropping, path, code)
+                answer = self._drop_step(target_id, kind, dropping, path, key)
                 continue
             if not patches:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
@@ -3096,8 +4101,13 @@ class DraftLoop:
                 )
                 break
             patches = self._aim(patches, path, kind, target_id)
-            answer = self._patch(target_id, kind, patches, f"fix {path or '?'}")
-        return answer
+            answer = self._patch(
+                target_id, kind, patches, f"fix {path or '?'}", standing=answer
+            )
+        # A PAUSE CAN BE WHAT ENDED THE LOOP, or what it was handed. A paused
+        # body reads closed and spent, so it leaves by the while and not by the
+        # check inside it, and a draft that came in paused never enters at all.
+        return self._paused(target_id, kind, answer) or answer
 
     def _whole_step_for(self, answer: Any, index: int | None) -> Any:
         """EVERY field of one step, un-shed.
@@ -3175,38 +4185,40 @@ class DraftLoop:
         index: int | None,
         path: str,
     ) -> dict[str, Any] | None:
-        """`missing_who`: SEND THE CALL THE DOOR NAMED, do not ask for words.
+        """NO WHO STEP: SEND THE CALL, do not ask a model for words.
 
-        The door's question carries the whole insert call. It goes back as it
-        came. None means the call could not be made -- a door with no insert
-        instruction, a problem with no step in its path, or a 422
-        `insert_not_possible` -- and then the caller falls back to the
-        ordinary whole-step ask, once, like any other step-level problem. A
-        refused insert is never re-sent blindly: the same problem three times
-        stops the draft, the way every other repeated problem does.
+        A door that writes the whole insert call into its sentence has it sent
+        back as it came; contract 4.0 cuts that sentence to one line, so the
+        call is built from the row's own step number instead. None means no
+        call could be made -- a door with no insert instruction, a row with no
+        step on it, or a 422 `insert_not_possible` -- and then the caller
+        falls back to the ordinary whole-step ask, once, like any other
+        step-level problem. A refused insert is never re-sent blindly: the
+        same row three times stops the draft, the way every repeat does.
         """
         if getattr(self.provider, "insert_draft_step", None) is None:
             self.log.warning(
-                "draft loop %s target=%s: the bench named %s and this door has "
-                "no insert call; asking the agent for the whole step instead",
+                "draft loop %s target=%s: step %s reaches a person with no who "
+                "step above it and this door has no insert call; asking the "
+                "agent for the whole step instead",
                 kind,
                 target_id,
-                MISSING_WHO,
+                None if index is None else index + 1,
             )
             return None
         insert = who_insert(fix, self._step_for(answer, index), index)
         if insert is None:
             self.log.warning(
-                "draft loop %s target=%s: %s named %s and no insert call could "
-                "be read or built from it",
+                "draft loop %s target=%s: %s needs a who step above it and no "
+                "insert call could be read or built from the row",
                 kind,
                 target_id,
-                MISSING_WHO,
                 path or "?",
             )
             return None
         sent = self._insert_step(
-            target_id, kind, int(insert["before"]), dict(insert["step"]), path, MISSING_WHO
+            target_id, kind, int(insert["before"]), dict(insert["step"]), path,
+            "no who step",
         )
         if isinstance(sent, dict) and str(sent.get("error") or "") == INSERT_NOT_POSSIBLE:
             self.log.warning(
@@ -3294,6 +4306,14 @@ class DraftLoop:
         # READ FIRST, EVERY CYCLE. This is the loop's first step and the only
         # thing that decides whether an outline goes out at all.
         state, answer = self._read_first(target_id, kind)
+        # A PAUSED DOOR IS READ BEFORE ANYTHING IS SENT. The read itself costs
+        # no round; everything after it would be spent on a refusal the body in
+        # hand already announced.
+        stopped = self._paused(target_id, kind, answer)
+        if stopped is not None:
+            return self._gave_up(
+                target_id, kind, DRAFT_PAUSED, stopped["message"], answer
+            )
         if state == self.OVER:
             return self._gave_up(
                 target_id, kind,
@@ -3329,8 +4349,15 @@ class DraftLoop:
             answer = self._fill_the_blanks(target_id, kind, answer, want)
         if not answer.get("closed"):
             answer = self._answer_the_fixes(target_id, kind, answer, want)
-        if answer.get("error") == "draft_stalled":
-            return self._gave_up(target_id, kind, "draft_stalled", answer["message"], answer)
+        stopped = str(answer.get("error") or "")
+        if stopped in ("draft_stalled", DRAFT_PAUSED, self.BENCH_MUST_FIX,
+                       self.WAITING_ON_THE_PERSON):
+            return self._gave_up(
+                target_id, kind,
+                stopped,
+                str(answer.get("message") or answer.get("closed") or stopped),
+                answer,
+            )
         if answer.get("closed"):
             # A closed draft is never re-PUT, in this run or the next: the
             # bench counts a repeated PUT as a round and holds a used-up draft

@@ -89,18 +89,47 @@ round. THE BENCH DOES THE TYPING: no connector row, no grant request, no block t
 list, no `$from` pointer and no schedule row is ever written here. A line past its cap is trimmed
 and an odds line that falls is raised, both reported on `bench_fixed` and neither costing a round.
 
-**Only content comes back as a question**, and only four things count as content: nothing came
-back, the plan does not address the want, a step makes the person do the agent's work, or a step
-names a tool the agent cannot reach. Each arrives in plain words with the choices listed, never a
-rule code. THREE MISSES END IT: the door closes with `plan_failed`, the bench scores the agent
-"selected, could not present a plan", the person is told in red and picks somebody else, and that
-agent may not propose on that want again this round. `plan_failed` is therefore TERMINAL in the
-runtime (`cli._TERMINAL_DOOR_ERRORS`) and is memoized like a closed want: reopening the draft
-cannot undo it and the person has already moved on.
+**The plan door answers in ONE language** (bench contract 4.0, 2026-09-17; the minimum this
+harness plans against, `book_of_houses.PLAN_DOOR_MIN_CONTRACT`). Steven: "The form says what goes
+in. It never lists what is wrong." Two lists, both ALWAYS PRESENT including empty:
 
-**The stall guard** is keyed on the PATH and the CODE, never on the words. A model that rewords
-the same bad sentence looks like progress to a hash of the whole draft, and three fleet units
-burned two hundred rounds each doing exactly that.
+- `problems`, one row per thing still open: `{step, slot, problem, who_fixes, say, path, accepted,
+  codes}`. `problem` is one of `empty`, `wrong_kind`, `no_source`, `unsupported`, `cycle`,
+  `not_allowed`, `unknown_field`. `path` is what you PATCH, and a null `path` means re-send the
+  step with PUT. `codes` are the legacy rule names, for the run log only -- NOTHING branches on
+  them, because one fault told under three of them is still one fault. `next_fix` is the first
+  `who_fixes: "agent"` row in step order, and it only says where to start: every row is shown at
+  once.
+- `form_steps`, one entry per form step saying what GOES IN it: `{step, action, person_slot,
+  slots}`, each slot `{name, kind, filler, state, source, accepted, path, required}`. That table
+  is what the fix round puts in front of the model, with the bench's own sentences underneath.
+
+**Who fixes it is honoured.** A `platform` row is the bench's own bug: it never costs a model call
+or a try, it shouts in the run log with its step, slot and codes, and when nothing else is left the
+run stops with `bench_must_fix`. A `person` row is a wait, not a failure (`waiting_on_the_person`).
+Both park the want for the ROUND, on the brake that was already there, and a repost asks again.
+
+**Two rows are answered with no model at all.** A key the form has no room for is taken off and the
+object at the row's `path` is sent back, read off the row's own `accepted` list. A step that reaches
+somebody with no who step above it gets the insert call, read off the slot table: a `contact` slot
+the platform fills from `person.who`, and no step marked `person_slot: "who"`.
+
+THREE MISSES END IT: the door closes with `plan_failed`, the bench scores the agent "selected,
+could not present a plan", the person is told in red and picks somebody else, and that agent may
+not propose on that want again this round. `plan_failed` is therefore TERMINAL in the runtime
+(`cli._TERMINAL_DOOR_ERRORS`) and is memoized like a closed want: reopening the draft cannot undo
+it and the person has already moved on.
+
+**The stall guard** is keyed on the STEP, the SLOT and the PROBLEM -- the bench's own `fix_key`, so
+the harness and the try counter agree on what "the same problem" is -- and never on the words. A
+model that rewords the same bad sentence looks like progress to a hash of the whole draft, and
+three fleet units burned two hundred rounds each doing exactly that.
+
+**Sending an email is `email.send`**, one neutral name whatever mail service the person has
+connected; the platform picks the connector off their account. The provider-shaped names are still
+taken quietly and are no longer taught.
+
+**The BID door is untouched by 4.0** and still answers the way it always has.
 
 **Bounds belong to the bench and are the only bounds**: 24 hours, three rounds per opening
 problem, ceiling 200. There is no strike count and no round ceiling in the harness; the safety net

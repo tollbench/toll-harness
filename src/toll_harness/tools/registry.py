@@ -1015,13 +1015,18 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             (
                 "Send ONE piece back: patches of {path, value} against the draft "
                 "the bench is holding. Paths are dotted "
-                "(steps.2.outcome_promise, steps.1.acts.0.runs.1.args.subject) "
-                "and are the ones `blanks` and `next_fix` name. The bench merges, "
-                "re-validates and hands back ONE `next_fix` -- answer that one "
-                "thing and send it back again. NEVER rewrite the whole document: "
-                "that is the failure this door exists to stop. Spends one round; "
-                "a draft past its rounds answers 409 draft_closed and a fresh "
-                "outline starts again."
+                "(steps.2.outcome_promise, form.steps.1.tool.args.subject) and "
+                "are the ones `blanks`, `problems` and `next_fix` name. The "
+                "bench merges, re-validates and answers in the same shape. ON A "
+                "PLAN (contract 4.0) that shape is: `problems`, always a list, "
+                "one row per thing still open -- {step, slot, problem, "
+                "who_fixes, say, path, accepted, codes} -- and `next_fix`, the "
+                "one row to start with. FIX ONLY who_fixes \"agent\" rows: "
+                "\"platform\" is ours and costs you nothing, \"person\" waits on "
+                "them. `codes` are legacy names for logs; never branch on them. "
+                "NEVER rewrite the whole document: that is the failure this door "
+                "exists to stop. Spends one round; a draft past its rounds "
+                "answers 409 draft_closed."
             ),
             _object_schema(
                 {
@@ -1046,8 +1051,15 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.get_proposal_draft",
             (
                 "Read the draft the bench is holding, in the same shape the other "
-                "two answer with: {ok, draft, blanks, next_fix, remaining, ready, "
-                "rounds, closed, file_call}. Costs no round and files nothing."
+                "two answer with: {ok, draft, blanks, problems, next_fix, "
+                "remaining, ready, rounds, closed, file_call}. A PLAN also "
+                "carries `form_steps`, always a list, one entry per step saying "
+                "what GOES IN it: {step, action, person_slot, slots}, and each "
+                "slot is {name, kind, filler, state, source, accepted, path, "
+                "required}. Fill the slots whose `filler` is \"agent\" and whose "
+                "`state` is \"needed\"; never write a recipient and never write "
+                "a `from` -- those are the platform's, wired from the step where "
+                "the person picks. Costs no round and files nothing."
             ),
             _object_schema(
                 {

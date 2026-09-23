@@ -6,29 +6,33 @@ agent's step 4 and then refused its own document as "step 5" -- a step the
 agent never wrote, at a number that moved under it while it was answering. So
 the bench stopped inserting: the agent picks the step like it picks `emails`
 or `meeting`, and a plan that reaches somebody with no who step above it is
-REFUSED WITH THE BLOCK and the exact insert call.
+refused.
 
-Which makes `missing_who` a problem with a known answer. The door names the
-call; the harness SENDS it. Asking a model to reword a step that is not wrong
-is exactly how the old contact loop burned its rounds.
+Which makes it a problem with a known answer, and the harness SENDS it. Asking
+a model to reword a step that is not wrong is exactly how the old contact loop
+burned its rounds.
+
+REWRITTEN FOR CONTRACT 4.0 (2026-09-17). The harness no longer reads a code to
+know this. It reads the door's own SLOT TABLE: a step that reaches somebody
+carries a `contact` slot the PLATFORM fills from `person.who`, and the step the
+person picks on is the one `form_steps` marks `person_slot: "who"`. The reply
+below is the real one the bench answers with (`tests/fixtures/`).
 """
 from __future__ import annotations
 
 import json
 
+from tests.unit.plan_door import Door, OldDoor, holes_written, only, reply, row
 from toll_harness.core.types import ModelMessage, ModelResponse
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench.draft import (
     DEFAULT_WHO_ODDS,
     INSERT_NOT_POSSIBLE,
-    MISSING_WHO,
-    ONE_WHO_PER_PLAN,
-    WHO_REACHES_NOBODY,
-    WHOLE_STEP_CODES,
     DraftLoop,
     read_insert,
     who_insert,
     who_step,
+    who_step_is_missing,
 )
 
 
@@ -48,95 +52,68 @@ def _said(model, index=0):
     return model.invocations[index]["messages"][0].content[0]["text"]
 
 
-# The steps of the plan that forced it: the agent wrote the send and no who
-# step above it.
-SEND_STEP = {
-    "verb": "emails",
-    "do_line": "emails each person the note you approved",
-    "hand_over_line": "A sent receipt for every note",
-    "need_line": "",
-    "who": "agent",
-    "declared_odds": 0.7,
-    "proof": "the receipts",
-    "tool": "gmail.message.send",
-    "bid_step": 1,
-}
+# The real answer: step 2 sends mail, no step above it asks who.
+EMAIL = reply("email_step")
+NO_WHO = row(EMAIL, problem="no_source", step=2)
+SEND_STEP = EMAIL["form"]["steps"][1]
 
-# The door's own question, with its own call in it.
-THE_QUESTION = (
-    "Step 1 reaches a person and no step above it asks who. The person picks "
-    "who this goes to from their own contact book, on a step of their own; you "
-    "never find or list them. Put a who step in front of it: PATCH "
-    '{"kind": "plan", "insert": {"before": 1, "step": {"verb": "who", "who": '
-    '"person", "declared_odds": 0.7}}}. Or take the send out of step 1: PATCH '
-    '{"kind": "plan", "patches": [{"path": "form.steps.0", "value": '
-    '{"verb": "reviews"}}]}.'
+# A door that still writes its whole insert call into the sentence.
+THE_OLD_QUESTION = (
+    "Step 2 reaches a person and no step above it asks who. Put a who step in "
+    'front of it: PATCH {"kind": "plan", "insert": {"before": 2, "step": '
+    '{"verb": "who", "who": "person", "declared_odds": 0.7}}}.'
 )
 
 
-class FormBench:
-    """The plan door, scripted: one answer per call, and the calls recorded."""
-
-    fleet = None
-
-    def __init__(self, *answers):
-        self.answers = list(answers)
-        self.patches: list[list[dict]] = []
-        self.drops: list[int] = []
-        self.inserts: list[tuple[int, dict]] = []
-
-    def _next(self):
-        return self.answers.pop(0) if self.answers else {"ok": True, "ready": True}
-
-    def patch_draft(self, target_id, patches, *, kind="bid"):
-        self.patches.append(list(patches))
-        return self._next()
-
-    def drop_draft_step(self, target_id, step, *, kind="plan"):
-        self.drops.append(int(step))
-        return self._next()
-
-    def insert_draft_step(self, target_id, before, step, *, kind="plan"):
-        self.inserts.append((int(before), dict(step)))
-        return self._next()
-
-
-class OldDoor(FormBench):
-    """A bench that publishes no insert call at all."""
-
-    insert_draft_step = None
-
-
-def _fix(path=".steps.0", code=MISSING_WHO, question=THE_QUESTION):
-    return {
-        "path": f"form{path}" if path.startswith(".") else path,
-        "code": code,
-        "question": question,
-        "detail": "a step that reaches a person with no who step above it",
-        "current": dict(SEND_STEP),
-    }
-
-
-def _answer(fix=None, form_steps=(SEND_STEP,)):
-    return {
-        "ok": True,
-        "ready": False,
-        "closed": None,
-        "next_fix": fix or _fix(),
-        "draft": {"form": {"steps": [dict(step) for step in form_steps]},
-                  "steps": [{"title": "Send the notes"}]},
-        "form": {"steps": [dict(step) for step in form_steps]},
-        "rounds": {"used": 3, "left": 17, "cap": 20},
-    }
+def _answer(*rows):
+    # The holes on the send step are written already: this file is about the
+    # who step, and the loop writes what the form says is missing first.
+    return holes_written(only(EMAIL, *rows or (NO_WHO,)))
 
 
 # ---------------------------------------------------------------------------
-# 1. Reading the call out of the door's words
+# 1. The gap is read off the slot table, not off a code
 # ---------------------------------------------------------------------------
-def test_the_insert_call_is_read_out_of_the_question_however_it_is_spaced():
-    assert read_insert(THE_QUESTION) == {
+def test_the_send_step_carries_a_contact_slot_the_platform_fills():
+    entry = [e for e in EMAIL["form_steps"] if e["step"] == 2][0]
+    assert entry["action"] == "email.send"
+    recipients = [s for s in entry["slots"] if s["kind"] == "contact"]
+    assert recipients, entry["slots"]
+    for slot in recipients:
+        assert slot["filler"] == "platform"
+        assert slot["source"] == "person.who"
+    # And the agent's own slots on that same step are the words, never who.
+    mine = [s["name"] for s in entry["slots"] if s["filler"] == "agent"]
+    assert "subject" in mine and "body" in mine
+    assert "to" not in mine and "from" not in mine
+
+
+def test_a_step_that_reaches_somebody_with_no_who_step_is_seen():
+    assert who_step_is_missing(EMAIL, 2) is True
+    # The step that reaches nobody never needs one.
+    assert who_step_is_missing(EMAIL, 1) is False
+    # Neither does a step that is not there.
+    assert who_step_is_missing(EMAIL, 9) is False
+
+
+def test_a_plan_that_already_asks_who_is_never_given_a_second_one():
+    answer = _answer()
+    answer["form_steps"][0]["person_slot"] = "who"
+    assert who_step_is_missing(answer, 2) is False
+
+
+def test_a_plain_plan_never_looks_like_a_missing_who_step():
+    plain = reply("clean")
+    assert who_step_is_missing(plain, 1) is False
+
+
+# ---------------------------------------------------------------------------
+# 2. Reading, and building, the call
+# ---------------------------------------------------------------------------
+def test_the_insert_call_is_read_out_of_the_words_however_it_is_spaced():
+    assert read_insert(THE_OLD_QUESTION) == {
         "step": {"verb": "who", "who": "person", "declared_odds": 0.7},
-        "before": 1,
+        "before": 2,
     }
     # Spacing is the door's business, not a contract.
     assert read_insert('{ "insert" :  { "before" : 12 , "step" : { "verb" : "who" } } }') == {
@@ -157,75 +134,71 @@ def test_a_question_naming_a_drop_is_not_read_as_an_insert():
     assert read_insert(drop) is None
 
 
-# ---------------------------------------------------------------------------
-# 2. Building the call when the words carry none
-# ---------------------------------------------------------------------------
-def test_the_call_is_built_from_the_path_and_the_steps_own_odds():
-    # An older door, or one that reworded its question: the problem already
-    # says everything the call needs. `before` counts from ONE.
-    built = who_insert({"question": "Step 3 reaches a person."}, SEND_STEP, 2)
-    assert built == {"before": 3, "step": who_step(0.7)}
+def test_the_call_is_built_from_the_row_and_the_steps_own_odds():
+    # Contract 4.0 cuts the sentence to one line, so the call is built. The
+    # row already says everything it needs. `before` counts from ONE.
+    built = who_insert(NO_WHO, SEND_STEP, 1)
+    assert built == {"before": 2, "step": who_step(SEND_STEP["declared_odds"])}
     # No odds on the step: the bench clamps, so 0.5 is the harness's blank.
-    assert who_insert({"question": "x"}, {"verb": "emails"}, 0)["step"]["declared_odds"] == (
+    assert who_insert({"say": "x"}, {"verb": "emails"}, 0)["step"]["declared_odds"] == (
         DEFAULT_WHO_ODDS
     )
-    # No step in the path at all: nothing can be built, and the caller asks.
-    assert who_insert({"question": "x"}, None, None) is None
+    # No step at all: nothing can be built, and the caller asks.
+    assert who_insert({"say": "x"}, None, None) is None
 
 
-def test_the_doors_own_call_wins_over_the_built_one():
-    # The door said `before` 1 with odds 0.7; a builder reading the same
-    # problem would agree, but the door's number is the one that is sent.
-    read = who_insert(_fix(), {"declared_odds": 0.2}, 0)
-    assert read == {"before": 1, "step": {"verb": "who", "who": "person",
+def test_a_door_that_still_writes_the_call_has_its_own_number_sent():
+    read = who_insert({"say": THE_OLD_QUESTION}, {"declared_odds": 0.2}, 4)
+    assert read == {"before": 2, "step": {"verb": "who", "who": "person",
                                           "declared_odds": 0.7}}
 
 
-def test_a_call_with_no_before_takes_it_from_the_path():
-    fix = _fix(question='PATCH {"insert": {"step": {"verb": "who"}}}')
+def test_a_call_with_no_before_takes_it_from_the_step():
+    fix = {"say": 'PATCH {"insert": {"step": {"verb": "who"}}}'}
     assert who_insert(fix, SEND_STEP, 4) == {"before": 5, "step": {"verb": "who"}}
 
 
 # ---------------------------------------------------------------------------
-# 3. `missing_who` is ANSWERED, not asked
+# 3. The gap is ANSWERED, not asked
 # ---------------------------------------------------------------------------
-def test_missing_who_sends_the_doors_insert_call_and_never_asks_the_model():
-    bench = FormBench({"ok": True, "ready": True})
+def test_a_missing_who_step_sends_the_insert_and_never_asks_the_model():
+    door = Door({"ok": True, "ready": True})
     model = _model()  # nothing scripted: the model must not be asked at all
-    loop = DraftLoop(model, bench)
+    loop = DraftLoop(model, door)
 
-    loop._answer_the_fixes("t-1", "plan", _answer(), "Send thank-you notes")
+    loop._answer_the_fixes("t-1", "plan", _answer(), "Introduce three people")
 
-    assert bench.inserts == [(1, {"verb": "who", "who": "person", "declared_odds": 0.7})]
-    assert bench.patches == []
-    assert bench.drops == []
+    assert door.inserts == [(2, {"verb": "who", "who": "person",
+                                 "declared_odds": SEND_STEP["declared_odds"]})]
+    assert door.patches == []
+    assert door.drops == []
     assert model.invocations == []
 
 
 def test_the_insert_spends_a_round_and_is_recorded_like_a_patch():
-    bench = FormBench({"ok": True, "ready": True})
-    loop = DraftLoop(_model(), bench)
+    door = Door({"ok": True, "ready": True})
+    loop = DraftLoop(_model(), door)
 
     loop._answer_the_fixes("t-1", "plan", _answer(), "x")
 
     assert loop.rounds == 1
     assert loop._sent == [
         (
-            "form.steps.0",
-            {"insert": {"before": 1, "step": {"verb": "who", "who": "person",
-                                              "declared_odds": 0.7}}},
+            "form.steps.1",
+            {"insert": {"before": 2, "step": {"verb": "who", "who": "person",
+                                              "declared_odds": 0.4}}},
         )
     ]
 
 
 def test_a_door_with_no_insert_call_falls_back_to_asking_the_agent():
-    bench = OldDoor({"ok": True, "ready": True})
-    model = _model({"drop": {"step": 1}})
+    door = OldDoor({"ok": True, "ready": True})
+    model = _model({"drop": {"step": 2}})
 
-    DraftLoop(model, bench)._answer_the_fixes("t-1", "plan", _answer(), "x")
+    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(), "x")
 
-    assert bench.inserts == []
-    assert bench.drops == [0]
+    assert door.inserts == []
+    assert door.drops == [1]
     assert "TWO EXITS" in _said(model)
 
 
@@ -235,90 +208,45 @@ def test_insert_not_possible_is_logged_and_the_agent_is_asked_once():
     refused = {
         "ok": False,
         "error": INSERT_NOT_POSSIBLE,
-        "message": "before 1 is out of range for a plan with no steps",
+        "message": "before 2 is out of range for a plan with no steps",
         "status": 422,
     }
-    replacement = dict(SEND_STEP, verb="reviews", do_line="reviews the notes you wrote")
-    bench = FormBench(refused, {"ok": True, "ready": True})
-    model = _model({"patches": [{"path": "form.steps.0", "value": replacement}]})
+    replacement = dict(SEND_STEP, verb="reviews", tool="")
+    door = Door(refused, {"ok": True, "ready": True})
+    model = _model({"patches": [{"path": "form.steps.1", "value": replacement}]})
 
-    DraftLoop(model, bench)._answer_the_fixes("t-1", "plan", _answer(), "x")
+    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(), "x")
 
-    assert bench.inserts == [(1, {"verb": "who", "who": "person", "declared_odds": 0.7})]
+    assert door.inserts == [(2, {"verb": "who", "who": "person",
+                                 "declared_odds": 0.4})]
     # Asked ONCE, with the whole step in front of it.
     assert len(model.invocations) == 1
     assert "TWO EXITS" in _said(model)
-    assert bench.patches == [[{"path": "form.steps.0", "value": replacement}]]
+    assert door.patches == [[{"path": "form.steps.1", "value": replacement}]]
 
 
 def test_a_refused_insert_is_never_re_sent_three_times_over():
-    # The same (path, code) three times closes the draft, insert or no insert.
+    # The same row three times closes the draft, insert or no insert.
     refused = {
         "ok": False,
         "error": INSERT_NOT_POSSIBLE,
         "message": "no step object",
         "status": 422,
     }
-    bench = FormBench(refused, _answer(), refused, _answer(), refused, _answer())
+    door = Door(refused, _answer(), refused, _answer(), refused, _answer())
     model = _model(
-        {"patches": [{"path": "form.steps.0", "value": dict(SEND_STEP)}]},
-        {"patches": [{"path": "form.steps.0", "value": dict(SEND_STEP)}]},
-        {"patches": [{"path": "form.steps.0", "value": dict(SEND_STEP)}]},
+        *[{"patches": [{"path": "form.steps.1", "value": dict(SEND_STEP)}]}
+          for _ in range(3)]
     )
 
-    out = DraftLoop(model, bench)._answer_the_fixes("t-1", "plan", _answer(), "x")
+    out = DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(), "x")
 
     assert out["error"] == "draft_stalled"
-    assert len(bench.inserts) <= 3
+    assert len(door.inserts) <= 3
 
 
 # ---------------------------------------------------------------------------
-# 4. The other two who codes are WHOLE-STEP problems, and the exit is the drop
-# ---------------------------------------------------------------------------
-def test_all_three_who_codes_are_whole_step_codes():
-    assert MISSING_WHO in WHOLE_STEP_CODES
-    assert ONE_WHO_PER_PLAN in WHOLE_STEP_CODES
-    assert WHO_REACHES_NOBODY in WHOLE_STEP_CODES
-
-
-def test_one_who_per_plan_is_answered_with_the_drop():
-    question = (
-        "This plan asks who twice (steps 1 and 3). One who step per plan. Drop "
-        'step 3: PATCH {"kind": "plan", "drop": {"step": 3}}.'
-    )
-    bench = FormBench({"ok": True, "ready": True})
-    model = _model({"drop": {"step": 3}})
-    fix = _fix(".steps.2", ONE_WHO_PER_PLAN, question)
-
-    DraftLoop(model, bench)._answer_the_fixes(
-        "t-1", "plan", _answer(fix, (SEND_STEP, SEND_STEP, SEND_STEP)), "x"
-    )
-
-    assert bench.drops == [2]
-    assert bench.inserts == []
-    # The door's own words ride in front of the model (the JSON in them is
-    # escaped by the payload dump, so the plain half is what is asserted).
-    assert "One who step per plan" in _said(model)
-
-
-def test_who_reaches_nobody_is_asked_as_a_whole_step_even_on_a_field_path():
-    # A bench that names a LINE of the step is still naming the step: there
-    # is no line on a who step to reword.
-    question = 'Step 1 asks who and nothing after it reaches them. Drop it.'
-    bench = FormBench({"ok": True, "ready": True})
-    model = _model({"drop": {"step": 1}})
-    fix = _fix(".steps.0.do_line", WHO_REACHES_NOBODY, question)
-
-    DraftLoop(model, bench)._answer_the_fixes("t-1", "plan", _answer(fix), "x")
-
-    said = _said(model)
-    assert "TWO EXITS" in said
-    assert '"steps_path":"form.steps.0"' in said
-    assert bench.drops == [0]
-
-
-# ---------------------------------------------------------------------------
-# 5. The words the agent is given
+# 4. The words the agent is given
 # ---------------------------------------------------------------------------
 def test_the_form_ask_tells_the_agent_to_put_the_who_step_in():
     from toll_harness.toll_bench.draft import FORM_INSTRUCTION, WHO_STEP_SENTENCE
@@ -329,14 +257,9 @@ def test_the_form_ask_tells_the_agent_to_put_the_who_step_in():
     assert "never plan a step to find, get or list the people" in FORM_INSTRUCTION
 
 
-def test_the_restating_refusal_no_longer_says_the_bench_asks_who():
-    from toll_harness.toll_bench.draft import RESTATING_STEP_INSTRUCTION
-
-    assert "a step YOU put in the plan, verb `who`" in RESTATING_STEP_INSTRUCTION
-    assert "The bench asks WHO on a step of its own" not in RESTATING_STEP_INSTRUCTION
-
-
 def test_rej45_is_a_refusal_the_agent_can_act_on():
+    """The FILE door still speaks in REJ codes and is untouched by contract
+    4.0, which replaced the PLAN DRAFT door's reply and nothing else."""
     from toll_harness.toll_bench import blocks
     from toll_harness.toll_bench.book_of_houses import (
         FILE_DOOR_REFUSALS,

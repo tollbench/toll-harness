@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from tests.unit.plan_door import a_row
 from toll_harness import cli
 from toll_harness.core.types import (
     AutonomyMode,
@@ -27,6 +28,7 @@ from toll_harness.toll_bench.draft import (
     outline_summary,
     read_json_object,
     read_patches,
+    step_of,
     tools_index,
 )
 
@@ -232,26 +234,28 @@ class FakeDraftBench:
 
     def answer(self, closed=None):
         blank_rows = self.blanks()
-        fix = None
-        if closed is None:
-            if blank_rows:
-                fix = {
-                    "path": blank_rows[0]["path"],
-                    "current": "",
-                    "code": "blank",
-                    "fix": blank_rows[0]["note"],
-                    "detail": None,
-                }
-            elif self.pending_fixes:
-                fix = dict(self.pending_fixes[0])
-        remaining = len(blank_rows) + len(self.pending_fixes)
+        # ONE LANGUAGE (contract 4.0): every problem is a row of the one
+        # shape, `problems` carries them all and `next_fix` only says where
+        # to start. A blank the form still owes is a row like any other.
+        rows = [
+            a_row(row["path"], step=step_of(row["path"]) and step_of(row["path"]) + 1,
+                  slot=(row["path"].rsplit(".", 1)[-1] if "." in row["path"]
+                        else row["path"]),
+                  say=row["note"], codes=["blank"])
+            for row in blank_rows
+        ]
+        rows += [dict(fix) for fix in self.pending_fixes]
+        mine = [row for row in rows if row["who_fixes"] == "agent"]
+        with_path = [row for row in mine if row.get("path")]
+        remaining = len(rows)
         return {
             "ok": closed is None,
             "kind": self.kind,
             "draft": self.document,
             "blanks": blank_rows,
-            "next_fix": None if closed else fix,
-            "problems": [],
+            "form_steps": [],
+            "next_fix": None if closed else (with_path or mine or [None])[0],
+            "problems": rows,
             "remaining": remaining,
             "ready": closed is None and remaining == 0,
             "rounds": {"used": self.rounds, "left": self.cap - self.rounds, "cap": self.cap},
@@ -282,13 +286,8 @@ def _happy_path_model():
 def test_the_outline_goes_in_the_blanks_come_back_and_the_bench_files_what_it_held():
     bench = FakeDraftBench(
         fixes=[
-            {
-                "path": "steps.1.title",
-                "current": "Offer the times and book it",
-                "code": "REJ-34",
-                "fix": "Say how the booking is made.",
-                "detail": "step 2: the promise has no act",
-            }
+            a_row("steps.1.title", step=2, slot="title", problem="empty",
+                  say="Step 2: say how the booking is made.", codes=["REJ-34"])
         ]
     )
     model = _happy_path_model()
@@ -353,13 +352,8 @@ def test_a_blanks_call_shows_one_step_and_that_step_alone():
 def test_a_fix_call_carries_one_problem_and_the_step_around_it():
     bench = FakeDraftBench(
         fixes=[
-            {
-                "path": "steps.1.title",
-                "current": "Offer the times and book it",
-                "code": "REJ-34",
-                "fix": "Say how the booking is made.",
-                "detail": "step 2: the promise has no act",
-            }
+            a_row("steps.1.title", step=2, slot="title", problem="empty",
+                  say="Step 2: say how the booking is made.", codes=["REJ-34"])
         ]
     )
     model = _happy_path_model()
@@ -368,8 +362,9 @@ def test_a_fix_call_carries_one_problem_and_the_step_around_it():
     brief={"want": "Book a table"}, idempotency_key="k")
 
     fix_call = model.invocations[-1]["messages"][0].content[0]["text"]
-    assert "REJ-34" in fix_call
-    assert "Say how the booking is made." in fix_call
+    # THE CODES NEVER REACH THE MODEL (contract 4.0): the sentence does.
+    assert "REJ-34" not in fix_call
+    assert "Step 2: say how the booking is made." in fix_call
     assert '"step_number":2' in fix_call
     assert "steps.0" not in fix_call
 
@@ -652,8 +647,8 @@ def test_identical_no_progress_stops_before_the_bench_cap():
     """
     bench = FakeDraftBench(cap=9)
     bench.pending_fixes = [
-        {"path": "steps.0.title", "current": "", "code": "REJ-34",
-         "fix": "Say how.", "detail": None}
+        a_row("steps.0.title", step=1, slot="title", say="Say how.",
+              codes=["REJ-34"])
     ]
     # Two patches each, so none is re-aimed, and none of them ever touches
     # the path the bench keeps naming.
@@ -1118,9 +1113,9 @@ class _Nagging(FakeDraftBench):
 def _nagging_bench():
     bench = _Nagging(cap=12)
     bench.pending_fixes = [
-        {"path": "finalist_questions.0.0", "current": "a text box",
-         "code": "REJ-15", "fix": "At most two of the four may be a text box.",
-         "detail": "finalist_questions[0][0] must be a block"}
+        a_row("finalist_questions.0.0", slot="finalist_questions",
+              say="At most two of the four may be a text box.",
+              codes=["REJ-15"])
     ]
     return bench
 
@@ -1157,8 +1152,8 @@ def test_a_repeated_fix_hands_back_what_was_sent_and_what_is_there_now():
 
 def test_a_fix_named_once_is_asked_plainly():
     bench = FakeDraftBench(
-        fixes=[{"path": "steps.1.title", "current": "x", "code": "REJ-34",
-                "fix": "Say how.", "detail": None}]
+        fixes=[a_row("steps.1.title", step=2, slot="title", say="Say how.",
+                     codes=["REJ-34"])]
     )
     model = _happy_path_model()
 
@@ -1254,8 +1249,8 @@ def test_the_prefix_is_byte_identical_on_every_call_of_a_run():
     charges a fraction for it. One byte of drift and every round pays full
     price again."""
     bench = FakeDraftBench(
-        fixes=[{"path": "steps.1.title", "current": "x", "code": "REJ-34",
-                "fix": "Say how.", "detail": None}]
+        fixes=[a_row("steps.1.title", step=2, slot="title", say="Say how.",
+                     codes=["REJ-34"])]
     )
     model = CachingModel(_happy_path_model().responses)
 
@@ -1297,8 +1292,9 @@ def test_a_provider_that_caches_nothing_gets_the_tools_once_not_every_round():
 def test_a_fix_round_on_a_thirty_step_draft_stays_under_four_thousand_tokens():
     bench = FakeDraftBench(cap=200)
     bench.pending_fixes = [
-        {"path": "steps.17.title", "current": "Step number 17", "code": "REJ-34",
-         "fix": "Say how this step does what it promises.", "detail": "step 18"}
+        a_row("steps.17.title", step=18, slot="title",
+              say="Step 18: say how this step does what it promises.",
+              codes=["REJ-34"])
     ]
     model = _model(
         _thirty_step_outline(),
@@ -1322,7 +1318,7 @@ def test_a_fix_round_on_a_thirty_step_draft_stays_under_four_thousand_tokens():
     assert "30 APPROVE Step number 29" in tail
     assert "Piece 29." not in tail
     assert "steps.17.title" in tail
-    assert "REJ-34" in tail
+    assert "Step 18: say how this step does what it promises." in tail
 
 
 def test_a_blanks_round_carries_one_step_and_no_document():
@@ -1398,9 +1394,8 @@ class _TalkativeBench(FakeDraftBench):
 
 
 def _fix():
-    return {"path": "steps.1.title", "current": "Offer the times and book it",
-            "code": "REJ-34", "fix": "Say how the booking is made.",
-            "detail": "step 2: the promise has no act"}
+    return a_row("steps.1.title", step=2, slot="title",
+                 say="Step 2: say how the booking is made.", codes=["REJ-34"])
 
 
 def test_the_blanks_and_fix_tails_carry_what_the_person_said_under_one_line():

@@ -253,12 +253,16 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         if secret_store is None:
             raise ValueError("Connected Toll Bench agents require a configured SecretStore")
         token = secret_store.get(token_name) if token_name else None
-        if not token or not maker_id:
-            raise ValueError("Connected Toll Bench agent token or maker ID is missing")
+        if not token:
+            raise ValueError("Connected Toll Bench agent token is missing")
+        # The bearer token alone identifies the agent to the bench; maker_id is
+        # an optional cross-check header, never a requirement. An agent that
+        # registered outside this harness has a token and no maker_id, and
+        # must still be able to connect (an outside agent was blocked here).
         connected_api = BookOfHousesApiClient(
             base_url=toll_bench_config.get("base_url", "https://bookofhouses.com"),
             token=token,
-            maker_id=maker_id,
+            maker_id=maker_id or None,
         )
         toll_bench_provider = BookOfHousesTollBenchProvider(
             connected_api,

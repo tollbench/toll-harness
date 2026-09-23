@@ -9,6 +9,7 @@ whitelist was also older than the door's (no work_line, words, room, wait).
 """
 from __future__ import annotations
 
+from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import _model
 from tests.unit.test_two_stages_r243_r245 import FILLED_STEP, FormBench
 from toll_harness.toll_bench.draft import (
@@ -39,8 +40,8 @@ class PlanFieldBench(FormBench):
         if self.form is not None and not str(form.get("overview") or "").strip():
             missing.append("form.overview")
         if missing and self.closed is None:
-            out["next_fix"] = {"path": missing[0], "code": "blank", "current": odds,
-                               "question": "What is your chance?"}
+            out["next_fix"] = a_row(missing[0], slot=missing[0].rsplit(".", 1)[-1],
+                                    say="What is your chance?", codes=["blank"])
             out["remaining"] = out["remaining"] + len(missing)
             out["ready"] = False
         return out

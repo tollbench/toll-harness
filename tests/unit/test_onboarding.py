@@ -18,6 +18,8 @@ class FakeBookOfHousesApi:
         self.register_calls = 0
         self.reachability_acks = 0
         self.address = "production-returned@bookofhouses.com"
+        self.expected_token = "never-persist-in-state"
+        self.authenticated_with_maker_id = None
 
     def protocol(self):
         return {
@@ -46,13 +48,15 @@ class FakeBookOfHousesApi:
             "rest_token": "never-persist-in-state",
         }
 
-    def authenticated(self, token, maker_id):
-        assert token == "never-persist-in-state"
-        assert maker_id == "maker-oak"
+    def authenticated(self, token, maker_id=None):
+        assert token == self.expected_token
+        assert maker_id in (None, "maker-oak")
+        self.authenticated_with_maker_id = maker_id
         return self
 
     def me(self):
         return {
+            "agent": {"maker_id": "maker-oak", "registry_no": "A-001"},
             "responsible_party_contact": {
                 "confirmed": self.confirmed,
                 "sent_at": "2026-08-24T20:02:17Z",
@@ -233,3 +237,57 @@ def test_agent_yaml_is_owner_only_and_stamps_real_harness_version(tmp_path):
     config = load_config(config_path)
     assert config["agent"]["harness"] == f"Toll Harness {__version__}"
     assert config["benchmark"]["harness"] == f"Toll Harness {__version__}"
+
+
+def test_bring_your_own_token_discovers_maker_id_and_never_registers(tmp_path):
+    """An agent that registered outside the harness holds only the bearer token.
+    The bench needs nothing else: resume asks /me who the token is, records the
+    answer, and never files a second registration."""
+    from toll_harness.onboarding import secret_store
+
+    config_path = create_configuration(tmp_path / "byot", _answers())
+    config = yaml.safe_load(config_path.read_text())
+    secret_store(config_path, config).set(config["toll_bench"]["token_secret"], "outside-token")
+    api = FakeBookOfHousesApi()
+    api.expected_token = "outside-token"
+    api.confirmed = True
+
+    ready = advance_connected_onboarding(config_path, approve_registration=True, api=api)
+
+    assert api.register_calls == 0
+    assert ready["status"] == READY
+    assert ready["maker_id"] == "maker-oak"
+    assert ready["registry_no"] == "A-001"
+    config = yaml.safe_load(config_path.read_text())
+    assert config["toll_bench"]["maker_id"] == "maker-oak"
+    assert config["toll_bench"]["registry_no"] == "A-001"
+    assert "outside-token" not in config_path.read_text()
+
+
+def test_runtime_connects_with_token_alone(tmp_path, monkeypatch):
+    """The harness must not demand a maker_id the bench never asks for."""
+    from types import SimpleNamespace
+
+    from toll_harness import config as config_module
+    from toll_harness.config import build_runtime
+    from toll_harness.onboarding import secret_store
+
+    config_path = create_configuration(tmp_path / "tokenonly", _answers())
+    config = yaml.safe_load(config_path.read_text())
+    secret_store(config_path, config).set(config["toll_bench"]["token_secret"], "outside-token")
+    assert config["toll_bench"]["maker_id"] is None
+    # No AWS profile on the test box; neither the model nor the browser is
+    # what is under test here.
+    monkeypatch.setattr(
+        config_module,
+        "_build_model",
+        lambda _config, *, root, data_dir: SimpleNamespace(model_id="example.model"),
+    )
+    config["providers"]["browser"] = None
+    config_path.write_text(yaml.safe_dump(config))
+
+    runtime = build_runtime(config_path)
+
+    api = runtime.toll_bench.api
+    assert api._token == "outside-token"
+    assert api.maker_id is None
