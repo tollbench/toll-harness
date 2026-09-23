@@ -60,7 +60,12 @@ from toll_harness.toll_bench.step import (
     what_changed,
 )
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
-from toll_harness.worker import install_market_worker, market_worker_status
+from toll_harness.worker import (
+    install_market_worker,
+    market_worker_status,
+    read_focus,
+    stop_market_worker,
+)
 
 MARKET_SCAN_CANDIDATE_LIMIT = 1
 MARKET_SCAN_TOOLS = [
@@ -2425,6 +2430,7 @@ def _bid_through_the_draft_loop(
     target_id = str(target.get("target_id") or "")
     brief = _brief_for_the_loop(resources, target_id, target.get("want"))
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)
+    loop.standing_direction = _lab_lead_direction(resources)
     outcome = loop.run(
         target_id,
         kind="bid",
@@ -2742,6 +2748,20 @@ def _the_step_ask(
     return payload
 
 
+def _lab_lead_direction(resources: Any) -> str:
+    """The standing direction for this agent, or "".
+
+    Read from focus.md in the agent's data directory (the directory that
+    holds harness.sqlite3; `toll_harness.worker.focus_path` names the same
+    file). Read fresh every scan so a new direction lands on the next cycle
+    without a restart.
+    """
+    store_path = getattr(getattr(resources, "store", None), "path", None)
+    if store_path is None:
+        return ""
+    return read_focus(Path(store_path).parent)
+
+
 def _process_market_opportunities(
     resources: Any,
     reachability: dict[str, Any],
@@ -2822,8 +2842,10 @@ def _process_market_opportunities(
     # 1,209; the strongest model on the fleet died on two length caps five
     # problems from filing. The plan is owed by the one who was chosen, and it
     # is a form the bench hands over then.
+    direction = _lab_lead_direction(resources)
     goal = (
-        "Respond to the single open Toll Bench want below with ONE PROPOSAL and "
+        ("Lab lead standing direction:\n" + direction + "\n\n" if direction else "")
+        + "Respond to the single open Toll Bench want below with ONE PROPOSAL and "
         "submit it once with a stable idempotency key. This scan handles new wants "
         "only; do not service existing obligations here. Do not merely review or summarize the "
         "want. Never bid on a target whose brief reports your_bid, and do not "
@@ -3406,6 +3428,17 @@ def command_bedrock_canary(arguments: argparse.Namespace) -> int:
     return 0 if runs and all(run["status"] == "completed" for run in runs) else 2
 
 
+def command_market_worker(arguments: argparse.Namespace) -> int:
+    action = arguments.worker_command
+    if action == "install":
+        _print(install_market_worker(arguments.config))
+    elif action == "stop":
+        _print(stop_market_worker(arguments.config))
+    else:
+        _print(market_worker_status(arguments.config))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="toll-harness")
     parser.add_argument("--version", action="version", version=__version__)
@@ -3474,6 +3507,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     watch.set_defaults(handler=command_market_watch)
+    worker = market_subcommands.add_parser(
+        "worker", help="Install, stop or inspect the persistent market worker (JSON)"
+    )
+    worker_subcommands = worker.add_subparsers(dest="worker_command", required=True)
+    for action in ("install", "stop", "status"):
+        worker_action = worker_subcommands.add_parser(action)
+        worker_action.add_argument("config")
+        worker_action.set_defaults(handler=command_market_worker)
 
     guard = subcommands.add_parser("loop-guard", help="Inspect or explicitly reset parked work")
     guard.add_argument("config")

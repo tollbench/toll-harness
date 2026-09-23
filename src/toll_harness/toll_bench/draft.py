@@ -1746,16 +1746,83 @@ def example_plan(answer: Any) -> Any:
 # rejection rules, thrown away for every agent but one. Seven fields now, one
 # reply, and the plan comes after the person picks.
 #
-# THE HARNESS DOES NOT TRIM AND DOES NOT COUNT CHARACTERS. The caps below are
-# said out loud in the ask because a model writes better inside a stated cap,
-# but the DOOR owns them: it trims a long title or paragraph to the cap and
-# says what it trimmed on `bench_fixed`. A harness that trimmed too would cut
-# the same sentence twice and hide the bench's own answer.
+# THE PARAGRAPH CAP IS KEPT HERE, BEFORE THE DOOR (0.50.0). The bench used to
+# trim a long paragraph and say so on `bench_fixed`; since rule 243 was amended
+# (2026-09-15) it SENDS IT BACK, NEVER CUT: "pitch_body is 617 characters and
+# the cap is 600: cut at least 17 and send the proposal again. Nothing was
+# filed." WHAT FORCED THIS: a live agent (Rick, 2026-09-23) filed a 617-char
+# paragraph, the free door named REJ-21, the fix round had nothing for a length
+# problem, and the filing door refused it -- the want lost for that cycle.
+# So the draft loop counts the way the door counts (`pitch_length`), asks the
+# model once to cut to the cap, and cuts at a sentence or word boundary itself
+# if the model cannot (`trim_to_cap`).
+#
+# THE TITLE HAS NO LENGTH RULE AT THE DOOR (Steven 2026-09-11, "we don't have
+# to trim titles"; bid_validator._check_pitch never counts it). The 120 below
+# is said in the ask as guidance only and is never enforced or cut here.
 PROPOSAL_TITLE_MAX = 120
 PROPOSAL_BODY_MAX = 600
 PROPOSAL_LINKS_MIN = 1
 PROPOSAL_LINKS_MAX = 3
 PROPOSAL_QUESTIONS_MAX = 3
+
+
+# THE DOOR'S COUNT, EXACTLY. The bench counts `len(pitch_body.strip())` --
+# Python code points after stripping leading and trailing whitespace, nothing
+# else normalised -- in bid_validator._check_pitch
+# (the bench's own validator, cap PITCH_BODY_MAX =
+# 600). Count any other way and a paragraph that passes here is
+# refused there.
+def pitch_length(text: Any) -> int:
+    return len(text.strip()) if isinstance(text, str) else 0
+
+
+_SENTENCE_ENDS = (". ", "! ", "? ")
+
+
+def trim_to_cap(text: Any, cap: int = PROPOSAL_BODY_MAX) -> str:
+    """Cut `text` to at most `cap` characters, by the door's count.
+
+    At the last sentence end (". ", "! ", "? " or a newline) that fits, else
+    at the last word boundary that fits. No ellipsis, and never mid-word
+    unless the text is one word longer than the cap (nothing else fits).
+    Text already inside the cap comes back stripped and otherwise untouched.
+    """
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    if len(text) <= cap:
+        return text
+    head = text[:cap]
+    cut = -1
+    for mark in _SENTENCE_ENDS:
+        at = head.rfind(mark)
+        if at >= 0:
+            cut = max(cut, at + 1)
+    # A sentence that ends exactly at the cap, with a space (or nothing) after.
+    if head[-1] in ".!?" and text[cap].isspace():
+        cut = cap
+    newline = head.rfind("\n")
+    if newline > 0:
+        cut = max(cut, newline)
+    if cut > 0 and head[:cut].strip():
+        return head[:cut].rstrip()
+    if text[cap].isspace():
+        return head.rstrip()
+    space = max(head.rfind(" "), head.rfind("\t"))
+    if space > 0 and head[:space].strip():
+        return head[:space].rstrip()
+    return head
+
+
+TRIM_INSTRUCTION = (
+    "Your proposal's `pitch_body` is {have} characters and the bench's cap is "
+    "{cap}: cut at least {excess} characters. Keep what they get and roughly "
+    "how; drop padding, not substance. The bench refuses a paragraph over the "
+    "cap, it does not trim it. Answer with nothing else: "
+    '{{"pitch_body": "..."}}'
+)
+
 # THE FRAMES ARE DROPPED (Steven, 2026-09-11, contract 3.16: "fine drop them").
 # The bench no longer writes half of anybody's sentence and no longer reads
 # `fill`: "`fill` is not read any more, and the bench no longer writes half of
@@ -1843,8 +1910,8 @@ PROPOSAL_INSTRUCTION = (
     "neither is a slug you assembled out of a service and a verb. A service "
     "that is not on that list is named on the STEP that uses it, as an "
     "outside act, never here. File [] when you need none.\n"
-    "A long title or paragraph is TRIMMED by the bench, not refused, so write "
-    "it well and do not pad it.\n"
+    f"A paragraph over {PROPOSAL_BODY_MAX} characters is REFUSED by the bench, "
+    "not trimmed, so count and stay inside it; do not pad it.\n"
     'Answer: {"pitch_title": "...", "pitch_body": "...", "odds": 0.0, '
     '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
     '[...], "tools_needed": [...]}.'
@@ -2121,7 +2188,7 @@ def mend_the_small_proposal(
     """Every fix this package can make to a seven-field proposal, with no
     model call. Returns the (possibly unchanged) proposal and what was mended.
 
-    Two things, and only the two the door refuses this package for:
+    Three things, and only the three the door refuses this package for:
 
       * THE QUESTION SHAPES (REJ-15). `read_questions` is idempotent, so
         running it again over a proposal built by hand, carried over from an
@@ -2131,6 +2198,8 @@ def mend_the_small_proposal(
       * THE TOOL LIST (REJ-01). A name the want's list does not carry comes
         off; a service that is not on the list belongs on the step that uses
         it, as an outside act.
+      * THE PARAGRAPH CAP (REJ-21). A `pitch_body` over the cap, by the
+        door's own count, is cut at a sentence or word boundary.
 
     It does not invent a research link, a title or a price. A field that is
     simply not there is not something this package can mend.
@@ -2150,6 +2219,16 @@ def mend_the_small_proposal(
         if asked != asked_now:
             out["finalist_questions"] = asked
             mended.append(f"finalist_questions: {len(asked)} in the door's shape")
+    # THE PARAGRAPH CAP (REJ-21). The door refuses a paragraph over the cap
+    # and never cuts it, so a length problem IS one this package can change.
+    body = out.get("pitch_body")
+    if pitch_length(body) > PROPOSAL_BODY_MAX:
+        cut = trim_to_cap(body, PROPOSAL_BODY_MAX)
+        out["pitch_body"] = cut
+        mended.append(
+            f"pitch_body: cut from {pitch_length(body)} to {len(cut)} characters "
+            f"(the cap is {PROPOSAL_BODY_MAX})"
+        )
     named = out.get("tools_needed")
     if named:
         kept, off_list = pick_tools(named, brief)
@@ -2545,6 +2624,9 @@ class DraftLoop:
         # The stable prefix for this run, built once in `run` and unchanged
         # after. Until then, the front door alone.
         self.prefix: str = FRONT_DOOR
+        # The lab lead's standing direction (focus.md), riding the proposal
+        # call when set; empty means the call is unchanged.
+        self.standing_direction: str = ""
         self.prompt_chars = 0
         self.cached_tokens = 0
         # This agent's own accepted plans, read ONCE per run (the client's
@@ -3139,9 +3221,10 @@ class DraftLoop:
         The want, the stance line, the questions the person will answer and
         the tools this want offers go in; seven fields come back; the bench's
         own proposal door takes them. No outline, no blanks, no fixes: there
-        is no plan here to fix. A long title or paragraph is the DOOR's to
-        trim, and what it trimmed comes back on `bench_fixed` and is logged,
-        never retried.
+        is no plan here to fix. A paragraph over the cap is cut to it first
+        (`_fit_the_body`), because the door refuses it rather than trimming;
+        anything the door still corrects comes back on `bench_fixed` and is
+        logged, never retried.
         """
         payload: dict[str, Any] = {
             "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
@@ -3149,6 +3232,8 @@ class DraftLoop:
             "budget_cents": budget_of(brief),
             "tools_on_this_want": tools_index(brief),
         }
+        if self.standing_direction:
+            payload["lab_lead_standing_direction"] = self.standing_direction
         if self._tools_ride_the_outline:
             # Nothing caches here, so the rules ride the one call that makes
             # the choice rather than a prefix nobody is charged less for.
@@ -3197,6 +3282,7 @@ class DraftLoop:
                 "refusal is the round.",
                 proposal,
             )
+        proposal = self._fit_the_body(target_id, proposal)
         self.log.info(
             "proposal for target=%s: %d of %d fields, %d link(s), %d "
             "question(s), %d tool(s)",
@@ -3245,6 +3331,48 @@ class DraftLoop:
                 self._preview(out["message"]),
             )
         return out
+
+    def _fit_the_body(
+        self, target_id: str, proposal: dict[str, Any]
+    ) -> dict[str, Any]:
+        """THE PARAGRAPH INSIDE THE CAP BEFORE ANY DOOR SEES IT (REJ-21).
+
+        One model round that names the exact cap and the exact excess; if the
+        reply is still over the cap, or empty, the cut is made here at a
+        sentence or word boundary (`trim_to_cap`). Counted the door's way.
+        """
+        body = proposal.get("pitch_body")
+        have = pitch_length(body)
+        if have <= PROPOSAL_BODY_MAX:
+            return proposal
+        excess = have - PROPOSAL_BODY_MAX
+        answer = self._ask(
+            TRIM_INSTRUCTION.format(have=have, cap=PROPOSAL_BODY_MAX, excess=excess),
+            {"pitch_title": proposal.get("pitch_title"), "pitch_body": body},
+            "pitch trim",
+        )
+        again = answer.get("pitch_body") if isinstance(answer, dict) else None
+        if isinstance(again, str) and 0 < pitch_length(again) <= PROPOSAL_BODY_MAX:
+            self.log.info(
+                "proposal for target=%s: pitch_body was %d characters (cap %d); "
+                "the model cut it to %d",
+                target_id,
+                have,
+                PROPOSAL_BODY_MAX,
+                pitch_length(again),
+            )
+            return {**proposal, "pitch_body": again.strip()}
+        cut = trim_to_cap(body, PROPOSAL_BODY_MAX)
+        self.log.warning(
+            "proposal for target=%s: pitch_body was %d characters (cap %d) and "
+            "the trim round came back %s; cut here at a boundary to %d",
+            target_id,
+            have,
+            PROPOSAL_BODY_MAX,
+            f"at {pitch_length(again)}" if isinstance(again, str) else "empty",
+            len(cut),
+        )
+        return {**proposal, "pitch_body": cut}
 
     def _links_for(
         self, target_id: str, brief: Any, proposal: dict[str, Any]

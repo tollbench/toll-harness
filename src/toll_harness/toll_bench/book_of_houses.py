@@ -2009,8 +2009,10 @@ class BookOfHousesTollBenchProvider:
         spent the round to learn what we had just been told for free.
 
         So: the problems get ONE fix round of the fixes this package can
-        actually make -- a question shape, an off-list tool -- and the door is
-        asked again for free. The bench's own `corrected_plan` is taken when
+        actually make -- a question shape, an off-list tool, a paragraph over
+        the cap (REJ-21: the door refuses it and never cuts it, so a length
+        problem is ours to change, never one to "file anyway") -- and the door
+        is asked again for free. The bench's own `corrected_plan` is taken when
         it says `corrected_ok`, because that correction is the door's. What is
         left after that is filed anyway, EXCEPT a required field nobody can
         fill in from here: a bid the door has already refused for a missing
@@ -2326,8 +2328,8 @@ class BookOfHousesTollBenchProvider:
         if draft.is_small_proposal(proposal):
             # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
             # There are no steps to repair and no blocks to merge -- but the
-            # question shapes and the want's tool list ARE this package's to
-            # get right, and since 0.38.2 the free door gets one fix round
+            # question shapes, the want's tool list and the paragraph cap ARE
+            # this package's to get right, and since 0.38.2 the free door gets one fix round
             # before anything is filed.
             proposal, _mended = draft.mend_the_small_proposal(proposal, brief)
             if _mended:

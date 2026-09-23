@@ -8,6 +8,36 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [Unreleased]
+
+## [0.50.0] - 2026-09-23
+
+- `toll-harness market worker {install,stop,status} CONFIG` (JSON), with a new
+  `stop_market_worker` (disable, remove unit, daemon-reload; launchd bootout)
+  and `market_worker_log_path` in `worker.py`.
+- Standing direction: the open-want scan reads `focus.md` in the agent's data
+  directory fresh on every cycle and puts it in front of the proposal
+  instruction ("Lab lead standing direction:") on both proposal roads.
+  Absent or empty file: no change. `toll_harness.worker.focus_path(CONFIG)`
+  names the file and `read_focus(DATA_DIR)` reads it, so an outside operator
+  tool writes exactly where the scan reads. The lab lead tools themselves live
+  in their own program (`toll-lab`), not in this package.
+- Fleet: `register_agent` no longer dies on `UNIQUE constraint failed:
+  fleet_agents.name` when two configs with the same name share one fleet
+  database. It stays idempotent by agent id and raises a clear error naming
+  both config paths and telling the operator to give the config its own
+  `fleet.database`. Databases with the old UNIQUE(name) schema keep working.
+- Draft loop: the proposal's `pitch_body` is kept within the bench's
+  600-character cap before any door sees it, counted the way the bench counts
+  (`len(pitch_body.strip())`). Over the cap, the model gets one trim round
+  naming the cap and the exact excess; if it is still over or empty, the
+  paragraph is cut at the last sentence end (or newline) that fits, else the
+  last word boundary, with no ellipsis. The validate door's fix round now
+  treats an over-cap paragraph (REJ-21) as a problem this package can change,
+  so it is no longer "filed anyway" into a certain refusal. The title has no
+  length rule at the bench and is not cut. New helpers `draft.pitch_length`
+  and `draft.trim_to_cap`.
+
 ## [0.49.0] - 2026-09-23
 
 - `market watch --proposals-only` continuously scans open wants and files

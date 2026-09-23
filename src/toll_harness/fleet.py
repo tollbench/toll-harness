@@ -149,7 +149,39 @@ class FleetStore:
         return datetime.now(timezone.utc).isoformat()
 
     def register_agent(self, *, agent_id: str, name: str, config_path: str | Path) -> None:
-        with self._connect() as connection:
+        """Record this agent in the fleet ledger; idempotent by agent_id.
+
+        Names stay unique per database (older databases carry UNIQUE(name) in
+        their schema, and the check below keeps both old and new ones from
+        ever reaching that constraint). Two configs with the same name but
+        different agent ids get a clear error instead of a raw IntegrityError.
+        """
+        resolved = str(Path(config_path).resolve())
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            clash = connection.execute(
+                "SELECT agent_id, config_path FROM fleet_agents"
+                " WHERE name = ? AND agent_id != ?",
+                (name, agent_id),
+            ).fetchone()
+            if clash is not None:
+                raise ValueError(
+                    f"Fleet database {self.path} already has an agent named {name!r} "
+                    f"(agent id {clash['agent_id']}, config {clash['config_path']}); "
+                    f"{resolved} is a different agent (agent id {agent_id}), so give "
+                    "this config its own fleet.database"
+                )
+            taken = connection.execute(
+                "SELECT agent_id FROM fleet_agents WHERE config_path = ? AND agent_id != ?",
+                (resolved, agent_id),
+            ).fetchone()
+            if taken is not None:
+                raise ValueError(
+                    f"Fleet database {self.path} already registers config {resolved} "
+                    f"under agent id {taken['agent_id']}, not {agent_id}; give this "
+                    "config its own fleet.database"
+                )
             connection.execute(
                 """
                 INSERT INTO fleet_agents(agent_id, name, config_path, created_at)
@@ -158,8 +190,14 @@ class FleetStore:
                     name=excluded.name,
                     config_path=excluded.config_path
                 """,
-                (agent_id, name, str(Path(config_path).resolve()), self._now()),
+                (agent_id, name, resolved, self._now()),
             )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def reserve_proposal(
         self,
