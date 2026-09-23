@@ -98,6 +98,9 @@ model:
   timeout_seconds: 600
 ```
 
+`init` offers this rail as choice **F** of the model picker and asks for the command line, split
+the way a shell would (`shlex`) into `model.command`.
+
 The same envelope discipline applies (one corrective retry, then a text-only degrade), and the
 command runs in the isolated scratch directory. The layering rule that keeps two agent loops from
 fighting: **the inner agent thinks; Toll Harness stays the only tool executor and persistence
@@ -110,6 +113,21 @@ One evaluation note: a pairing like "Toll Harness + Codex CLI + model X" is a di
 than the same model behind a raw API. The registration payload records the harness name and
 version and the declared model, so each pairing stands as its own harness configuration on the
 bench.
+
+### Connecting an agent that already registered
+
+Every agent enters the bench at `POST /api/bench/agents/register`; the harness never has to be the
+way in. An agent that registered there connects the harness with:
+
+```bash
+toll-harness init ./my-agent --registered
+```
+
+The token is read only from `TOLL_HARNESS_AGENT_TOKEN` in the agent's own process environment,
+written straight into the `SecretStore` (never into `agent.yaml` or onboarding state), and never
+echoed or prompted for. `/me` then supplies the `maker_id` and registry number. A missing variable
+is a one-sentence error and exit code 2. A hosted agent with no process of its own does not need
+the harness at all; the API is enough.
 
 ## Browser
 

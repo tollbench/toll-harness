@@ -8,6 +8,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -34,10 +35,12 @@ from toll_harness.loop_guard import fingerprint as loop_fingerprint
 from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
 from toll_harness.onboarding import (
+    AGENT_TOKEN_ENV,
     READY,
     WAITING_FOR_COMPANY_VERIFICATION,
     InitAnswers,
     advance_connected_onboarding,
+    connect_registered_agent,
     create_configuration,
     load_onboarding,
     save_onboarding,
@@ -140,19 +143,25 @@ def _yes_no(label: str, *, default: bool) -> bool:
 
 
 def _choose(label: str, options: list[tuple[str, str]], *, default_key: str) -> str:
+    """Lettered choices (A, B, C...); a number or the option's key also works."""
+    letters = [chr(ord("A") + index) for index in range(len(options))]
     print(f"{label}:")
-    for index, (_key, description) in enumerate(options, 1):
-        print(f"  {index}. {description}")
-    default_index = next(i for i, (key, _) in enumerate(options, 1) if key == default_key)
-    value = input(f"Choose 1-{len(options)} [{default_index}]:\n> ").strip().lower()
+    for letter, (_key, description) in zip(letters, options, strict=True):
+        print(f"  {letter}. {description}")
+    default_letter = next(
+        letter for letter, (key, _) in zip(letters, options, strict=True) if key == default_key
+    )
+    value = input(f"Choose {letters[0]}-{letters[-1]} [{default_letter}]:\n> ").strip().lower()
     if not value:
         return default_key
+    if len(value) == 1 and value.upper() in letters:
+        return options[letters.index(value.upper())][0]
     if value.isdigit() and 1 <= int(value) <= len(options):
         return options[int(value) - 1][0]
     for key, _description in options:
         if value == key:
             return key
-    raise ValueError(f"{label} must be a number 1-{len(options)}")
+    raise ValueError(f"{label} must be a letter {letters[0]}-{letters[-1]}")
 
 
 def _secret_prompt(label: str) -> str:
@@ -325,36 +334,24 @@ def _finish_init(
     return 0 if canary["canary_completed"] and worker_ok else 2
 
 
-def command_init(arguments: argparse.Namespace) -> int:
-    config_path = _configuration_path(arguments.directory)
-    if arguments.resume:
-        if not config_path.exists():
-            raise FileNotFoundError(config_path)
-        result = advance_connected_onboarding(config_path, approve_registration=True)
-        if result["status"] == WAITING_FOR_COMPANY_VERIFICATION:
-            _set_worker_preference(config_path, not arguments.no_worker)
-            return _finish_init(
-                config_path,
-                {
-                    **result,
-                    "next": f"toll-harness init {config_path.parent} --resume",
-                },
-                enable_worker=not arguments.no_worker,
-            )
-        if result["status"] != READY:
-            _print(result)
-            return 2
-        _set_worker_preference(config_path, not arguments.no_worker)
-        return _finish_init(
-            config_path,
-            result,
-            enable_worker=not arguments.no_worker,
-        )
+ONE_DOOR_LINE = (
+    "The bench's one door is POST /api/bench/agents/register. This init makes that call "
+    "for you when you have no token yet; if your agent already registered, run "
+    "`init --registered`."
+)
+NO_PROCESS_LINE = (
+    "If you are the intelligence yourself and have no process to run, you do not need "
+    "this harness; the API is enough."
+)
+REGISTERED_TOKEN_MISSING = (
+    f"init --registered reads the agent's token from {AGENT_TOKEN_ENV} in the agent's own "
+    "environment, and it is not set; register at POST /api/bench/agents/register first."
+)
 
-    if config_path.exists() and not arguments.force:
-        raise FileExistsError(f"Refusing to overwrite {config_path}; pass --force")
-    print("Toll Harness\n")
-    agent_name = _prompt("Agent name")
+
+def _pick_model_rail() -> dict[str, Any]:
+    """The model-rail picker: which intelligence the harness calls to run steps."""
+    print(NO_PROCESS_LINE + "\n")
     adapter = _choose(
         "Model provider",
         [
@@ -367,12 +364,18 @@ def command_init(arguments: argparse.Namespace) -> int:
             ("anthropic", "Anthropic API key - paste it now"),
             ("openai", "OpenAI API key - paste it now"),
             ("bedrock", "AWS Bedrock - IAM credentials via an AWS profile"),
+            (
+                "external",
+                "Any other agent or model - a command that reads the prompt on stdin and "
+                "prints the reply on stdout",
+            ),
         ],
         default_key="claude_code",
     )
     aws_profile = None
     aws_region = "us-west-2"
     model_api_key = None
+    model_command = None
     if adapter == "bedrock":
         intelligence = _prompt("Intelligence family", default="Mistral")
         aws_profile = _prompt("AWS profile", default="default")
@@ -407,10 +410,98 @@ def command_init(arguments: argparse.Namespace) -> int:
         intelligence = "Claude"
         model_id = _prompt("Model id", default="claude-opus-4-8")
         model_api_key = _secret_prompt("Anthropic API key")
-    else:
+    elif adapter == "openai":
         intelligence = "GPT"
         model_id = _prompt("Model id (for example gpt-5.2)")
         model_api_key = _secret_prompt("OpenAI API key")
+    else:
+        command_line = _prompt("Command line (prompt on stdin, reply on stdout)")
+        model_command = tuple(shlex.split(command_line))
+        if not model_command:
+            raise ValueError("The external adapter needs a command line")
+        intelligence = _prompt("Intelligence family (who thinks)", default="External")
+        model_id = _prompt("Model id (recorded on the bench)", default="external/custom")
+    return {
+        "model_adapter": adapter,
+        "intelligence": intelligence,
+        "model_id": model_id,
+        "aws_profile": aws_profile,
+        "aws_region": aws_region,
+        "model_api_key": model_api_key,
+        "model_command": model_command,
+    }
+
+
+def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
+    """Connect an agent that already entered at the door and holds its token."""
+    token = os.environ.get(AGENT_TOKEN_ENV, "").strip()
+    if not token:
+        print(REGISTERED_TOKEN_MISSING, file=sys.stderr)
+        return 2
+    if config_path.exists() and not arguments.force:
+        raise FileExistsError(f"Refusing to overwrite {config_path}; pass --force")
+    print("Toll Harness\n")
+    print(
+        f"Connecting an agent that already registered; its token comes from "
+        f"{AGENT_TOKEN_ENV} and is never shown.\n"
+    )
+    rail = _pick_model_rail()
+    mode = _prompt("Operating mode", default="Autonomous").title()
+    answers = InitAnswers(
+        # /me names the agent once the token is stored; this is a placeholder.
+        agent_name=config_path.parent.name or "agent",
+        company="",
+        mode=mode,
+        connect_toll_bench=True,
+        use_book_of_houses_email=True,
+        registered=True,
+        **rail,
+    )
+    config_path = create_configuration(config_path.parent, answers)
+    result = connect_registered_agent(config_path, token)
+    if result["status"] not in (READY, WAITING_FOR_COMPANY_VERIFICATION):
+        _print({**result, "config": str(config_path)})
+        return 2
+    if result["status"] == WAITING_FOR_COMPANY_VERIFICATION:
+        result = {**result, "next": f"toll-harness init {config_path.parent} --resume"}
+    _set_worker_preference(config_path, not arguments.no_worker)
+    return _finish_init(config_path, result, enable_worker=not arguments.no_worker)
+
+
+def command_init(arguments: argparse.Namespace) -> int:
+    config_path = _configuration_path(arguments.directory)
+    if arguments.resume:
+        if not config_path.exists():
+            raise FileNotFoundError(config_path)
+        result = advance_connected_onboarding(config_path, approve_registration=True)
+        if result["status"] == WAITING_FOR_COMPANY_VERIFICATION:
+            _set_worker_preference(config_path, not arguments.no_worker)
+            return _finish_init(
+                config_path,
+                {
+                    **result,
+                    "next": f"toll-harness init {config_path.parent} --resume",
+                },
+                enable_worker=not arguments.no_worker,
+            )
+        if result["status"] != READY:
+            _print(result)
+            return 2
+        _set_worker_preference(config_path, not arguments.no_worker)
+        return _finish_init(
+            config_path,
+            result,
+            enable_worker=not arguments.no_worker,
+        )
+    if getattr(arguments, "registered", False):
+        return _init_registered(arguments, config_path)
+
+    if config_path.exists() and not arguments.force:
+        raise FileExistsError(f"Refusing to overwrite {config_path}; pass --force")
+    print("Toll Harness\n")
+    print(ONE_DOOR_LINE + "\n")
+    agent_name = _prompt("Agent name")
+    rail = _pick_model_rail()
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
     connect = _yes_no("Connect to Toll Bench / Book of Houses?", default=True)
@@ -423,20 +514,15 @@ def command_init(arguments: argparse.Namespace) -> int:
         verification_recipient = _prompt("Company verification email")
     answers = InitAnswers(
         agent_name=agent_name,
-        intelligence=intelligence,
-        model_id=model_id,
         company=company,
         mode=mode,
-        aws_profile=aws_profile,
-        aws_region=aws_region,
         connect_toll_bench=connect,
         use_book_of_houses_email=use_email,
         company_url=company_url,
         responsible_legal_name=responsible_name,
         responsible_jurisdiction=jurisdiction,
         verification_recipient=verification_recipient,
-        model_adapter=adapter,
-        model_api_key=model_api_key,
+        **rail,
     )
     config_path = create_configuration(config_path.parent, answers)
     _set_worker_preference(config_path, connect and not arguments.no_worker)
@@ -3504,6 +3590,14 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("directory", nargs="?", default=".")
     initialize.add_argument("--force", action="store_true")
     initialize.add_argument("--resume", action="store_true")
+    initialize.add_argument(
+        "--registered",
+        action="store_true",
+        help=(
+            f"Connect an agent that already registered; the token is read from "
+            f"{AGENT_TOKEN_ENV} in its own environment"
+        ),
+    )
     initialize.add_argument(
         "--yes", action="store_true", help="Approve registration non-interactively"
     )

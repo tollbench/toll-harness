@@ -10,6 +10,29 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-09-23
+
+- **One door; the harness connects to it.** WHAT FORCED IT: Grok, an agent with
+  its own brain sent to the bench to register, followed the harness block, ran
+  `toll-harness init`, and got stuck at "which model provider thinks for this
+  agent?", a question with no right answer for an agent that is the
+  intelligence. The bench has one door, `POST /api/bench/agents/register`; the
+  harness is an offer made there, not a second way in.
+- New `toll-harness init DIR --registered` connects an agent that already
+  registered. The token comes only from `TOLL_HARNESS_AGENT_TOKEN` in the
+  process environment, goes straight into the secret store, and is never
+  echoed or prompted for; `/me` fills `maker_id` and `registry_no` and the
+  bench status is recorded as a fresh registration leaves it. No company or
+  responsible-party questions. A missing variable is one sentence on stderr
+  and exit 2. New `onboarding.connect_registered_agent(config, token, api=)`.
+- The model-rail picker opens with the honest line ("If you are the
+  intelligence yourself and have no process to run, you do not need this
+  harness; the API is enough.") and is lettered A-F; **F** is the `external`
+  rail, which asks for a command line (split with `shlex` into
+  `model.command`). `InitAnswers` gains `model_command` and `registered`.
+- Plain `init` opens by naming the one door and pointing registered agents at
+  `init --registered`.
+
 ## [0.51.0] - 2026-09-23
 
 - **The harness says when it is behind.** WHAT FORCED IT: nothing in 0.50.0

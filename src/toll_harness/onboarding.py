@@ -22,6 +22,10 @@ READY = "READY"
 VALIDATED = "VALIDATED"
 LOCAL_CONFIGURED = "LOCAL_CONFIGURED"
 TOKEN_SECRET_NAME = "book_of_houses_agent_token"
+# `init --registered` reads the agent's own bearer token from this variable in
+# its own process environment. No human holds, pastes or is prompted for it.
+AGENT_TOKEN_ENV = "TOLL_HARNESS_AGENT_TOKEN"
+MODEL_ADAPTERS = ("bedrock", "anthropic", "openai", "claude_code", "codex", "external")
 
 STANDARD_TOOLS = [
     "state.load",
@@ -89,12 +93,17 @@ class InitAnswers:
     responsible_legal_name: str | None = None
     responsible_jurisdiction: str | None = None
     verification_recipient: str | None = None
-    # bedrock | anthropic | openai | claude_code | codex
+    # bedrock | anthropic | openai | claude_code | codex | external
     model_adapter: str = "bedrock"
     # Pasted at init for the anthropic/openai adapters; written straight into
     # the agent's isolated SecretStore, never into agent.yaml or onboarding
     # state. The subscription rails (claude_code, codex) never carry a key.
     model_api_key: str | None = None
+    # The external adapter's command line, already split into argv parts.
+    model_command: tuple[str, ...] | None = None
+    # True for `init --registered`: the agent already entered at the bench's
+    # door and holds its token, so no registration details are collected.
+    registered: bool = False
 
 
 def _atomic_text(path: Path, value: str, mode: int) -> None:
@@ -196,9 +205,17 @@ def _model_block(answers: InitAnswers) -> dict[str, Any]:
             "model_id": answers.model_id or None,
             "timeout_seconds": 600,
         }
-    raise ValueError(
-        "model_adapter must be one of: bedrock, anthropic, openai, claude_code, codex"
-    )
+    if adapter == "external":
+        command = [str(part) for part in (answers.model_command or ()) if str(part)]
+        if not command:
+            raise ValueError("The external adapter needs model.command (a command line)")
+        return {
+            "adapter": "external",
+            "command": command,
+            "model_id": answers.model_id or None,
+            "timeout_seconds": 600,
+        }
+    raise ValueError("model_adapter must be one of: " + ", ".join(MODEL_ADAPTERS))
 
 
 def create_configuration(destination: Path, answers: InitAnswers) -> Path:
@@ -206,7 +223,11 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         raise ValueError("Operating mode must be exactly Autonomous or Supported")
     if answers.model_api_key and answers.model_adapter not in _API_KEY_SECRET_NAMES:
         raise ValueError("Only the anthropic and openai adapters take a pasted API key")
-    if answers.connect_toll_bench and not all(
+    if answers.model_command and answers.model_adapter != "external":
+        raise ValueError("Only the external adapter takes a model command")
+    if answers.registered and not answers.connect_toll_bench:
+        raise ValueError("A registered agent is a connected agent")
+    if answers.connect_toll_bench and not answers.registered and not all(
         (
             answers.company_url,
             answers.responsible_legal_name,
@@ -283,7 +304,7 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
                     "jurisdiction": answers.responsible_jurisdiction,
                     "contact_ref": answers.verification_recipient,
                 }
-                if answers.connect_toll_bench
+                if answers.connect_toll_bench and not answers.registered
                 else None
             ),
             "idempotency_key": f"toll-harness-register-{agent_id}",
@@ -356,6 +377,62 @@ def _save_connected_metadata(
     if registry_no:
         toll_bench["registry_no"] = registry_no
     save_config(config_path, config)
+
+
+def connect_registered_agent(
+    config_path: str | Path,
+    token: str,
+    *,
+    api: BookOfHousesApiClient | None = None,
+) -> dict[str, Any]:
+    """Connect a configuration to an agent that already registered at the door.
+
+    The token goes straight into the owner-only secret store (never into
+    agent.yaml or onboarding state), /me says who it is, and the maker_id and
+    registry number are recorded with the same status a fresh registration
+    leaves. The rest (reachability, mailbox, company contact) is the ordinary
+    connected onboarding, which never files a second registration once a
+    maker_id is known.
+    """
+    token = (token or "").strip()
+    if not token:
+        raise ValueError(f"{AGENT_TOKEN_ENV} is empty")
+    path = Path(config_path).resolve()
+    config = load_config(path)
+    toll_bench = config.get("toll_bench") or {}
+    if not toll_bench.get("connected"):
+        raise ValueError("This configuration is not connected to Toll Bench")
+    token_name = toll_bench.get("token_secret") or TOKEN_SECRET_NAME
+    secret_store(path, config).set(token_name, token)
+    public_api = api or BookOfHousesApiClient(base_url=toll_bench["base_url"])
+    me = public_api.authenticated(token).me()
+    who = me.get("agent") or {}
+    maker_id = who.get("maker_id")
+    if not maker_id:
+        raise RuntimeError("The agent token authenticated but the bench returned no maker_id")
+    registry_no = who.get("registry_no")
+    handle = str(who.get("handle") or "").strip()
+    if handle:
+        config["agent"]["name"] = handle
+    state = load_onboarding(path, config)
+    state.update(
+        {
+            "status": WAITING_FOR_COMPANY_VERIFICATION,
+            "maker_id": maker_id,
+            "registry_no": registry_no,
+            "token_secret": token_name,
+            "connected_by": "registered",
+        }
+    )
+    save_onboarding(path, config, state)
+    _save_connected_metadata(
+        path,
+        config,
+        status=WAITING_FOR_COMPANY_VERIFICATION,
+        maker_id=maker_id,
+        registry_no=registry_no,
+    )
+    return advance_connected_onboarding(path, approve_registration=False, api=public_api)
 
 
 def advance_connected_onboarding(
