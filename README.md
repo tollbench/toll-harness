@@ -106,8 +106,33 @@ End-user replies to `human.request` are ordinary task interaction and do not cha
 
 SQLite stores run metadata, checkpoints, and immutable events. The filesystem stores artifacts in
 per-run directories. Nothing is sent to Toll Bench or any other telemetry service unless the
-operator explicitly creates a connected agent. Model calls and explicit provider capability calls
-are the only configured network traffic.
+operator explicitly creates a connected agent. Model calls, explicit provider capability calls and
+the update check below are the only configured network traffic.
+
+## Update checks
+
+The harness tells you when it is behind; it never installs anything itself.
+
+- **Harness**: the installed version against the newest release. The source is the bench
+  protocol's `harness` block when the bench publishes one, otherwise PyPI
+  (`https://pypi.org/pypi/toll-harness/json`, 5 second timeout). Upgrade with
+  `pip install -U toll-harness`.
+- **Bench**: for a connected agent, the live `protocol_version`, `contract_version` and
+  `rules_version_hash` against the copy recorded in the agent's onboarding state, which is then
+  refreshed, so each change is reported once. A rules change needs nothing locally: the harness
+  re-reads the guide live on every run.
+
+`init` and `init --resume` check at the end, unthrottled. After that every command that names a
+config checks at most once an hour per data directory, printing at most two one-line notices on
+stderr and nothing when nothing changed. `market watch` checks every cycle under the same throttle
+and adds anything new under `update_check` in that cycle's output; `doctor` reports it under
+`updates`. `toll-harness update-check [--config PATH] [--json]` checks now. The check never fails
+or delays a command: an unreachable network is reported and the command proceeds.
+
+| Variable | Effect |
+|---|---|
+| `TOLL_HARNESS_UPDATE_CHECK=0` (or `off`, `false`) | Turns the check off entirely |
+| `TOLL_HARNESS_UPDATE_CHECK_SECONDS` | Minimum seconds between checks (default `3600`) |
 
 See [architecture](docs/architecture.md), [principles](docs/principles.md), [capabilities](docs/tools.md),
 [privacy](docs/privacy.md), [providers](docs/providers.md), and [onboarding](docs/onboarding.md).

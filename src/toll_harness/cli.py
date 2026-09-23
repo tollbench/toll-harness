@@ -60,6 +60,7 @@ from toll_harness.toll_bench.step import (
     what_changed,
 )
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
+from toll_harness.updates import check_for_updates
 from toll_harness.worker import (
     install_market_worker,
     market_worker_status,
@@ -84,6 +85,24 @@ MARKET_SCAN_TOOLS = [
 
 def _print(value: Any) -> None:
     print(json.dumps(value, indent=2, default=lambda item: getattr(item, "value", str(item))))
+
+
+def _print_update_notices(check: dict[str, Any]) -> None:
+    """One line per notice on stderr, at most two; nothing when nothing changed."""
+    for line in (check.get("notices") or [])[:2]:
+        print(line, file=sys.stderr)
+
+
+def _watch_update_check(config_path: Any) -> dict[str, Any] | None:
+    """The watch loop's per-cycle check; its own throttle governs the network.
+
+    Returns the check only when it found something new, for the cycle's result.
+    """
+    check = check_for_updates(config_path)
+    if check.get("new") and check.get("notices"):
+        _print_update_notices(check)
+        return check
+    return None
 
 
 def _result_payload(result) -> dict[str, Any]:
@@ -297,7 +316,11 @@ def _finish_init(
     payload = {**result, "checks": checks, "canary": canary, "config": str(config_path)}
     if worker is not None:
         payload["worker"] = worker
+    # The first command after an install: check unthrottled, once, here.
+    update_check = check_for_updates(config_path, force=True)
+    payload["update_check"] = update_check
     _print(payload)
+    _print_update_notices(update_check)
     worker_ok = worker is None or worker.get("active") is True
     return 0 if canary["canary_completed"] and worker_ok else 2
 
@@ -498,7 +521,9 @@ def command_doctor(arguments: argparse.Namespace) -> int:
                 checks["market_worker"] = {"ok": worker["active"] and worker["enabled"], **worker}
             except Exception as error:
                 checks["market_worker"] = {"ok": False, "error": str(error)}
+    checks["updates"] = check_for_updates(arguments.config, force=True)
     _print(checks)
+    _print_update_notices(checks["updates"])
     required = checks.get("aws_identity", {}).get("ok")
     if arguments.config:
         required = required and checks.get("runtime", {}).get("ok")
@@ -3155,6 +3180,9 @@ def _market_watch_proposals_only(
                 "error_type": type(error).__name__,
                 "proposals_only": True,
             }
+        update_check = _watch_update_check(arguments.config)
+        if update_check is not None:
+            result = {**result, "update_check": update_check}
         previous_failure = (
             None
             if result.get("ok")
@@ -3258,6 +3286,9 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                 }
             if woken:
                 result = {**result, "wakes": woken}
+            update_check = _watch_update_check(arguments.config)
+            if update_check is not None:
+                result = {**result, "update_check": update_check}
             if result.get("ok"):
                 if result.get("market_scan") or result.get("run") is not None:
                     previous_failure = None
@@ -3439,6 +3470,31 @@ def command_market_worker(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def command_update_check(arguments: argparse.Namespace) -> int:
+    """Forced check; prints the notices (or "up to date"). Always exits 0."""
+    check = check_for_updates(arguments.config, force=True)
+    if arguments.json:
+        _print(check)
+        return 0
+    if check.get("skipped") == "disabled":
+        print("update check is off (TOLL_HARNESS_UPDATE_CHECK)")
+    elif check.get("notices"):
+        for line in check["notices"][:2]:
+            print(line)
+    elif check.get("ok"):
+        print("up to date")
+    else:
+        print(f"update check failed: {_update_error(check)}")
+    return 0
+
+
+def _update_error(check: dict[str, Any]) -> str:
+    for part in (check, check.get("harness") or {}, check.get("bench") or {}):
+        if part.get("error"):
+            return str(part["error"])
+    return "unknown"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="toll-harness")
     parser.add_argument("--version", action="version", version=__version__)
@@ -3541,6 +3597,14 @@ def build_parser() -> argparse.ArgumentParser:
     human_message.add_argument("message")
     human_message.set_defaults(handler=command_human_message)
 
+    update_check = subcommands.add_parser(
+        "update-check",
+        help="Check for a newer toll-harness and a moved Toll Bench contract (never installs)",
+    )
+    update_check.add_argument("--config", help="Agent config (or its directory)")
+    update_check.add_argument("--json", action="store_true")
+    update_check.set_defaults(handler=command_update_check)
+
     bedrock = subcommands.add_parser("bedrock", help="Inspect the Bedrock reference lab")
     bedrock_subcommands = bedrock.add_subparsers(dest="bedrock_command", required=True)
     probe = bedrock_subcommands.add_parser("probe")
@@ -3589,10 +3653,29 @@ def _configure_logging() -> None:
     logger.propagate = False
 
 
+# Commands that run their own forced check, so main() does not run a second one.
+_SELF_CHECKING_HANDLERS = {"command_init", "command_doctor", "command_update_check"}
+
+
+def _startup_update_check(arguments: argparse.Namespace) -> None:
+    """Throttled check before the handler, for any command that names a config."""
+    handler = getattr(arguments, "handler", None)
+    if getattr(handler, "__name__", "") in _SELF_CHECKING_HANDLERS:
+        return
+    config = getattr(arguments, "config", None)
+    if not config:
+        return
+    try:
+        _print_update_notices(check_for_updates(config))
+    except Exception:  # noqa: BLE001 - never block a command on an update check
+        _LOGGER.debug("update check failed", exc_info=True)
+
+
 def main() -> None:
     _configure_logging()
     parser = build_parser()
     arguments = parser.parse_args()
+    _startup_update_check(arguments)
     try:
         raise SystemExit(arguments.handler(arguments))
     except (FileNotFoundError, KeyError, PermissionError, ValueError) as error:

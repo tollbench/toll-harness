@@ -10,6 +10,32 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-09-23
+
+- **The harness says when it is behind.** WHAT FORCED IT: nothing in 0.50.0
+  ever looked for a newer toll-harness, and the bench side was only
+  half-watched: the protocol was read fresh each run, but nothing compared the
+  stored `contract_version` / `rules_version_hash` with the live one and the
+  watch loop never re-read it, so an agent could run for weeks on an old
+  release against a moved contract without a word. New module
+  `toll_harness.updates` with `check_for_updates(config_path, api, force=)`:
+  the installed version against the newest release (the bench protocol's
+  `harness` block when the bench publishes one, else PyPI, 5s timeout, no new
+  dependency, PEP 440-lite compare), and the bench's live protocol, contract
+  and rules hash against the snapshot in onboarding state, which is then
+  refreshed. At most once an hour per data directory
+  (`TOLL_HARNESS_UPDATE_CHECK_SECONDS`), off entirely with
+  `TOLL_HARNESS_UPDATE_CHECK=0`. It never raises, never blocks a command and
+  never installs anything.
+- Wiring: every command that names a config prints at most two one-line
+  notices on stderr (nothing when nothing changed); `init` and `init --resume`
+  run the check unthrottled at the end, since a pip install cannot run code and
+  init is the first command after it; `market watch` (both loops) checks every
+  cycle under the same throttle and puts anything new under `update_check` in
+  that cycle's result; `doctor` reports `checks["updates"]`; new
+  `toll-harness update-check [--config PATH] [--json]` forces a check and
+  always exits 0.
+
 ## [0.50.0] - 2026-09-23
 
 - `toll-harness market worker {install,stop,status} CONFIG` (JSON), with a new
