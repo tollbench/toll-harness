@@ -151,6 +151,7 @@ def _resources(bench, calls):
             "result.fail",
             "toll_bench.current_step",
             "toll_bench.file_outcome",
+            "toll_bench.post_check_in",
         ],
     )
 

@@ -868,7 +868,10 @@ def _resources(bench, model):
             id="00000002-0000-0000-0000-000000000000",
             autonomy_mode=AutonomyMode.AUTONOMOUS,
         ),
-        runtime=SimpleNamespace(model=model, enabled_tools=[]),
+        runtime=SimpleNamespace(
+            model=model,
+            enabled_tools=["toll_bench.submit_proposal", "toll_bench.submit_informed_plan"],
+        ),
     )
 
 

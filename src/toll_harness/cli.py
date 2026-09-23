@@ -1051,6 +1051,17 @@ _BRAKE_BLOCKER_PLAIN = (
 )
 
 
+def _tool_enabled(resources: Any, name: str) -> bool:
+    """True when the agent's configured enabled_tools allow this move.
+
+    The roads that call the provider directly (the draft loop, the step ask,
+    the brake's blocker) make the same moves the runtime's tools make, so
+    they obey the same list. A runtime with no list declares no restriction.
+    """
+    tools = getattr(getattr(resources, "runtime", None), "enabled_tools", None)
+    return tools is None or name in tools
+
+
 def _person_safe(value: str) -> str:
     """The bench's words, minus anything the check-in door would refuse."""
     cleaned = _BARE_URL.sub("a link", str(value or ""))
@@ -1217,8 +1228,12 @@ def _post_the_blocker(
         obligation.get("deal_id") or (step_payload.get("deal") or {}).get("id") or ""
     )
     step_id = str(obligation.get("step_id") or "")
-    if not callable(post) or not deal_id:
-        record["blocker_posted"] = True
+    if (
+        not callable(post)
+        or not deal_id
+        or not _tool_enabled(resources, "toll_bench.post_check_in")
+    ):
+        record["blocker_posted"] = False
         return
     progress = _held_progress(step_payload)
     # The bench's words first; a plain sentence of our own if its words are
@@ -1650,7 +1665,11 @@ def _post_plan_blocker(
     """
     deal_id = str(obligation.get("deal_id") or "")
     post = getattr(getattr(resources, "toll_bench", None), "post_check_in", None)
-    if not deal_id or not callable(post):
+    if (
+        not deal_id
+        or not callable(post)
+        or not _tool_enabled(resources, "toll_bench.post_check_in")
+    ):
         return None
     blocker = _person_safe(
         f"The bench is refusing this plan and the refusal is not mine to fix: "
@@ -2036,7 +2055,8 @@ def _process_market_attention(
     has_unanswered_message = any(item.get("kind") == "unanswered_message" for item in obligations)
     resumed_email = (
         mail_client.resume_pending_send()
-        if not has_unanswered_message and hasattr(mail_client, "resume_pending_send")
+        if (not has_unanswered_message and _tool_enabled(resources, "email.send")
+            and hasattr(mail_client, "resume_pending_send"))
         else None
     )
     if resumed_email and resumed_email.get("status") == "pending_human_approval":
@@ -2477,6 +2497,10 @@ def _file_the_informed_plan_from_draft(
     proposal_id = str(obligation.get("proposal_id") or "")
     if not target_id or not proposal_id:
         return None
+    if not _tool_enabled(resources, "toll_bench.submit_informed_plan"):
+        # The loop files the plan itself; an agent configured without the
+        # plan tool takes the old road, where the runtime holds the list.
+        return None
     # ONE LANGUAGE, AND THIS HARNESS SPEAKS THE NEW ONE (contract 4.0). A
     # bench whose plan door still answers the old way is one this loop cannot
     # read, so the plan goes the old whole-document way instead of spending a
@@ -2570,6 +2594,45 @@ _STEP_ASK_KINDS: frozenset[str] = frozenset(
 # The count itself lives in `_STEP_REFUSALS`, beside the old road's.
 _STEP_ASK_TRIES = _REFUSAL_TRIES
 
+# The bench form each step-ask call files through, and the configured tools
+# that make the same move. The outcome door posts a 100% pulse first.
+_STEP_FORM_TOOLS: dict[str, tuple[str, ...]] = {
+    "propose_act": ("toll_bench.propose_act",),
+    "dismiss_reply": ("toll_bench.dismiss_reply",),
+    "post_step_message": ("toll_bench.reply_step_message",),
+    "post_work_pulse": ("toll_bench.post_check_in",),
+    "wait_outside": ("toll_bench.wait_outside",),
+    "submit_step_outcome": ("toll_bench.file_outcome", "toll_bench.post_check_in"),
+    # An outside move that lands nothing parks the step on the thread.
+    "file_outside_evidence": ("toll_bench.file_evidence", "toll_bench.reply_step_message"),
+}
+
+
+def _permitted_step_state(resources: Any, step_state: dict[str, Any]) -> dict[str, Any]:
+    """The step payload with only the forms this agent's tools allow.
+
+    The step ask turns every published form into a call it makes itself, so
+    a form for a disabled tool is dropped before the ask sees it. With no
+    form left the ask says so and the old road runs under the runtime's list.
+    """
+    submission = step_state.get("submission")
+    if not isinstance(submission, dict):
+        return step_state
+    narrowed = dict(submission)
+    narrowed["actions"] = [
+        action
+        for action in submission.get("actions") or []
+        if not isinstance(action, dict)
+        or all(
+            _tool_enabled(resources, tool)
+            for tool in _STEP_FORM_TOOLS.get(str(action.get("action") or ""), ())
+        )
+    ]
+    if not _tool_enabled(resources, "toll_bench.reply_step_message"):
+        # The parked report rides a thread message.
+        narrowed.pop("worker_status", None)
+    return {**step_state, "submission": narrowed}
+
 
 def _step_ask_available(resources: Any) -> bool:
     provider = getattr(resources, "toll_bench", None)
@@ -2626,7 +2689,7 @@ def _the_step_ask(
     ask = StepAsk(resources.runtime.model, resources.toll_bench)
     outcome = ask.run(
         obligation,
-        step_state,
+        _permitted_step_state(resources, step_state),
         brief=brief,
         act_kinds=_act_kinds_for_the_loop(resources),
         changed=changed,
@@ -2693,6 +2756,19 @@ def _process_market_opportunities(
     and the plan itself comes back on `dry_run_plans` so a release can be
     checked against a live bench without spending an agent's one bid.
     """
+    if not dry_run and not _tool_enabled(resources, "toll_bench.submit_proposal"):
+        # Both roads below end in a filed proposal. An agent configured
+        # without toll_bench.submit_proposal files none.
+        return {
+            "ok": True,
+            "reachability": reachability,
+            "attention_count": 0,
+            "market_scan": True,
+            "candidate_count": 0,
+            "proposal_filed": False,
+            "proposal_tool_disabled": True,
+            "run": None,
+        }
     target_count, candidates, review_targets = _market_scan_candidates(resources)
     guard = _loop_guard(resources)
     parked = []
@@ -2826,7 +2902,8 @@ def _process_market_opportunities(
             ),
         }
 
-    resources.runtime.enabled_tools = list(MARKET_SCAN_TOOLS)
+    scan_tools = [name for name in MARKET_SCAN_TOOLS if _tool_enabled(resources, name)]
+    resources.runtime.enabled_tools = scan_tools
     resources.toll_bench.submit_proposal = (
         validate_instead_of_filing if dry_run else submit_at_most_one
     )

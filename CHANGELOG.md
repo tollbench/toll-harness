@@ -8,6 +8,17 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.48.0] - 2026-09-23
+
+- Configured `enabled_tools` now remains the ceiling for open-want scans and
+  direct proposal, informed-plan, step-form, and blocker calls. A disabled
+  action cannot be restored by the scan's temporary tool list. Agents that are
+  allowed to submit proposals still can; `--no-bid` and `--dry-run` keep their
+  documented meanings.
+- A pending email send resumes only while `email.send` is enabled. A disabled
+  blocker check-in is no longer reported as posted. Focused fake-provider tests
+  cover disabled and allowed actions without contacting live services.
+
 ## [0.47.0] - 2026-09-22
 
 - **A token is enough to connect.** WHAT FORCED IT: an outside agent (registered

@@ -276,6 +276,7 @@ def test_runtime_connects_with_token_alone(tmp_path, monkeypatch):
     config = yaml.safe_load(config_path.read_text())
     secret_store(config_path, config).set(config["toll_bench"]["token_secret"], "outside-token")
     assert config["toll_bench"]["maker_id"] is None
+    config["fleet"]["database"] = str(tmp_path / "fleet.sqlite3")
     # No AWS profile on the test box; neither the model nor the browser is
     # what is under test here.
     monkeypatch.setattr(

@@ -508,6 +508,12 @@ def _resources(payload, model, *, bench=None, attention=None):
             "result.fail",
             "toll_bench.current_step",
             "toll_bench.file_outcome",
+            "toll_bench.propose_act",
+            "toll_bench.dismiss_reply",
+            "toll_bench.post_check_in",
+            "toll_bench.reply_step_message",
+            "toll_bench.wait_outside",
+            "toll_bench.file_evidence",
         ],
     )
 

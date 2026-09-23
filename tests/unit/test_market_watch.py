@@ -22,6 +22,199 @@ class _Resources:
         self.closed = True
 
 
+class _Stop(Exception):
+    pass
+
+
+def _scan_resources(enabled_tools, *, model=None):
+    calls = []
+    toll_bench = SimpleNamespace(
+        list_targets=lambda: calls.append("list_targets")
+        or {"targets": [{"target_id": "target-1", "want": "a want", "round": 1}]},
+        submit_proposal=lambda *a, **k: calls.append("submit_proposal")
+        or {"ok": True, "proposal_id": "proposal-1"},
+        validate_proposal=lambda *a, **k: calls.append("validate_proposal") or {"ok": True},
+        read_brief=lambda _target_id: {"brief": {}},
+        list_act_kinds=lambda: {},
+    )
+    runtime = SimpleNamespace(enabled_tools=list(enabled_tools), model=model)
+    resources = SimpleNamespace(
+        toll_bench=toll_bench, runtime=runtime, agent_identity=None, store=None
+    )
+    return resources, calls
+
+
+class _NoDraftLoop:
+    def __init__(self, *_args, **_kwargs):
+        raise AssertionError("the draft loop must not run")
+
+
+def test_scan_files_nothing_when_submit_proposal_is_not_enabled(monkeypatch):
+    monkeypatch.setattr(cli, "DraftLoop", _NoDraftLoop)
+    resources, calls = _scan_resources(["state.save", "toll_bench.read_brief"], model=object())
+
+    result = cli._process_market_opportunities(resources, {"ok": True})
+
+    assert result["proposal_tool_disabled"] is True
+    assert result["proposal_filed"] is False
+    assert calls == []
+
+
+def test_scan_draft_road_still_files_when_submit_proposal_is_enabled(monkeypatch):
+    seen = {}
+
+    class _DraftLoop:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, target_id, **kwargs):
+            seen["target_id"], seen["file"] = target_id, kwargs.get("file")
+            return {"ok": True, "filed": True}
+
+    monkeypatch.setattr(cli, "DraftLoop", _DraftLoop)
+    resources, _calls = _scan_resources(["toll_bench.submit_proposal"], model=object())
+
+    result = cli._process_market_opportunities(resources, {"ok": True})
+
+    assert result["proposal_filed"] is True
+    assert seen == {"target_id": "target-1", "file": True}
+
+
+@pytest.mark.parametrize(
+    ("configured", "dry_run", "expect_submit"),
+    [
+        (["state.save", "result.complete", "toll_bench.read_brief"], True, False),
+        (["state.save", "result.complete", "toll_bench.submit_proposal"], False, True),
+    ],
+)
+def test_scan_old_road_never_widens_the_configured_tools(configured, dry_run, expect_submit):
+    resources, calls = _scan_resources(configured)
+    original_submit = resources.toll_bench.submit_proposal
+    seen = {}
+
+    def start(_goal, _mode):
+        seen["tools"] = list(resources.runtime.enabled_tools)
+        raise _Stop
+
+    resources.runtime.start = start
+
+    with pytest.raises(_Stop):
+        cli._process_market_opportunities(resources, {"ok": True}, dry_run=dry_run)
+
+    assert set(seen["tools"]) <= set(configured)
+    assert ("toll_bench.submit_proposal" in seen["tools"]) is expect_submit
+    assert resources.runtime.enabled_tools == configured
+    assert resources.toll_bench.submit_proposal is original_submit
+    assert "submit_proposal" not in calls
+
+
+def test_plan_draft_loop_does_not_run_without_submit_informed_plan(monkeypatch):
+    monkeypatch.setattr(cli, "DraftLoop", _NoDraftLoop)
+    resources = SimpleNamespace(
+        runtime=SimpleNamespace(enabled_tools=["state.save"], model=object()),
+        toll_bench=SimpleNamespace(),
+    )
+    obligation = {"kind": "file_informed_plan", "target_id": "t-1", "proposal_id": "p-1"}
+
+    planned = cli._file_the_informed_plan_from_draft(resources, obligation, {"ok": True}, 1, 5)
+
+    assert planned is None
+
+
+def _step_ask_resources(enabled_tools):
+    calls = []
+    model_calls = []
+
+    def invoke(**_kwargs):
+        model_calls.append(1)
+        return SimpleNamespace(
+            tool_calls=[SimpleNamespace(name="reply_step_message", arguments={"reply": "hello"})],
+            text="",
+            usage=None,
+        )
+
+    toll_bench = SimpleNamespace(
+        reply_step_message=lambda *args: calls.append(("reply_step_message", args))
+        or {"ok": True},
+        file_outcome=lambda *args: calls.append(("file_outcome", args)) or {"ok": True},
+        list_act_kinds=lambda: {},
+    )
+    resources = SimpleNamespace(
+        toll_bench=toll_bench,
+        runtime=SimpleNamespace(
+            enabled_tools=list(enabled_tools), model=SimpleNamespace(invoke=invoke)
+        ),
+        store=None,
+    )
+    return resources, calls, model_calls
+
+
+_UNREAD_STEP = {
+    "current_step": {"id": "step-1", "number": 2, "state": "agent_working"},
+    "step_thread": {"unread_from_person": 1, "messages": [{"id": "m-1", "who": "person"}]},
+    "submission": {"actions": [{"action": "post_step_message", "schema": {"type": "object"}}]},
+    "deal": {"id": "deal-1"},
+}
+
+
+def test_step_ask_makes_no_disabled_call_and_takes_the_old_road(monkeypatch):
+    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
+    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
+    resources, calls, model_calls = _step_ask_resources(["toll_bench.current_step"])
+    obligation = {"kind": "unanswered_message", "deal_id": "deal-1", "step_id": "step-1"}
+
+    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1, 5)
+
+    assert asked is None
+    assert calls == []
+    assert model_calls == []
+
+
+def test_step_ask_still_answers_when_the_reply_tool_is_enabled(monkeypatch):
+    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
+    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
+    resources, calls, _model_calls = _step_ask_resources(["toll_bench.reply_step_message"])
+    obligation = {"kind": "unanswered_message", "deal_id": "deal-1", "step_id": "step-1"}
+
+    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1, 5)
+
+    assert asked["ok"] is True
+    assert [name for name, _args in calls] == ["reply_step_message"]
+
+
+def test_outcome_form_needs_both_outcome_and_check_in_tools():
+    resources = SimpleNamespace(
+        runtime=SimpleNamespace(enabled_tools=["toll_bench.file_outcome"])
+    )
+    state = {
+        "submission": {
+            "actions": [{"action": "submit_step_outcome"}, {"action": "post_work_pulse"}],
+            "worker_status": {"schema": {}},
+        }
+    }
+
+    narrowed = cli._permitted_step_state(resources, state)
+
+    assert narrowed["submission"]["actions"] == []
+    assert "worker_status" not in narrowed["submission"]
+    assert len(state["submission"]["actions"]) == 2
+
+
+@pytest.mark.parametrize(("enabled", "posted"), [([], False), (["toll_bench.post_check_in"], True)])
+def test_brake_blocker_obeys_post_check_in(enabled, posted):
+    posts = []
+    resources = SimpleNamespace(
+        runtime=SimpleNamespace(enabled_tools=enabled),
+        toll_bench=SimpleNamespace(post_check_in=lambda *args: posts.append(args) or {"ok": True}),
+    )
+    record = {"code": "stand_in", "road": 3, "sentence": "Refused."}
+
+    cli._post_the_blocker(resources, {"deal_id": "deal-1", "step_id": "step-1"}, {}, record)
+
+    assert bool(posts) is posted
+    assert record["blocker_posted"] is posted
+
+
 def test_market_watch_keeps_running_after_failed_cycle(monkeypatch):
     resources = _Resources()
     monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
@@ -197,14 +390,18 @@ def test_unanswered_step_message_runs_before_pending_email_resume():
     assert resumed == []
 
 
-def test_pending_email_on_other_step_defers_instead_of_crashing():
-    # A pending email approval parked on one step must not crash the whole watch
-    # iteration when an obligation arrives on a different deal step.
+@pytest.mark.parametrize(("enabled", "expect_resume"), [([], False), (["email.send"], True)])
+def test_pending_email_on_other_step_defers_instead_of_crashing(enabled, expect_resume):
+    # A pending email approval parked on another step does not crash this cycle.
+    # It may resume only while email.send is configured.
+    resumed = []
+
     class MailClient:
         def configure_send_context(self, **_kwargs):
             raise RuntimeError("A different deal step has an unresolved pending email send")
 
         def resume_pending_send(self):
+            resumed.append(True)
             return {"status": "pending_human_approval"}
 
     toll_bench = SimpleNamespace(
@@ -222,7 +419,7 @@ def test_pending_email_on_other_step_defers_instead_of_crashing():
     )
     runtime = SimpleNamespace(
         email_provider=SimpleNamespace(client=MailClient()),
-        enabled_tools=[],
+        enabled_tools=enabled,
         start=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("must not invoke model")
         ),
@@ -234,9 +431,9 @@ def test_pending_email_on_other_step_defers_instead_of_crashing():
     result = cli._process_market_attention(resources, wait=20)
 
     assert result["ok"] is True
-    # The blocked deal step is deferred; the parked send is surfaced for approval
-    # and no model run is triggered.
-    assert result.get("email", {}).get("status") == "pending_human_approval"
+    # The blocked deal step is deferred and no model run is triggered.
+    assert resumed == ([True] if expect_resume else [])
+    assert (result.get("email", {}).get("status") == "pending_human_approval") is expect_resume
 
 
 def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():
@@ -266,7 +463,9 @@ def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():
             self.submit_calls += 1
             return {"ok": True, "proposal_id": f"proposal-{self.submit_calls}"}
 
-    runtime = SimpleNamespace(enabled_tools=["email.send", "toll_bench.attention"])
+    runtime = SimpleNamespace(
+        enabled_tools=["email.send", "toll_bench.attention", *cli.MARKET_SCAN_TOOLS]
+    )
     toll_bench = TollBench()
 
     def start(goal, mode):
@@ -317,7 +516,7 @@ def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():
     # RULE 243: the old road asks for the same SEVEN FIELDS now.
     assert "ONE PROPOSAL" in observed["goal"]
     assert "valid to submit no proposal" not in observed["goal"]
-    assert runtime.enabled_tools == ["email.send", "toll_bench.attention"]
+    assert runtime.enabled_tools == ["email.send", "toll_bench.attention", *cli.MARKET_SCAN_TOOLS]
 
 
 def test_market_scan_does_not_retire_target_without_a_filed_proposal():
@@ -1420,6 +1619,7 @@ def test_a_plan_blocked_on_a_deal_puts_the_refusal_on_the_check_in(monkeypatch):
     resources.toll_bench.post_check_in = lambda deal_id, pulse, key: (
         pulses.append((deal_id, pulse, key)) or {"ok": True}
     )
+    resources.runtime.enabled_tools.append("toll_bench.post_check_in")
 
     for _ in range(2):
         result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
