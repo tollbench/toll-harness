@@ -297,6 +297,283 @@ def test_market_watch_once_scans_when_attention_is_idle(monkeypatch):
     assert resources.closed is True
 
 
+_BROAD_PATHS = (
+    "_process_wakes",
+    "_process_market_attention",
+    "_report_worker_status",
+    "_new_inbound_email_marker",
+    "_earliest_wake_at",
+)
+
+
+def _forbid_broad_paths(monkeypatch):
+    entered = []
+
+    def spy(name):
+        def forbidden(*_args, **_kwargs):
+            entered.append(name)
+            raise AssertionError(f"{name} must not run in proposal-only mode")
+
+        return forbidden
+
+    for name in _BROAD_PATHS:
+        monkeypatch.setattr(cli, name, spy(name))
+    return entered
+
+
+def _proposal_only_resources(status=None, enabled_tools=("toll_bench.submit_proposal",)):
+    calls = []
+
+    def forbidden(name):
+        def call(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} must not be called in proposal-only mode")
+
+        return call
+
+    def read_status():
+        calls.append("status")
+        if isinstance(status, Exception):
+            raise status
+        return {"ok": True} if status is None else status
+
+    toll_bench = SimpleNamespace(
+        status=read_status,
+        ensure_reachable=forbidden("ensure_reachable"),
+        attention=forbidden("attention"),
+        acknowledge_ping=forbidden("acknowledge_ping"),
+        report_worker_status=forbidden("report_worker_status"),
+        current_step=forbidden("current_step"),
+        list_targets=lambda: calls.append("list_targets") or {"targets": []},
+        submit_proposal=forbidden("submit_proposal"),
+    )
+    email_provider = SimpleNamespace(
+        list=forbidden("email.list"),
+        client=SimpleNamespace(resume_pending_send=forbidden("resume_pending_send")),
+    )
+    resources = _Resources()
+    resources.toll_bench = toll_bench
+    resources.runtime = SimpleNamespace(
+        enabled_tools=list(enabled_tools),
+        email_provider=email_provider,
+        resume=forbidden("runtime.resume"),
+        start=forbidden("runtime.start"),
+        model=None,
+    )
+    resources.agent_identity = None
+    resources.store = None
+    return resources, calls
+
+
+def _proposal_only_arguments(**overrides):
+    values = dict(
+        config="agent.yaml",
+        wait=20,
+        interval=2.0,
+        scan_interval=300.0,
+        no_bid=False,
+        dry_run=False,
+        once=True,
+        proposals_only=True,
+    )
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_default_watch_still_wakes_and_processes_attention_before_scanning(monkeypatch):
+    resources = _Resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    order = []
+    monkeypatch.setattr(cli, "_process_wakes", lambda _resources: order.append("wakes") or [])
+    monkeypatch.setattr(
+        cli,
+        "_process_market_attention",
+        lambda _resources, _wait, previous_failure=None, **_options: order.append("attention")
+        or {"ok": True, "attention_count": 0, "reachability": {"ok": True}, "run": None},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_process_market_opportunities",
+        lambda *_args, **_kwargs: order.append("scan") or {"ok": True, "market_scan": True},
+    )
+
+    result = cli.command_market_watch(_proposal_only_arguments(proposals_only=False))
+
+    assert result == 0
+    assert order == ["wakes", "attention", "scan"]
+
+
+def test_proposals_only_scans_without_any_broad_path(monkeypatch):
+    entered = _forbid_broad_paths(monkeypatch)
+    resources, calls = _proposal_only_resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    scans = []
+
+    def scan(_resources, reachability, previous_failure=None, dry_run=False):
+        scans.append((reachability, previous_failure, dry_run))
+        return {"ok": True, "market_scan": True, "candidate_count": 1, "proposal_filed": True}
+
+    monkeypatch.setattr(cli, "_process_market_opportunities", scan)
+
+    result = cli.command_market_watch(_proposal_only_arguments())
+
+    assert result == 0
+    assert scans == [({"ok": True, "source": "status"}, None, False)]
+    assert calls == ["status"]
+    assert entered == []
+    assert resources.closed is True
+
+
+def test_proposals_only_runs_allowed_fake_proposal_road(monkeypatch):
+    entered = _forbid_broad_paths(monkeypatch)
+    resources, calls = _scan_resources(["toll_bench.submit_proposal"], model=object())
+    resources.toll_bench.status = lambda: calls.append("status") or {"ok": True}
+    resources.toll_bench.ensure_reachable = lambda: pytest.fail("ping path entered")
+    resources.close = lambda: calls.append("close")
+    filed = []
+
+    class _DraftLoop:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, target_id, **kwargs):
+            filed.append((target_id, kwargs["file"]))
+            resources.toll_bench.submit_proposal(target_id, {}, "fake-key")
+            return {"ok": True, "filed": True}
+
+    monkeypatch.setattr(cli, "DraftLoop", _DraftLoop)
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+
+    assert cli.command_market_watch(_proposal_only_arguments()) == 0
+    assert filed == [("target-1", True)]
+    assert calls == ["status", "list_targets", "submit_proposal", "close"]
+    assert entered == []
+
+
+@pytest.mark.parametrize(
+    "status",
+    [RuntimeError("bench unreachable"), {"ok": False, "error": "unauthorized"}],
+)
+def test_proposals_only_failed_status_read_is_a_failed_cycle_and_nothing_else(
+    monkeypatch, status
+):
+    entered = _forbid_broad_paths(monkeypatch)
+    resources, calls = _proposal_only_resources(status=status)
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(
+        cli,
+        "_process_market_opportunities",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not scan")),
+    )
+
+    result = cli.command_market_watch(_proposal_only_arguments())
+
+    assert result == 2
+    assert calls == ["status"]
+    assert entered == []
+    assert resources.closed is True
+
+
+def test_proposals_only_scan_failure_falls_into_no_broad_path(monkeypatch):
+    entered = _forbid_broad_paths(monkeypatch)
+    resources, calls = _proposal_only_resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+
+    def scan(*_args, **_kwargs):
+        raise RuntimeError("scan blew up")
+
+    monkeypatch.setattr(cli, "_process_market_opportunities", scan)
+
+    result = cli.command_market_watch(_proposal_only_arguments())
+
+    assert result == 2
+    assert calls == ["status"]
+    assert entered == []
+
+
+def test_proposals_only_keeps_scanning_on_the_scan_cadence(monkeypatch):
+    entered = _forbid_broad_paths(monkeypatch)
+    resources, _calls = _proposal_only_resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    scans = []
+
+    def scan(_resources, _reachability, previous_failure=None, dry_run=False):
+        scans.append(previous_failure)
+        if len(scans) == 1:
+            return {"ok": False, "error": "bench_refused", "run": None}
+        return {"ok": True, "market_scan": True}
+
+    monkeypatch.setattr(cli, "_process_market_opportunities", scan)
+    sleeps = []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 2:
+            raise _Stop
+
+    monkeypatch.setattr(cli.time, "sleep", sleep)
+
+    with pytest.raises(_Stop):
+        cli.command_market_watch(_proposal_only_arguments(once=False, scan_interval=120.0))
+
+    assert scans == [None, {"error": "bench_refused", "error_type": None}]
+    assert sleeps == [120.0, 120.0]
+    assert entered == []
+    assert resources.closed is True
+
+
+def test_proposals_only_disabled_submit_proposal_still_files_nothing(monkeypatch):
+    entered = _forbid_broad_paths(monkeypatch)
+    monkeypatch.setattr(cli, "DraftLoop", _NoDraftLoop)
+    resources, calls = _proposal_only_resources(enabled_tools=["state.save"])
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+
+    result = cli.command_market_watch(_proposal_only_arguments())
+
+    assert result == 0
+    assert calls == ["status"]
+    assert entered == []
+
+
+def test_proposals_only_dry_run_reaches_the_scan_as_validation_only(monkeypatch):
+    _forbid_broad_paths(monkeypatch)
+    resources, _calls = _proposal_only_resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "_process_market_opportunities",
+        lambda _resources, _reachability, previous_failure=None, dry_run=False: seen.append(
+            dry_run
+        )
+        or {"ok": True, "market_scan": True},
+    )
+
+    assert cli.command_market_watch(_proposal_only_arguments(dry_run=True)) == 0
+    assert seen == [True]
+
+
+def test_proposals_only_refuses_no_bid_before_building_the_runtime(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "build_runtime",
+        lambda _config: (_ for _ in ()).throw(AssertionError("must not build")),
+    )
+
+    with pytest.raises(ValueError, match="--no-bid"):
+        cli.command_market_watch(_proposal_only_arguments(no_bid=True))
+
+
+def test_parser_accepts_proposals_only_and_defaults_it_off():
+    parser = cli.build_parser()
+
+    on = parser.parse_args(["market", "watch", "agent.yaml", "--proposals-only"])
+    off = parser.parse_args(["market", "watch", "agent.yaml"])
+
+    assert on.proposals_only is True
+    assert off.proposals_only is False
+
+
 def test_paid_finalist_waits_for_payout_without_invoking_model():
     toll_bench = SimpleNamespace(
         ensure_reachable=lambda: {"ok": True},

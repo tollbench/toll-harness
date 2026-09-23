@@ -2824,8 +2824,8 @@ def _process_market_opportunities(
     # is a form the bench hands over then.
     goal = (
         "Respond to the single open Toll Bench want below with ONE PROPOSAL and "
-        "submit it once with a stable idempotency key. Existing obligations were "
-        "checked first and none are pending. Do not merely review or summarize the "
+        "submit it once with a stable idempotency key. This scan handles new wants "
+        "only; do not service existing obligations here. Do not merely review or summarize the "
         "want. Never bid on a target whose brief reports your_bid, and do not "
         "inspect targets outside this candidate set. Do not request human input.\n"
         "A PROPOSAL IS SEVEN FIELDS AND NOTHING ELSE. It is your short answer to "
@@ -3050,8 +3050,119 @@ def _process_wakes(resources: Any) -> list[dict[str, Any]]:
     return woken
 
 
+def _proposal_only_cycle(
+    resources: Any,
+    previous_failure: dict[str, Any] | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """One `--proposals-only` cycle: the agent's own status read, then the scan.
+
+    No wakes, no attention, no worker status, no mail and no ping
+    acknowledgement. The status GET stands in for `ensure_reachable`, which may
+    answer pings; a failed read is a failed cycle and nothing else runs.
+    """
+    provider = getattr(resources, "toll_bench", None)
+    read_status = getattr(provider, "status", None)
+    if provider is None or not callable(read_status):
+        return {
+            "ok": False,
+            "error": "status_unavailable",
+            "proposals_only": True,
+            "run": None,
+        }
+    try:
+        status = read_status()
+    except BookOfHousesApiError as error:
+        return {
+            "ok": False,
+            "error": "status_read_failed",
+            "status": error.status,
+            "code": error.code,
+            "message": error.message,
+            "proposals_only": True,
+            "run": None,
+        }
+    except Exception as error:  # noqa: BLE001 - a failed read is a failed cycle
+        return {
+            "ok": False,
+            "error": "status_read_failed",
+            "error_type": type(error).__name__,
+            "proposals_only": True,
+            "run": None,
+        }
+    if not isinstance(status, dict) or status.get("ok") is False:
+        return {
+            "ok": False,
+            "error": "status_read_failed",
+            "proposals_only": True,
+            "run": None,
+        }
+    scanned = _process_market_opportunities(
+        resources,
+        {"ok": True, "source": "status"},
+        previous_failure=previous_failure,
+        dry_run=dry_run,
+    )
+    return {**scanned, "proposals_only": True}
+
+
+def _market_watch_proposals_only(
+    arguments: argparse.Namespace, resources: Any
+) -> int:
+    """Scan open wants and file proposals, on the scan cadence, and nothing else."""
+    scan_interval = max(float(getattr(arguments, "scan_interval", 300.0)), 0.0)
+    dry_run = bool(getattr(arguments, "dry_run", False))
+    previous_failure = None
+    while True:
+        try:
+            result = _proposal_only_cycle(resources, previous_failure, dry_run)
+        except BookOfHousesApiError as error:
+            result = {
+                "ok": False,
+                "error": "book_of_houses_api_error",
+                "status": error.status,
+                "code": error.code,
+                "message": error.message,
+                "proposals_only": True,
+            }
+        except Exception as error:  # noqa: BLE001 - a watcher must survive one bad cycle
+            _LOGGER.exception("Proposal-only market watch iteration failed")
+            result = {
+                "ok": False,
+                "error": "market_watch_iteration_failed",
+                "error_type": type(error).__name__,
+                "proposals_only": True,
+            }
+        previous_failure = (
+            None
+            if result.get("ok")
+            else (
+                (result.get("run") or {}).get("result")
+                or {"error": result.get("error"), "error_type": result.get("error_type")}
+            )
+        )
+        _print(result)
+        if arguments.once:
+            return 0 if result.get("ok") else 2
+        # Every cycle is a scan, so the scan interval is the floor. No wake
+        # timers are read in this mode.
+        retry = float(result.get("retry_after_seconds") or (0.0 if result.get("ok") else 30.0))
+        time.sleep(max(arguments.interval, scan_interval, retry))
+
+
 def command_market_watch(arguments: argparse.Namespace) -> int:
+    proposals_only = bool(getattr(arguments, "proposals_only", False))
+    if proposals_only and getattr(arguments, "no_bid", False):
+        raise ValueError(
+            "--proposals-only files proposals and does nothing else; "
+            "--no-bid would leave it nothing to do"
+        )
     resources = build_runtime(arguments.config)
+    if proposals_only:
+        try:
+            return _market_watch_proposals_only(arguments, resources)
+        finally:
+            resources.close()
     stall_threshold = _configured_stall_threshold(arguments.config)
     previous_failure = None
     previous_scan_failure = None
@@ -3351,6 +3462,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Plan and validate at the bench's door, but file nothing",
+    )
+    watch.add_argument(
+        "--proposals-only",
+        action="store_true",
+        help=(
+            "Only scan open wants and file proposals, every --scan-interval: no "
+            "wakes, obligations, email, worker status or ping acknowledgement. "
+            "Reads the agent's own status for reachability. Incompatible with --no-bid; "
+            "with --dry-run it validates instead of filing"
+        ),
     )
     watch.set_defaults(handler=command_market_watch)
 

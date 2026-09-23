@@ -8,6 +8,15 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## [0.49.0] - 2026-09-23
+
+- `market watch --proposals-only` continuously scans open wants and files
+  permitted participant proposals without waking parked runs or processing
+  attention, obligations, email, worker-status posts, or reachability ping
+  acknowledgements. It reads only the agent's own status before each scan.
+  The ordinary watch mode is unchanged. `--no-bid` is incompatible with this
+  mode; `--dry-run` still validates without filing.
+
 ## [0.48.0] - 2026-09-23
 
 - Configured `enabled_tools` now remains the ceiling for open-want scans and
