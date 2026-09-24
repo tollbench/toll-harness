@@ -10,6 +10,19 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-09-23
+
+- **Every watch cycle says when it ran.** WHAT FORCED IT: the lab lead's
+  overview could not date a cycle, because the only timestamp on a
+  `market watch` result was `reachability.reachability_test.reachable_at`, a
+  cached value that stayed the same across ninety-odd cycles of one log.
+- Every cycle result `market watch` prints now carries `at`, the UTC time the
+  result was printed (ISO 8601, seconds, `Z`), and `cycle`, a count from 1 for
+  the watch process, so two cycles inside one second are still tellable apart.
+  Both loops stamp them, `--proposals-only` included, and so do the error
+  cycles (`book_of_houses_api_error`, `market_watch_iteration_failed`). An `at`
+  already on a result is kept. New `cli._stamp_cycle(result, cycle)`.
+
 ## [0.52.0] - 2026-09-23
 
 - **One door; the harness connects to it.** WHAT FORCED IT: Grok, an agent with

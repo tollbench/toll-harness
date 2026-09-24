@@ -2055,3 +2055,92 @@ def test_stall_threshold_comes_from_the_agent_configuration(tmp_path):
 
     assert cli._configured_stall_threshold(config) == 9
     assert cli._configured_stall_threshold(tmp_path / "missing.yaml") == 5
+
+
+def _assert_dated_cycles(printed):
+    from datetime import datetime
+
+    assert [result["cycle"] for result in printed] == list(range(1, len(printed) + 1))
+    for result in printed:
+        assert result["at"].endswith("Z")
+        datetime.strptime(result["at"], "%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_two_cycles(monkeypatch, arguments):
+    printed = []
+    monkeypatch.setattr(cli, "_print", printed.append)
+    sleeps = []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 2:
+            raise _Stop
+
+    monkeypatch.setattr(cli.time, "sleep", sleep)
+    with pytest.raises(_Stop):
+        cli.command_market_watch(arguments)
+    return printed
+
+
+def test_every_watch_cycle_carries_its_time_and_number(monkeypatch):
+    resources = _Resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(cli, "_process_wakes", lambda _resources: [])
+    monkeypatch.setattr(cli, "_earliest_wake_at", lambda _resources: None)
+    monkeypatch.setattr(
+        cli,
+        "_process_market_attention",
+        lambda _resources, _wait, previous_failure=None, **_options: {
+            "ok": True,
+            "attention_count": 0,
+            "run": None,
+        },
+    )
+
+    arguments = _proposal_only_arguments(proposals_only=False, once=False)
+    printed = _run_two_cycles(monkeypatch, arguments)
+
+    assert len(printed) == 2
+    _assert_dated_cycles(printed)
+
+
+def test_an_api_error_cycle_is_dated_and_numbered_too(monkeypatch):
+    from toll_harness.email.book_of_houses import BookOfHousesApiError
+
+    resources = _Resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(cli, "_process_wakes", lambda _resources: [])
+    monkeypatch.setattr(cli, "_earliest_wake_at", lambda _resources: None)
+
+    def refuse(*_args, **_kwargs):
+        raise BookOfHousesApiError(503, "unavailable", "down for a moment")
+
+    monkeypatch.setattr(cli, "_process_market_attention", refuse)
+
+    arguments = _proposal_only_arguments(proposals_only=False, once=False)
+    printed = _run_two_cycles(monkeypatch, arguments)
+
+    assert [result["error"] for result in printed] == ["book_of_houses_api_error"] * 2
+    _assert_dated_cycles(printed)
+
+
+def test_a_proposals_only_cycle_is_dated_and_numbered(monkeypatch):
+    _forbid_broad_paths(monkeypatch)
+    resources, _calls = _proposal_only_resources()
+    monkeypatch.setattr(cli, "build_runtime", lambda _config: resources)
+    monkeypatch.setattr(
+        cli,
+        "_process_market_opportunities",
+        lambda *_args, **_kwargs: {"ok": True, "market_scan": True},
+    )
+
+    printed = _run_two_cycles(monkeypatch, _proposal_only_arguments(once=False))
+
+    assert all(result["proposals_only"] for result in printed)
+    _assert_dated_cycles(printed)
+
+
+def test_a_cycle_that_already_carries_a_time_keeps_it():
+    stamped = cli._stamp_cycle({"ok": True, "at": "2026-01-01T00:00:00Z"}, 7)
+
+    assert stamped == {"ok": True, "at": "2026-01-01T00:00:00Z", "cycle": 7}

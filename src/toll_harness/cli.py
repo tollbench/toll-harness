@@ -3239,6 +3239,21 @@ def _proposal_only_cycle(
     return {**scanned, "proposals_only": True}
 
 
+def _stamp_cycle(result: dict[str, Any], cycle: int) -> dict[str, Any]:
+    """Date and number one watch cycle's result so a reader of the log can tell cycles apart.
+
+    ``at`` is the wall-clock time the cycle's result was printed (UTC, seconds,
+    ``Z``); ``cycle`` counts from 1 for this watch process. An ``at`` already on
+    the result is kept.
+    """
+    stamped = dict(result)
+    stamped.setdefault(
+        "at", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    stamped["cycle"] = cycle
+    return stamped
+
+
 def _market_watch_proposals_only(
     arguments: argparse.Namespace, resources: Any
 ) -> int:
@@ -3246,7 +3261,9 @@ def _market_watch_proposals_only(
     scan_interval = max(float(getattr(arguments, "scan_interval", 300.0)), 0.0)
     dry_run = bool(getattr(arguments, "dry_run", False))
     previous_failure = None
+    cycle = 0
     while True:
+        cycle += 1
         try:
             result = _proposal_only_cycle(resources, previous_failure, dry_run)
         except BookOfHousesApiError as error:
@@ -3277,6 +3294,7 @@ def _market_watch_proposals_only(
                 or {"error": result.get("error"), "error_type": result.get("error_type")}
             )
         )
+        result = _stamp_cycle(result, cycle)
         _print(result)
         if arguments.once:
             return 0 if result.get("ok") else 2
@@ -3306,8 +3324,10 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
     scan_interval = max(float(getattr(arguments, "scan_interval", 300.0)), 0.0)
     bidding_enabled = not bool(getattr(arguments, "no_bid", False))
     dry_run = bool(getattr(arguments, "dry_run", False))
+    cycle = 0
     try:
         while True:
+            cycle += 1
             woken: list[dict[str, Any]] = []
             try:
                 # Wake parked runs first: due timers and new inbound mail are
@@ -3384,6 +3404,7 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                     "error": result.get("error"),
                     "error_type": result.get("error_type"),
                 }
+            result = _stamp_cycle(result, cycle)
             _print(result)
             if arguments.once:
                 return 0 if result.get("ok") else 2
