@@ -56,6 +56,14 @@ from toll_harness.onboarding import (
     save_config as save_onboarding_config,
 )
 from toll_harness.operator.channel import OperatorChannel
+from toll_harness.service import (
+    HAND_RUN_NOTE,
+    LAUNCHD,
+    ServiceUnsupported,
+    install_service,
+    service_status,
+    uninstall_service,
+)
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft
@@ -67,7 +75,7 @@ from toll_harness.toll_bench.step import (
     what_changed,
 )
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
-from toll_harness.updates import check_for_updates
+from toll_harness.updates import check_for_updates, service_notice
 from toll_harness.worker import (
     install_market_worker,
     market_worker_status,
@@ -635,6 +643,7 @@ def command_doctor(arguments: argparse.Namespace) -> int:
             checks["agentcore_browser"] = {"ok": False, "error": str(error)}
     except Exception as error:
         checks["aws_identity"] = {"ok": False, "error": str(error)}
+    service_line = None
     if arguments.config and checks.get("config", {}).get("ok"):
         try:
             checks["runtime"] = {"ok": True, **_test_model_and_browser(Path(arguments.config))}
@@ -649,9 +658,18 @@ def command_doctor(arguments: argparse.Namespace) -> int:
                 checks["market_worker"] = {"ok": worker["active"] and worker["enabled"], **worker}
             except Exception as error:
                 checks["market_worker"] = {"ok": False, "error": str(error)}
+        try:
+            checks["service"] = service_status(arguments.config)
+        except Exception as error:  # noqa: BLE001 - doctor reports, it never dies on a check
+            checks["service"] = {"state": "unknown", "error": str(error)}
+        if (config.get("toll_bench") or {}).get("connected"):
+            service_line = service_notice(checks["service"], checks["service"].get("config"))
     checks["updates"] = check_for_updates(arguments.config, force=True)
     _print(checks)
     _print_update_notices(checks["updates"])
+    # The update check says it too when it is on; say it once either way.
+    if service_line and service_line not in (checks["updates"].get("notices") or [])[:2]:
+        print(service_line, file=sys.stderr)
     required = checks.get("aws_identity", {}).get("ok")
     if arguments.config:
         required = required and checks.get("runtime", {}).get("ok")
@@ -3660,6 +3678,126 @@ def command_market_worker(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _linger_lines(report: dict[str, Any]) -> list[str]:
+    linger = report.get("linger")
+    if report.get("service_manager") == LAUNCHD or linger is True:
+        return []
+    user = getpass.getuser()
+    if linger is False:
+        return [
+            "Linger is off, so this service stops when you log out and does not start at "
+            f"boot. Turn it on once: loginctl enable-linger {user}"
+        ]
+    return [
+        "Could not tell whether linger is on. Without it this service stops when you log "
+        f"out and does not start at boot: loginctl enable-linger {user}"
+    ]
+
+
+def _start_line(report: dict[str, Any]) -> str:
+    if report.get("service_manager") == LAUNCHD:
+        return (
+            "It starts when you log in and restarts after a failed exit. A Mac that reboots "
+            "unattended needs automatic login for it to start."
+        )
+    return "It restarts after a failed exit, 10 seconds later, and starts again at boot."
+
+
+def command_install_service(arguments: argparse.Namespace) -> int:
+    """install-service: the market watch as a systemd user unit or a launchd agent."""
+    try:
+        if arguments.uninstall:
+            report = uninstall_service(
+                arguments.config, name=arguments.name, dry_run=arguments.dry_run
+            )
+        else:
+            report = install_service(
+                arguments.config, name=arguments.name, dry_run=arguments.dry_run
+            )
+    except ServiceUnsupported as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if arguments.json:
+        _print(report)
+        return 0 if arguments.uninstall or arguments.dry_run or report.get("active") else 1
+    lines: list[str] = []
+    if arguments.uninstall:
+        if arguments.dry_run:
+            lines.append("Dry run: nothing removed, nothing run. Would run:")
+            lines += [f"  {command}" for command in report["commands"]]
+        elif report["removed"]:
+            lines.append(
+                f"Removed {report['service']}: stopped, disabled and deleted "
+                f"({', '.join(report['removed'])})."
+            )
+        else:
+            lines.append("No service was installed for this agent; nothing to remove.")
+        print("\n".join(lines))
+        return 0
+    kind = "a launchd agent" if report["service_manager"] == LAUNCHD else "a systemd user service"
+    runs = " ".join(shlex.quote(part) for part in report["command"])
+    if arguments.dry_run:
+        lines += [
+            "Dry run: nothing written, nothing run.",
+            f"Would write {report['unit']} ({kind}):",
+            "",
+            report["unit_text"].rstrip("\n"),
+            "",
+            "Would run:",
+        ]
+        lines += [f"  {command}" for command in report["commands"]]
+    else:
+        state = "running" if report["active"] else "installed, but not running yet"
+        lines += [
+            f"Installed {report['service']}, {kind}: {state}.",
+            f"  runs  {runs}",
+            f"  unit  {report['unit']}",
+            f"  log   {report['log']}",
+            _start_line(report),
+        ]
+    if report.get("replaced"):
+        lines.append(
+            "Replaced this agent's service under its old name: " + ", ".join(report["replaced"])
+        )
+    lines += report.get("notes") or []
+    lines += _linger_lines(report)
+    lines.append("Check it:")
+    lines += [f"  {command}" for command in report["check"]]
+    if not arguments.dry_run:
+        lines.append(HAND_RUN_NOTE)
+    print("\n".join(lines))
+    return 0 if arguments.dry_run or report["active"] else 1
+
+
+def command_service_status(arguments: argparse.Namespace) -> int:
+    """Exit 0 when this agent's watch runs as a service, 1 when not, 2 on an unknown OS."""
+    report = service_status(arguments.config, name=arguments.name)
+    if arguments.json:
+        _print(report)
+    elif report["state"] == "unsupported":
+        print(
+            "install-service knows systemd (Linux) and launchd (macOS); "
+            f"this is {sys.platform}.",
+            file=sys.stderr,
+        )
+    else:
+        notice = service_notice(report, report["config"])
+        lines = [f"{report['service']}: {report['state']}"]
+        if report["state"] != "not installed":
+            lines += [f"  unit  {report['unit']}", f"  log   {report['log']}"]
+        if notice:
+            lines.append(notice)
+        if report["state"] == "running":
+            lines += _linger_lines(report)
+        if report["state"] != "not installed":
+            lines.append("Check it:")
+            lines += [f"  {command}" for command in report["check"]]
+        print("\n".join(lines))
+    if report["state"] == "unsupported":
+        return 2
+    return 0 if report["state"] == "running" else 1
+
+
 def command_update_check(arguments: argparse.Namespace) -> int:
     """Forced check; prints the notices (or "up to date"). Always exits 0."""
     check = check_for_updates(arguments.config, force=True)
@@ -3770,6 +3908,34 @@ def build_parser() -> argparse.ArgumentParser:
         worker_action.add_argument("config")
         worker_action.set_defaults(handler=command_market_worker)
 
+    install = subcommands.add_parser(
+        "install-service",
+        help=(
+            "Run this agent's market watch in the background and bring it back when it dies "
+            "(systemd user unit on Linux, launchd agent on macOS)"
+        ),
+    )
+    install.add_argument("config", help="The agent's agent.yaml, or its directory")
+    install.add_argument("--name", help="Service name (default: the agent's name)")
+    install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the unit and the commands; write nothing and run nothing",
+    )
+    install.add_argument(
+        "--uninstall", action="store_true", help="Stop, disable and remove the service"
+    )
+    install.add_argument("--json", action="store_true")
+    install.set_defaults(handler=command_install_service)
+    status = subcommands.add_parser(
+        "service-status",
+        help="Is this agent's market watch running as a service? (exit 0 running, 1 not)",
+    )
+    status.add_argument("config", help="The agent's agent.yaml, or its directory")
+    status.add_argument("--name", help="Service name (default: the agent's name)")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(handler=command_service_status)
+
     guard = subcommands.add_parser("loop-guard", help="Inspect or explicitly reset parked work")
     guard.add_argument("config")
     guard.add_argument("--reset", metavar="WORK_KEY", help="Reset only this work key after repair")
@@ -3851,8 +4017,15 @@ def _configure_logging() -> None:
     logger.propagate = False
 
 
-# Commands that run their own forced check, so main() does not run a second one.
-_SELF_CHECKING_HANDLERS = {"command_init", "command_doctor", "command_update_check"}
+# Commands that run their own forced check, so main() does not run a second one,
+# and the two service commands, whose own output is what the notice would say.
+_SELF_CHECKING_HANDLERS = {
+    "command_init",
+    "command_doctor",
+    "command_update_check",
+    "command_install_service",
+    "command_service_status",
+}
 
 
 def _startup_update_check(arguments: argparse.Namespace) -> None:

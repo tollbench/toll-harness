@@ -12,6 +12,10 @@ Two things are compared:
   ``rules_version_hash`` against the snapshot this agent's onboarding state
   recorded last time, which is then refreshed.
 
+For a connected agent it also says, once per change, when the agent's market
+watch is not running as a background service (``toll-harness install-service``),
+since a watch run by hand stops for good when the machine restarts.
+
 The check tells; it never installs anything. It never raises and never blocks
 a run: every failure comes back as ``{"ok": False, "error": ...}``.
 ``TOLL_HARNESS_UPDATE_CHECK=0`` (or ``off`` / ``false``) turns it off entirely;
@@ -23,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -161,7 +166,40 @@ def _bench_check(
     return result
 
 
-def _notices(harness: dict[str, Any] | None, bench: dict[str, Any] | None) -> list[str]:
+def service_notice(service: dict[str, Any] | None, config_path: Any) -> str | None:
+    """One line when the watch is not running as a service; None when it is (or unknown)."""
+    state = (service or {}).get("state")
+    target = shlex.quote(str(config_path or "agent.yaml"))
+    if state == "not installed":
+        return (
+            "Your market watch is not running as a service, so nothing restarts it after a "
+            f"crash or a reboot: toll-harness install-service {target}"
+        )
+    if state == "installed":
+        return (
+            "Your market watch service is installed but not running: "
+            f"toll-harness service-status {target}"
+        )
+    return None
+
+
+def _service_check(path: Path, config: dict[str, Any]) -> dict[str, Any] | None:
+    """The background service's state for a connected agent; None when it cannot say."""
+    if not (config.get("toll_bench") or {}).get("connected"):
+        return None
+    try:
+        from toll_harness.service import service_status
+
+        return service_status(path)
+    except Exception:  # noqa: BLE001 - an update check never raises
+        return None
+
+
+def _notices(
+    harness: dict[str, Any] | None,
+    bench: dict[str, Any] | None,
+    service_line: str | None = None,
+) -> list[str]:
     lines: list[str] = []
     if harness and harness.get("ok"):
         installed, latest = harness["installed"], harness["latest"]
@@ -173,6 +211,8 @@ def _notices(harness: dict[str, Any] | None, bench: dict[str, Any] | None) -> li
             )
         elif harness.get("behind"):
             lines.append(f"toll-harness {installed} installed, {latest} available: {command}")
+    if service_line:
+        lines.append(service_line)
     changed = (bench or {}).get("changed") or []
     if changed:
         old, new = bench["old"], bench["new"]
@@ -280,11 +320,17 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
             bench = {"ok": False, "error": _describe(error), "changed": []}
             protocol = None
     harness = _harness_check(protocol)
-    notices = _notices(harness, bench)
+    service = _service_check(path, config)
+    service_line = service_notice(service, path)
+    notices = _notices(harness, bench, service_line)
     latest = harness.get("latest")
-    new = bool((bench or {}).get("changed")) or (
-        bool(harness.get("behind") or harness.get("below_minimum"))
-        and latest != previous.get("notified_latest")
+    new = (
+        bool((bench or {}).get("changed"))
+        or (
+            bool(harness.get("behind") or harness.get("below_minimum"))
+            and latest != previous.get("notified_latest")
+        )
+        or (service_line is not None and service["state"] != previous.get("service_state"))
     )
 
     # Reload right before writing so a concurrent writer's keys survive; only
@@ -296,6 +342,7 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
         "installed_version": harness.get("installed"),
         "latest_version": latest or previous.get("latest_version"),
         "last_notice": notices,
+        "service_state": (service or {}).get("state"),
     }
     if harness.get("behind") or harness.get("below_minimum"):
         record["notified_latest"] = latest
@@ -312,6 +359,7 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
         "checked_at": record["checked_at"],
         "harness": harness,
         "bench": bench,
+        "service": service,
         "notices": notices,
         "new": new,
     }

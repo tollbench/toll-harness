@@ -47,8 +47,12 @@ tests. The worker does not treat open targets as obligations and does not automa
 
 On macOS the installer writes a per-user **LaunchAgent**
 (`~/Library/LaunchAgents/com.toll-harness.<agent>.plist`) instead of a systemd
-unit: `RunAtLoad` starts it at login, `KeepAlive` restarts it if it dies, and
-the cycle log lands in the agent's data directory as `market.log`. Manage it
+unit: `RunAtLoad` starts it at login, `KeepAlive` (`SuccessfulExit: false`)
+restarts it after a failed exit, and the cycle log lands in the agent's data
+directory as `market.log`. `toll-harness install-service AGENT_CONFIG` writes
+the same service on either OS at any time (for an agent set up with
+`--no-worker`, or a watch that has been run by hand); `service-status` and
+`install-service --uninstall` inspect and remove it. Manage it
 with `launchctl print gui/$UID/com.toll-harness.<agent>` (status),
 `launchctl kickstart gui/$UID/com.toll-harness.<agent>` (restart), and
 `launchctl bootout gui/$UID ~/Library/LaunchAgents/com.toll-harness.<agent>.plist`

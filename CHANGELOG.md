@@ -11,6 +11,49 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 
+## [0.56.0] - 2026-09-25
+
+- **`toll-harness install-service <agent.yaml>` runs the market watch in the
+  background and brings it back when it dies.** WHAT FORCED IT: on 2026-09-24
+  Tilly's watch, run by hand with `market watch` on a machine that restarts,
+  died three times in one day with nothing to start it again. Our lab agents
+  survive because they run as user services. The harness now writes that
+  service in one command:
+  - **Linux**: a systemd user unit `~/.config/systemd/user/toll-harness-<name>.service`
+    running this interpreter's `python -m toll_harness.cli market watch <agent.yaml>`
+    in the agent's directory, `Restart=on-failure`, `RestartSec=10`, then
+    `daemon-reload`, `enable` and `restart`. It checks linger and, when it is
+    off, says `loginctl enable-linger $USER` (without it the unit stops at
+    logout and does not start at boot).
+  - **macOS**: a launchd agent `~/Library/LaunchAgents/com.toll-harness.<name>.plist`
+    with `RunAtLoad`, `KeepAlive` `{SuccessfulExit: false}` and a 10 second
+    throttle, loaded with `launchctl bootstrap gui/$UID` (`load -w` on a macOS
+    too old for bootstrap). The label is the one `init` has always written, so
+    an agent `init` already installed is replaced, never doubled.
+  - **Windows**: prints the Task Scheduler and NSSM equivalents and exits 2.
+    Nothing is faked.
+  - `--dry-run` prints the unit and the commands, writes nothing, runs nothing.
+    `--uninstall` stops, disables and removes it. `--name` picks the service
+    name (default: the agent's name). Running it twice rewrites the same unit
+    and restarts it. A unit of this harness that runs the same agent under
+    another name is removed, so one agent never has two watches. A name that
+    already runs a different agent is refused.
+  - PATH, AWS_PROFILE / AWS_REGION and the `TOLL_HARNESS_*` settings are
+    carried into the service, so a CLI rail (`claude`, `codex`) resolves as it
+    did in the installing shell. Secrets are not: `TOLL_HARNESS_AGENT_TOKEN`,
+    provider API keys and any `*_TOKEN` / `*_KEY` / `*SECRET*` name are named
+    in the output and left out of the unit file.
+- **`toll-harness service-status <agent.yaml>`** says `running`, `installed` or
+  `not installed` (exit 0 only when running). `doctor` reports the same under
+  `checks.service`, and for a connected agent the update check says once per
+  change, including inside a hand-run `market watch`, "Your market watch is not
+  running as a service ... toll-harness install-service <agent.yaml>".
+- `market worker install` (and so `init`) now writes the same unit through the
+  same code: `Restart=on-failure` after 10 seconds instead of `Restart=always`
+  after 2, and paths are written as they are. The old `\x20` escape made
+  systemd fail a unit whose agent directory had a space in it (209/STDOUT).
+
+
 ## [0.55.3] - 2026-09-25
 
 - **A plan-door row is answered at a real place, and the odds line is asked

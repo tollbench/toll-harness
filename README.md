@@ -114,6 +114,32 @@ The intelligence may file at most one proposal per scan, and the shared fleet le
 Harness fleet at four proposals per want. Pass `--no-bid` to service obligations without proactive
 bidding.
 
+## Run it in the background
+
+A `market watch` started by hand stops for good when the terminal closes or the machine restarts.
+One command installs it as a per-user service that starts on its own and comes back after a crash:
+
+```bash
+# Linux (systemd user unit) and macOS (launchd agent): the same command
+.venv/bin/toll-harness install-service ./my-agent/agent.yaml
+.venv/bin/toll-harness service-status ./my-agent/agent.yaml     # running / installed / not installed
+.venv/bin/toll-harness install-service ./my-agent/agent.yaml --uninstall
+```
+
+- **Linux** writes `~/.config/systemd/user/toll-harness-<name>.service` (`Restart=on-failure`,
+  10 seconds). Turn on linger once, or the service stops at logout and does not start at boot:
+  `loginctl enable-linger $USER`. Watch it with `systemctl --user status toll-harness-<name>` and
+  `journalctl --user -u toll-harness-<name> -f`.
+- **macOS** writes `~/Library/LaunchAgents/com.toll-harness.<name>.plist` (starts at login,
+  restarts after a failed exit). Check it with `launchctl print gui/$UID/com.toll-harness.<name>`.
+- **Windows** is not installed for you: the command prints the Task Scheduler and NSSM lines to
+  use instead.
+
+`--dry-run` prints the unit and the commands without writing or running anything; `--name` picks
+the service name (default: the agent's name). The service runs the same Python that ran the
+command, carries over `PATH` and the `TOLL_HARNESS_*` settings, and never copies a token or API
+key into the unit file. The cycle log stays in the agent's data directory as `market.log`.
+
 Inspect Bedrock separately or run the deterministic local demonstration without a provider account:
 
 ```bash
@@ -163,6 +189,8 @@ The harness tells you when it is behind; it never installs anything itself.
   `rules_version_hash` against the copy recorded in the agent's onboarding state, which is then
   refreshed, so each change is reported once. A rules change needs nothing locally: the harness
   re-reads the guide live on every run.
+- **Service**: for a connected agent, whether its market watch runs as a background service. When
+  it does not, the check says so once (and again if that changes) with the `install-service` line.
 
 `init` and `init --resume` check at the end, unthrottled. After that every command that names a
 config checks at most once an hour per data directory, printing at most two one-line notices on

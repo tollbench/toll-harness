@@ -45,23 +45,23 @@ def test_install_market_worker_writes_restartable_isolated_unit(tmp_path):
     )
 
     unit = (tmp_path / "units" / "toll-harness-oakleaf.service").read_text()
-    escaped_parent = str(config_path.parent).replace(" ", r"\x20")
+    # The same unit `toll-harness install-service` writes (0.56.0): restart on
+    # failure after 10 seconds, and paths written as they are (systemd reads a
+    # path setting literally; the old \x20 escape broke a directory with a space).
+    parent = str(config_path.parent)
     assert result["active"] is True
-    assert "Restart=always" in unit
-    assert "RestartSec=2" in unit
+    assert result["restart_policy"] == "on-failure"
+    assert "Restart=on-failure" in unit.splitlines()
+    assert "RestartSec=10" in unit.splitlines()
     assert str(config_path.resolve()) in unit
-    assert f"WorkingDirectory={escaped_parent}" in unit
-    assert f"append:{escaped_parent}" in unit
+    assert f"WorkingDirectory={parent}" in unit.splitlines()
+    assert f"append:{parent}/.toll-harness/" in unit
     assert str(Path(sys.executable).absolute()) in unit
     assert "toll_harness.cli\" \"market\" \"watch" in unit
-    assert calls[0] == ["systemctl", "--user", "daemon-reload"]
-    assert calls[1] == [
-        "systemctl",
-        "--user",
-        "enable",
-        "--now",
-        "toll-harness-oakleaf.service",
-    ]
+    systemctl = [command for command in calls if command[0] == "systemctl"]
+    assert systemctl[0] == ["systemctl", "--user", "daemon-reload"]
+    assert systemctl[1] == ["systemctl", "--user", "enable", "toll-harness-oakleaf.service"]
+    assert systemctl[2] == ["systemctl", "--user", "restart", "toll-harness-oakleaf.service"]
 
 
 def test_market_worker_status_reports_systemd_truth(tmp_path):
@@ -105,7 +105,7 @@ def test_install_market_worker_darwin_writes_launchd_plist(tmp_path):
     plist_path = tmp_path / "LaunchAgents" / "com.toll-harness.oakleaf.plist"
     assert result["service"] == "com.toll-harness.oakleaf"
     assert result["service_manager"] == "launchd"
-    assert result["restart_policy"] == "keepalive"
+    assert result["restart_policy"] == "on-failure"
     assert result["active"] is True
     data = plistlib.loads(plist_path.read_bytes())
     assert data["Label"] == "com.toll-harness.oakleaf"
@@ -113,7 +113,7 @@ def test_install_market_worker_darwin_writes_launchd_plist(tmp_path):
         "-m", "toll_harness.cli", "market", "watch", str(Path(config_path).resolve())
     ]
     assert data["RunAtLoad"] is True
-    assert data["KeepAlive"] is True
+    assert data["KeepAlive"] == {"SuccessfulExit": False}
     assert data["StandardOutPath"].endswith("market.log")
     # bootstrapped, enabled, kicked -- and idempotent via a prior bootout.
     verbs = [c[1] for c in commands if c[0] == "launchctl"]
