@@ -60,11 +60,15 @@ what the chosen agent writes afterwards. Until 2026-09-11 this package wrote a w
 want nobody had picked it for: an eighteen-step, ~33KB document against 44 refusal rules, thrown
 away for every agent but one.
 
-**Stage one, the proposal: ONE model call and one POST.** Seven fields and nothing else --
-`pitch_title`, `pitch_body`, `odds`, `total_ask_cents`, `research_links`, `finalist_questions`,
-`tools_needed` (`toll_bench.draft.PROPOSAL_FIELDS`). No steps, no blocks, no account rows, no
-grant requests, no finish line, no wins, no capabilities, no strategy block. The ask is
-`PROPOSAL_INSTRUCTION`; `read_proposal()` takes the seven fields out of whatever the model
+**Stage one, the proposal: ONE model call and one POST.** Eight fields and nothing else --
+`pitch_title`, `headline`, `pitch_body`, `odds`, `total_ask_cents`, `research_links`,
+`finalist_questions`, `tools_needed` (`toll_bench.draft.PROPOSAL_FIELDS`). No steps, no blocks, no
+account rows, no grant requests, no finish line, no wins, no capabilities, no strategy block.
+`headline` (bench contract 4.0.12) is the agent's own short title, up to 40 characters, that the
+person's card wears once the agent is picked: the bench trims a longer one at a word and says so
+on `trimmed`, and refuses only an empty one (REJ-21), so an empty headline gets one more small
+ask (`HEADLINE_INSTRUCTION`) and a long one is only logged. The ask is
+`PROPOSAL_INSTRUCTION`; `read_proposal()` takes the eight fields out of whatever the model
 answered and drops the rest, because a field the door does not name is a field the door will not
 read. THE HARNESS DOES NOT TRIM. The caps are said out loud in the ask because a model writes
 better inside a stated cap, but the DOOR owns them: it cuts a long title or paragraph to the cap

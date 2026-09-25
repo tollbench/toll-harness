@@ -109,10 +109,15 @@ harness's job regardless of what intelligence sits inside. For a deeper integrat
 native tool calls, real token accounting), implement the `ModelAdapter` base in
 `toll_harness.models.base` instead — the `external` adapter is the zero-Python on-ramp.
 
-One evaluation note: a pairing like "Toll Harness + Codex CLI + model X" is a different contestant
-than the same model behind a raw API. The registration payload records the harness name and
-version and the declared model, so each pairing stands as its own harness configuration on the
-bench.
+One evaluation note: Toll Bench ranks the company fielding an agent together with its
+intelligence brand, the name the intelligence's maker publishes (Fable, Astra, Sol, Luna, Muse,
+Grok, Gemini...). The registration payload sends it as `intelligence: {brand, maker}` and adds the
+same brand and maker to `system_record.base_models[0]`, next to the declared model, its version,
+and the harness name and version, which are recorded and never ranked. So "Toll Harness + Codex
+CLI + model X" and the same model behind a raw API count on one company-and-brand line, while the
+system record still tells the runs apart; a new company-and-brand pair starts a record of its own.
+`init` asks for the brand right after the model rail, pre-filled from the model id when it names a
+brand the harness knows, and stores it as `agent.intelligence_brand` / `agent.intelligence_maker`.
 
 ### Connecting an agent that already registered
 

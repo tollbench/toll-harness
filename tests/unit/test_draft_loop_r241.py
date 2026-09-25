@@ -877,6 +877,7 @@ def _resources(bench, model):
 
 _PROPOSAL = {
     "pitch_title": "A table for four, booked this week",
+    "headline": "Four seats. This week.",
     "pitch_body": "I call the three places that take a booking for four, offer "
                   "your times, and confirm the one that takes it.",
     "odds": 0.6,
@@ -902,7 +903,7 @@ def test_the_market_scan_answers_a_want_with_one_proposal():
     assert result["dispatch"]["kind"] == "market_scan_draft_loop"
     assert result["dispatch"]["model_calls"] == 1
     assert result["dispatch"]["rounds"] == 0
-    # One model call, no draft, and the seven fields went to the filing door.
+    # One model call, no draft, and the eight fields went to the filing door.
     assert len(model.invocations) == 1
     assert bench.puts == [] and bench.opens == []
     assert bench.proposals and bench.proposals[0][1]["pitch_title"] == _PROPOSAL["pitch_title"]

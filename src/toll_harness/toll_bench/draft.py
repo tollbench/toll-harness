@@ -1,7 +1,7 @@
 """THE DRAFT LOOP — one plan, built up in pieces, at the bench's own door.
 
 TWO STAGES (rules 243-245, Steven Ochs, 2026-09-11). A PROPOSAL is the agent's
-short answer to a want -- seven fields, ONE call, no steps -- and it is what
+short answer to a want -- eight fields, ONE call, no steps -- and it is what
 the person chooses between. A PLAN is owed by the agent that was CHOSEN, it is
 a FORM the bench hands over, and the loop below is how that form gets filled.
 So `run(kind="bid")` is one model call and one filing; `run(kind="plan")` is
@@ -1766,6 +1766,24 @@ PROPOSAL_LINKS_MIN = 1
 PROPOSAL_LINKS_MAX = 3
 PROPOSAL_QUESTIONS_MAX = 3
 
+# THE HEADLINE IS A SLOT (bench contract 4.0.12, Steven 2026-09-24: "it's
+# another slot"). WHAT FORCED IT: the new card designs put a five-word
+# headline on every want card, and the proposal had no short slot for one.
+# The agent's own quick-hit title, up to 40 characters; the person's card
+# wears it at the top once this agent is picked. The bench TRIMS a longer one
+# at a word and says what it cut (`trimmed`, on the validate door and on the
+# filing door's 201), so a long headline is a warning here and is never cut or
+# refused by this package. The ONE refusal is an empty headline: REJ-21 at the
+# door, in the sentence below, which is the bench's own
+# (bid_validator._check_headline, HEADLINE_MAX and HEADLINE_EXAMPLE there).
+HEADLINE_MAX = 40
+HEADLINE_EXAMPLE = "A little heat. A great night."
+HEADLINE_EMPTY_PROBLEM = (
+    "headline is empty: write the short quick-hit title the person's card "
+    f'wears once you are picked, up to {HEADLINE_MAX} characters, e.g. '
+    f'"{HEADLINE_EXAMPLE}"'
+)
+
 
 # THE DOOR'S COUNT, EXACTLY. The bench counts `len(pitch_body.strip())` --
 # Python code points after stripping leading and trailing whitespace, nothing
@@ -1854,6 +1872,7 @@ CONTACT_PICKER_FORMAT = "contact_picker"
 
 PROPOSAL_FIELDS = (
     "pitch_title",
+    "headline",
     "pitch_body",
     "odds",
     "total_ask_cents",
@@ -1863,7 +1882,7 @@ PROPOSAL_FIELDS = (
 )
 
 PROPOSAL_INSTRUCTION = (
-    "Answer the want below with a PROPOSAL: seven fields, ONE reply, nothing "
+    "Answer the want below with a PROPOSAL: eight fields, ONE reply, nothing "
     "else. A proposal is your short answer to what this person wants; it is "
     "what they choose between. You do NOT write a plan here -- no steps, no "
     "blocks, no account rows, no deliverables, no grant requests, no finish "
@@ -1872,6 +1891,14 @@ PROPOSAL_INSTRUCTION = (
     "plan then.\n"
     f"`pitch_title` -- what you are offering, up to {PROPOSAL_TITLE_MAX} "
     "characters.\n"
+    f"`headline` -- REQUIRED. A short quick-hit title in your own words, up to "
+    f"{HEADLINE_MAX} characters (about five words), that the person's card "
+    "wears at the top once you are picked, e.g. "
+    f'"{HEADLINE_EXAMPLE}" for a hot-sauce tasting night, or "Five emails. '
+    'One surprise." for a five-email countdown. It is not `pitch_title` said '
+    "again: the title says what you offer, the headline is the few words on "
+    "their card. Longer is trimmed at a word and the answer says what was "
+    "cut; an empty one is refused.\n"
     f"`pitch_body` -- ONE paragraph, up to {PROPOSAL_BODY_MAX} characters: "
     "what they get and roughly how. THIS IS YOUR STRATEGY; there is no other "
     "place for it.\n"
@@ -1912,7 +1939,8 @@ PROPOSAL_INSTRUCTION = (
     "outside act, never here. File [] when you need none.\n"
     f"A paragraph over {PROPOSAL_BODY_MAX} characters is REFUSED by the bench, "
     "not trimmed, so count and stay inside it; do not pad it.\n"
-    'Answer: {"pitch_title": "...", "pitch_body": "...", "odds": 0.0, '
+    'Answer: {"pitch_title": "...", "headline": "...", "pitch_body": "...", '
+    '"odds": 0.0, '
     '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
     '[...], "tools_needed": [...]}.'
 )
@@ -1925,6 +1953,58 @@ LINKS_INSTRUCTION = (
     'this want"}. Real pages you read, not a search box and not this site. '
     'Answer with nothing else: {"research_links": [...]}'
 )
+
+# The bench's own sentence for an empty headline, and one small ask. The door
+# refuses an empty headline (REJ-21) and a refused bid is the round, so the
+# field is asked for once more before anything is filed -- the same bargain as
+# the links above.
+HEADLINE_INSTRUCTION = (
+    "Your proposal is written, but the bench says: " + HEADLINE_EMPTY_PROBLEM + ". "
+    f"About five words, up to {HEADLINE_MAX} characters, in your own words, "
+    "for THIS want. It is not your pitch_title said again: the title says what "
+    "you offer, the headline is the few words on their card. "
+    'Answer with nothing else: {"headline": "..."}'
+)
+
+
+def headline_length(proposal: Any) -> int:
+    """The headline's length the way the door counts it: stripped, in code
+    points (bid_validator.proposal_trims, `len(head.strip())`)."""
+    return pitch_length(proposal.get("headline")) if isinstance(proposal, dict) else 0
+
+
+def headline_problems(proposal: Any) -> list[dict[str, str]]:
+    """THE ONE REFUSAL, IN THE BENCH'S WORDS: an empty headline (REJ-21).
+
+    `[]` when there is a headline. Its LENGTH is never a problem here: the
+    bench trims a long one at a word and reports it (`headline_warnings`).
+    """
+    if headline_length(proposal) > 0:
+        return []
+    return [
+        {
+            "path": "headline",
+            "code": "REJ-21",
+            "message": HEADLINE_EMPTY_PROBLEM,
+        }
+    ]
+
+
+def headline_warnings(proposal: Any) -> list[str]:
+    """A headline over the cap, said once and never refused.
+
+    The bench cuts it at a word on the way in and says what it cut on
+    `trimmed`, so the words it will store may be shorter than the ones sent.
+    Nothing here cuts it: the cut is the door's, and the door reports it.
+    """
+    have = headline_length(proposal)
+    if have <= HEADLINE_MAX:
+        return []
+    return [
+        f"headline is {have} characters and the card holds {HEADLINE_MAX}: the "
+        "bench will trim it at a word and say what it cut (not refused)"
+    ]
+
 
 # What a brief calls the money the person put up. Read in this order and
 # passed through as `budget_cents` so the ask names one number, not three.
@@ -2127,7 +2207,7 @@ def pick_tools(named: Any, brief: Any) -> tuple[list[str], list[str]]:
 
 
 def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
-    """The seven fields out of the model's answer, and nothing else.
+    """The eight fields out of the model's answer, and nothing else.
 
     FIELD NAMES ARE A CONTRACT. A field the door does not name is a field the
     door will not read, so anything else the model volunteered is dropped here
@@ -2144,7 +2224,9 @@ def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
             holder = inner
             break
     out: dict[str, Any] = {}
-    for field in ("pitch_title", "pitch_body"):
+    # The headline is read like the title: the model's words, stripped, never
+    # cut here. A long one is the door's to trim, and the door says so.
+    for field in ("pitch_title", "headline", "pitch_body"):
         value = holder.get(field)
         if isinstance(value, str) and value.strip():
             out[field] = value.strip()
@@ -2185,7 +2267,7 @@ def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
 def mend_the_small_proposal(
     proposal: Any, brief: Any = None
 ) -> tuple[dict[str, Any], list[str]]:
-    """Every fix this package can make to a seven-field proposal, with no
+    """Every fix this package can make to an eight-field proposal, with no
     model call. Returns the (possibly unchanged) proposal and what was mended.
 
     Three things, and only the three the door refuses this package for:
@@ -2201,8 +2283,10 @@ def mend_the_small_proposal(
       * THE PARAGRAPH CAP (REJ-21). A `pitch_body` over the cap, by the
         door's own count, is cut at a sentence or word boundary.
 
-    It does not invent a research link, a title or a price. A field that is
-    simply not there is not something this package can mend.
+    It does not invent a research link, a title, a headline or a price. A
+    field that is simply not there is not something this package can mend.
+    And it never cuts a headline: the bench trims a long one at a word and
+    says what it cut, so its length is the door's, not a mend.
     """
     if not isinstance(proposal, dict):
         return {}, []
@@ -2264,12 +2348,12 @@ def bench_fixed(answer: Any) -> list[Any]:
 
 
 def is_small_proposal(proposal: Any) -> bool:
-    """True when this is the rule-243 proposal: seven fields and no steps.
+    """True when this is the rule-243 proposal: eight fields and no steps.
 
     The filing road for a proposal that carries steps is the old plan-shaped
     one -- required blocks merged in, contacts bound, the blank form dropped,
     the local mirror consulted -- and every one of those repairs reads
-    `steps`. A seven-field proposal has none, so none of them can run over it,
+    `steps`. An eight-field proposal has none, so none of them can run over it,
     and a harness that ran them anyway would file a plan the agent never
     wrote on a want nobody had picked it for.
     """
@@ -3219,12 +3303,14 @@ class DraftLoop:
         """THE PROPOSAL IS ONE CALL (rule 243).
 
         The want, the stance line, the questions the person will answer and
-        the tools this want offers go in; seven fields come back; the bench's
+        the tools this want offers go in; eight fields come back; the bench's
         own proposal door takes them. No outline, no blanks, no fixes: there
         is no plan here to fix. A paragraph over the cap is cut to it first
         (`_fit_the_body`), because the door refuses it rather than trimming;
-        anything the door still corrects comes back on `bench_fixed` and is
-        logged, never retried.
+        an empty headline gets one more small ask (`_headline_for`), because
+        the door refuses that too; a long headline is only logged, because the
+        door trims it. Anything the door still corrects comes back on
+        `bench_fixed` or `trimmed` and is logged, never retried.
         """
         payload: dict[str, Any] = {
             "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
@@ -3282,6 +3368,24 @@ class DraftLoop:
                 "refusal is the round.",
                 proposal,
             )
+        # THE HEADLINE IS A SLOT (contract 4.0.12). Empty is the door's one
+        # refusal for it (REJ-21), so it gets one more small ask, like the
+        # links; long is only a warning, because the door trims it at a word
+        # and says what it cut.
+        if headline_problems(proposal):
+            proposal = self._headline_for(target_id, brief, proposal)
+        if headline_problems(proposal):
+            return self._gave_up(
+                target_id,
+                "bid",
+                "no_headline",
+                HEADLINE_EMPTY_PROBLEM + ". The model gave none, twice. Nothing "
+                "was filed: the door refuses an empty headline (REJ-21), and a "
+                "bid spent on a refusal is the round.",
+                proposal,
+            )
+        for warning in headline_warnings(proposal):
+            self.log.warning("proposal for target=%s: %s", target_id, warning)
         proposal = self._fit_the_body(target_id, proposal)
         self.log.info(
             "proposal for target=%s: %d of %d fields, %d link(s), %d "
@@ -3321,6 +3425,24 @@ class DraftLoop:
         }
         if fixed:
             out["bench_fixed"] = fixed
+        # CONTRACT 4.0.12: the filing door's 201 carries `trimmed`, every cut
+        # it made ({path, from, to, from_chars, to_chars}, `to` is what was
+        # stored). A trim is not a refusal: logged, carried, never retried.
+        trims = [row for row in (filed.get("trimmed") or []) if row]
+        if trims:
+            out["trimmed"] = trims
+            self.log.info(
+                "proposal for target=%s: the bench trimmed %s on the way in",
+                target_id,
+                "; ".join(
+                    self._preview(
+                        f"{row.get('path')}: {row.get('to')!r}"
+                        if isinstance(row, dict)
+                        else str(row)
+                    )
+                    for row in trims
+                ),
+            )
         if not out["ok"]:
             out["error"] = filed.get("error") or "proposal_refused"
             out["message"] = filed.get("message") or ""
@@ -3408,6 +3530,41 @@ class DraftLoop:
                 len(links),
             )
             return {**proposal, "research_links": links}
+        return proposal
+
+    def _headline_for(
+        self, target_id: str, brief: Any, proposal: dict[str, Any]
+    ) -> dict[str, Any]:
+        """ONE more small ask, for the headline and nothing else.
+
+        The bench refuses an empty headline (REJ-21, contract 4.0.12) in the
+        sentence `HEADLINE_EMPTY_PROBLEM` carries, and that sentence is what
+        the model is asked. A field the harness can get by asking for it is
+        worth one more ask; the alternative is spending the want's one bid on
+        a refusal.
+        """
+        answer = self._ask(
+            HEADLINE_INSTRUCTION,
+            {
+                "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
+                "your_proposal": {
+                    key: proposal.get(key)
+                    for key in ("pitch_title", "pitch_body")
+                    if proposal.get(key)
+                },
+            },
+            "headline",
+            head=self._head(),
+        )
+        headline = read_proposal(answer).get("headline")
+        if headline:
+            self.log.info(
+                "proposal for target=%s carried no headline; one more ask "
+                "found one (%d characters)",
+                target_id,
+                pitch_length(headline),
+            )
+            return {**proposal, "headline": headline}
         return proposal
 
     def _open(self, target_id: str, kind: str) -> dict[str, Any]:

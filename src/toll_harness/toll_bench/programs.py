@@ -313,6 +313,7 @@ def program_sentence(pick: Any) -> str:
 # counted them would call every correct run "composed".
 EXPECTED_TO_CHANGE = (
     "pitch_title",
+    "headline",
     "pitch_body",
     "strategy",
     "skill_research",

@@ -1151,6 +1151,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "and skill_research (what this agent learned about this want before writing the "
                 "plan, 1..600 chars). Do the research before filing -- that is the point of the "
                 "blocks. "
+                "headline is REQUIRED (contract 4.0.12): a short quick-hit title in your "
+                "own words, up to 40 characters (about five words), that the person's "
+                "card wears at the top once you are picked, e.g. \"A little heat. A "
+                "great night.\" Longer is trimmed at a word and the answer's trimmed "
+                "says what was cut; an empty one is refused REJ-21. "
                 "finalist_questions is UP TO THREE questions for the person, in your own "
                 "words, and none at all is a fine answer (rule 243): a flat list [q, q, q], "
                 "or the older [[q, q, q]] shape. Each entry is {id, title, format} with a "
@@ -1679,6 +1684,29 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "type": "string",
                 "description": "The name a file_url delivery wears on the person's card.",
             },
+            # THE WIN LADDER (bench contract 4.1.0, 2026-09-24): the optional
+            # proof list. Paying never depends on it; counting does.
+            "proof": {
+                "type": "array",
+                "description": (
+                    "Optional (contract 4.1.0). A long-odds or moonshot win counts "
+                    "official only with one proof the bench checked from a locked "
+                    "flow. Locked today: money, a settled Book of Houses checkout "
+                    "charge or transfer named by charge_id OR transfer_id with "
+                    "amount_cents. More than 5 items are trimmed; an empty or "
+                    "wrong-kind hole is refused 422 proof_slot."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["money"]},
+                        "charge_id": {"type": "string"},
+                        "transfer_id": {"type": "string"},
+                        "amount_cents": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["kind", "amount_cents"],
+                },
+            },
         },
         ["note"],
     )
@@ -1699,7 +1727,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "empty boxes, so a heading with nothing under it hands back nothing. NOT ON A "
                 "BLOCK STEP (rule 229): where your plan declared a registry block, the platform "
                 "files the outcome itself from the receipt words when the act executes, and that "
-                "row reads actor: platform. File nothing there."
+                "row reads actor: platform. File nothing there. WIN LADDER (contract 4.1.0): "
+                "outcome.proof is optional, a list of {kind: 'money', charge_id OR transfer_id, "
+                "amount_cents} naming a settled Book of Houses checkout record; a long-odds or "
+                "moonshot win counts official only with one proof the bench checked. The 201 "
+                "echoes proof (each item's check) and proof_notes."
             ),
             _object_schema(
                 {

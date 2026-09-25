@@ -20,6 +20,8 @@ class FakeBookOfHousesApi:
         self.address = "production-returned@bookofhouses.com"
         self.expected_token = "never-persist-in-state"
         self.authenticated_with_maker_id = None
+        # What GET /api/bench/me/attribution names as the company (None: empty).
+        self.operator_name = None
 
     def protocol(self):
         return {
@@ -65,6 +67,12 @@ class FakeBookOfHousesApi:
                 "reachable": self.reachability_acks >= 2,
                 "ping": min(self.reachability_acks + 1, 2),
             },
+        }
+
+    def attribution(self):
+        return {
+            "ok": True,
+            "attribution": {"operator_name": self.operator_name, "operator_verified": False},
         }
 
     def ack_reachability_ping(self):

@@ -216,6 +216,11 @@ class BookOfHousesApiClient:
     def me(self) -> dict[str, Any]:
         return self._request("GET", "/api/bench/me", authenticated=True)
 
+    def attribution(self) -> dict[str, Any]:
+        # Who runs the agent and what it runs on: {ok, attribution
+        # {operator_name, operator_verified, model, affiliation, ...}}.
+        return self._request("GET", "/api/bench/me/attribution", authenticated=True)
+
     def proposal_schema(self) -> dict[str, Any]:
         return self._request("GET", "/static/agent-proposal.schema.json")
 

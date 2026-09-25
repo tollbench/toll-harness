@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ from typing import Any
 import yaml
 
 from toll_harness import __version__
-from toll_harness.email.book_of_houses import BookOfHousesApiClient
+from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import default_fleet_database
 from toll_harness.storage.secrets import FileSecretStore
 
@@ -26,6 +28,59 @@ TOKEN_SECRET_NAME = "book_of_houses_agent_token"
 # its own process environment. No human holds, pastes or is prompted for it.
 AGENT_TOKEN_ENV = "TOLL_HARNESS_AGENT_TOKEN"
 MODEL_ADAPTERS = ("bedrock", "anthropic", "openai", "claude_code", "codex", "external")
+
+# The intelligence BRAND is the name its maker publishes (Fable, Astra, Muse...).
+# The bench ranks the company fielding an agent together with that brand; the
+# exact model version and the harness are recorded on the system record and
+# never ranked. The brand is free text, 1 to 40 characters.
+INTELLIGENCE_BRAND_MAX = 40
+# Suggestions only, read off the model id's words: (word, brand, maker). A
+# model id that names none of these gets no suggestion, never a guess.
+_BRAND_SUGGESTIONS = (
+    ("fable", "Fable", "Anthropic"),
+    ("astra", "Astra", "OpenAI"),
+    ("sol", "Sol", "OpenAI"),
+    ("luna", "Luna", "OpenAI"),
+    ("muse", "Muse", "Meta"),
+    ("grok", "Grok", "xAI"),
+    ("gemini", "Gemini", "Google"),
+)
+
+
+def suggest_intelligence_brand(model_id: str | None) -> tuple[str, str] | None:
+    """(brand, maker) the model id names, or None; `claude-fable-5-1` -> Fable."""
+    words = set(re.findall(r"[a-z]+", str(model_id or "").lower()))
+    for word, brand, maker in _BRAND_SUGGESTIONS:
+        if word in words:
+            return brand, maker
+    return None
+
+
+def intelligence_maker_for(brand: str | None) -> str | None:
+    """The maker of a brand the harness knows (case-insensitive), else None."""
+    wanted = str(brand or "").strip().lower()
+    for _word, known, maker in _BRAND_SUGGESTIONS:
+        if known.lower() == wanted:
+            return maker
+    return None
+
+
+def stated_intelligence(config: dict[str, Any]) -> tuple[str, str | None] | None:
+    """The agent's (brand, maker), or None when it has none.
+
+    An agent.yaml written before the brand question has no
+    `agent.intelligence_brand`; it still loads and runs, and its brand is read
+    off the model id when the harness recognizes it.
+    """
+    agent = config.get("agent") or {}
+    brand = str(agent.get("intelligence_brand") or "").strip()
+    maker = str(agent.get("intelligence_maker") or "").strip() or None
+    if not brand:
+        suggestion = suggest_intelligence_brand((config.get("model") or {}).get("model_id"))
+        if suggestion is None:
+            return None
+        brand, maker = suggestion[0], maker or suggestion[1]
+    return brand, maker or intelligence_maker_for(brand)
 
 STANDARD_TOOLS = [
     "state.load",
@@ -104,6 +159,10 @@ class InitAnswers:
     # True for `init --registered`: the agent already entered at the bench's
     # door and holds its token, so no registration details are collected.
     registered: bool = False
+    # The intelligence brand its maker publishes (Fable, Astra, Muse...) and,
+    # optionally, the maker. None when the operator stated none.
+    intelligence_brand: str | None = None
+    intelligence_maker: str | None = None
 
 
 def _atomic_text(path: Path, value: str, mode: int) -> None:
@@ -236,6 +295,12 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         )
     ):
         raise ValueError("Connected onboarding requires company and responsible-party details")
+    brand = (answers.intelligence_brand or "").strip() or None
+    if brand and len(brand) > INTELLIGENCE_BRAND_MAX:
+        raise ValueError(
+            f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer"
+        )
+    maker = (answers.intelligence_maker or "").strip() or intelligence_maker_for(brand)
     agent_id = str(uuid.uuid4())
     destination.mkdir(parents=True, exist_ok=True)
     config_path = destination / "agent.yaml"
@@ -248,6 +313,8 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
             "id": agent_id,
             "name": answers.agent_name,
             "intelligence": answers.intelligence,
+            "intelligence_brand": brand,
+            "intelligence_maker": maker,
             "company": answers.company,
             "mode": answers.mode,
             "harness": HARNESS_LABEL,
@@ -328,7 +395,23 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
     model = config["model"]
     toll_bench = config["toll_bench"]
     responsible = toll_bench.get("responsible_party") or {}
-    return {
+    base_model = {
+        "provider": agent["intelligence"],
+        "model": model["model_id"],
+        "version": agent["intelligence"],
+    }
+    # The board ranks (company, intelligence brand); the model version and the
+    # harness ride the system record, recorded and never ranked.
+    intelligence: dict[str, str] | None = None
+    stated = stated_intelligence(config)
+    if stated is not None:
+        brand, maker = stated
+        intelligence = {"brand": brand}
+        base_model["brand"] = brand
+        if maker:
+            intelligence["maker"] = maker
+            base_model["maker"] = maker
+    payload: dict[str, Any] = {
         "handle": agent["name"],
         "skills": (
             "Autonomous web research, browser interaction, email, file work, stateful task "
@@ -341,14 +424,13 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
             "operator_type": "company",
             "company_url": toll_bench["company_url"],
         },
+    }
+    if intelligence is not None:
+        payload["intelligence"] = intelligence
+    return {
+        **payload,
         "system_record": {
-            "base_models": [
-                {
-                    "provider": agent["intelligence"],
-                    "model": model["model_id"],
-                    "version": agent["intelligence"],
-                }
-            ],
+            "base_models": [base_model],
             "autonomy": ("fully_autonomous" if agent["mode"] == "Autonomous" else "human_assisted"),
             "harness": "Toll Harness",
             "harness_version": __version__,
@@ -379,20 +461,48 @@ def _save_connected_metadata(
     save_config(config_path, config)
 
 
+COMPANY_QUESTION = "Which company fields this agent?"
+COMPANY_MISSING = (
+    "The bench's attribution names no company for this agent and none was given; the "
+    "agent's configuration needs the company that fields it."
+)
+
+
+def company_from_attribution(api: Any) -> str | None:
+    """The company the bench records for the agent, or None.
+
+    GET /api/bench/me/attribution carries `attribution.operator_name`, the
+    company the agent registered as fielding it (disclosure.operator_label).
+    A failed call or an empty field is None; the caller then asks.
+    """
+    try:
+        body = api.attribution()
+    except BookOfHousesApiError:
+        return None
+    attribution = (body or {}).get("attribution") or {}
+    return str(attribution.get("operator_name") or "").strip() or None
+
+
 def connect_registered_agent(
     config_path: str | Path,
     token: str,
     *,
     api: BookOfHousesApiClient | None = None,
+    ask_company: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     """Connect a configuration to an agent that already registered at the door.
 
     The token goes straight into the owner-only secret store (never into
     agent.yaml or onboarding state), /me says who it is, and the maker_id and
     registry number are recorded with the same status a fresh registration
-    leaves. The rest (reachability, mailbox, company contact) is the ordinary
-    connected onboarding, which never files a second registration once a
-    maker_id is known.
+    leaves. The company comes from the bench's attribution
+    (`attribution.operator_name`), else from `ask_company` (init asks
+    COMPANY_QUESTION once, only when that call fails or the field is empty);
+    the agent identity needs it, so a configuration is never left with an
+    empty company. The rest
+    (reachability, mailbox, company contact) is the ordinary connected
+    onboarding, which never files a second registration once a maker_id is
+    known.
     """
     token = (token or "").strip()
     if not token:
@@ -405,7 +515,8 @@ def connect_registered_agent(
     token_name = toll_bench.get("token_secret") or TOKEN_SECRET_NAME
     secret_store(path, config).set(token_name, token)
     public_api = api or BookOfHousesApiClient(base_url=toll_bench["base_url"])
-    me = public_api.authenticated(token).me()
+    agent_api = public_api.authenticated(token)
+    me = agent_api.me()
     who = me.get("agent") or {}
     maker_id = who.get("maker_id")
     if not maker_id:
@@ -414,6 +525,17 @@ def connect_registered_agent(
     handle = str(who.get("handle") or "").strip()
     if handle:
         config["agent"]["name"] = handle
+    company = (
+        company_from_attribution(agent_api)
+        or str(config["agent"].get("company") or "").strip()
+    )
+    if not company and ask_company is not None:
+        company = str(ask_company() or "").strip()
+    if not company:
+        raise ValueError(COMPANY_MISSING)
+    # The benchmark block must match the agent identity exactly.
+    config["agent"]["company"] = company
+    config.setdefault("benchmark", {})["company"] = company
     state = load_onboarding(path, config)
     state.update(
         {

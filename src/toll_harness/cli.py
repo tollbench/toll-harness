@@ -36,14 +36,18 @@ from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
 from toll_harness.onboarding import (
     AGENT_TOKEN_ENV,
+    COMPANY_QUESTION,
+    INTELLIGENCE_BRAND_MAX,
     READY,
     WAITING_FOR_COMPANY_VERIFICATION,
     InitAnswers,
     advance_connected_onboarding,
     connect_registered_agent,
     create_configuration,
+    intelligence_maker_for,
     load_onboarding,
     save_onboarding,
+    suggest_intelligence_brand,
 )
 from toll_harness.onboarding import (
     load_config as load_onboarding_config,
@@ -432,6 +436,34 @@ def _pick_model_rail() -> dict[str, Any]:
     }
 
 
+INTELLIGENCE_BRAND_QUESTION = (
+    "Which intelligence brand is this agent? (the name its maker publishes, like Fable, "
+    "Astra, Muse)"
+)
+INTELLIGENCE_BRAND_MISSING = (
+    "The bench needs the intelligence brand to register this agent (the name its maker "
+    "publishes, like Fable, Astra, Muse)."
+)
+
+
+def _ask_intelligence_brand(model_id: str | None, *, required: bool) -> dict[str, str | None]:
+    """The one question after the model rail, pre-filled from the model id.
+
+    The bench ranks the company fielding the agent together with this brand;
+    the model version and the harness are recorded, never ranked. Only a new
+    registration needs it; an agent that already registered may leave it blank.
+    """
+    suggestion = suggest_intelligence_brand(model_id)
+    brand = _prompt(INTELLIGENCE_BRAND_QUESTION, default=suggestion[0] if suggestion else "")
+    if not brand:
+        if required:
+            raise ValueError(INTELLIGENCE_BRAND_MISSING)
+        return {"intelligence_brand": None, "intelligence_maker": None}
+    if len(brand) > INTELLIGENCE_BRAND_MAX:
+        raise ValueError(f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer")
+    return {"intelligence_brand": brand, "intelligence_maker": intelligence_maker_for(brand)}
+
+
 def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
     """Connect an agent that already entered at the door and holds its token."""
     token = os.environ.get(AGENT_TOKEN_ENV, "").strip()
@@ -446,9 +478,12 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         f"{AGENT_TOKEN_ENV} and is never shown.\n"
     )
     rail = _pick_model_rail()
+    # Already registered: the brand is kept locally only, never sent.
+    brand = _ask_intelligence_brand(rail["model_id"], required=False)
     mode = _prompt("Operating mode", default="Autonomous").title()
     answers = InitAnswers(
-        # /me names the agent once the token is stored; this is a placeholder.
+        # /me names the agent and the attribution its company once the token
+        # is stored; these are placeholders until then.
         agent_name=config_path.parent.name or "agent",
         company="",
         mode=mode,
@@ -456,9 +491,14 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         use_book_of_houses_email=True,
         registered=True,
         **rail,
+        **brand,
     )
     config_path = create_configuration(config_path.parent, answers)
-    result = connect_registered_agent(config_path, token)
+    # The bench's attribution names the company; ask once (no default) only
+    # when that call fails or names none.
+    result = connect_registered_agent(
+        config_path, token, ask_company=lambda: _prompt(COMPANY_QUESTION)
+    )
     if result["status"] not in (READY, WAITING_FOR_COMPANY_VERIFICATION):
         _print({**result, "config": str(config_path)})
         return 2
@@ -502,6 +542,7 @@ def command_init(arguments: argparse.Namespace) -> int:
     print(ONE_DOOR_LINE + "\n")
     agent_name = _prompt("Agent name")
     rail = _pick_model_rail()
+    brand = _ask_intelligence_brand(rail["model_id"], required=True)
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
     connect = _yes_no("Connect to Toll Bench / Book of Houses?", default=True)
@@ -523,6 +564,7 @@ def command_init(arguments: argparse.Namespace) -> int:
         responsible_jurisdiction=jurisdiction,
         verification_recipient=verification_recipient,
         **rail,
+        **brand,
     )
     config_path = create_configuration(config_path.parent, answers)
     _set_worker_preference(config_path, connect and not arguments.no_worker)
@@ -2946,7 +2988,7 @@ def _process_market_opportunities(
             return scanned
     # THE OLD ROAD IS A PROPOSAL TOO (rule 243, 2026-09-11). This runs only
     # for a bench or a runtime the one-call road above cannot use, and what it
-    # asks for is the SAME SEVEN FIELDS. It used to ask for a whole plan --
+    # asks for is the SAME EIGHT FIELDS. It used to ask for a whole plan --
     # steps, blocks, connect rows, deliverables, grant requests, four question
     # formats, a finish line -- for a want nobody had picked this agent for.
     # Over seven days the validate door refused that 8,813 times and passed
@@ -2961,11 +3003,16 @@ def _process_market_opportunities(
         "only; do not service existing obligations here. Do not merely review or summarize the "
         "want. Never bid on a target whose brief reports your_bid, and do not "
         "inspect targets outside this candidate set. Do not request human input.\n"
-        "A PROPOSAL IS SEVEN FIELDS AND NOTHING ELSE. It is your short answer to "
+        "A PROPOSAL IS EIGHT FIELDS AND NOTHING ELSE. It is your short answer to "
         "what this person wants, and it is what they choose between. Read the "
         "brief, read the want's own words and the stance line in `strategy` -- "
         "how they want it done -- and answer with exactly these:\n"
         "  `pitch_title` -- what you are offering, up to 120 characters.\n"
+        "  `headline` -- REQUIRED. A short quick-hit title in your own words, up "
+        f"to {draft.HEADLINE_MAX} characters (about five words), that the "
+        "person's card wears at the top once you are picked, e.g. "
+        f'"{draft.HEADLINE_EXAMPLE}". Longer is trimmed at a word and the '
+        "answer says what was cut; an empty one is refused.\n"
         "  `pitch_body` -- ONE paragraph, up to 600 characters: what they get and "
         "roughly how. THIS IS YOUR STRATEGY; there is no other place for it.\n"
         "  `odds` -- your honest chance this person ends up with the thing, 0 to 1.\n"
@@ -2983,11 +3030,13 @@ def _process_market_opportunities(
         "allocation. If this person picks you, the bench hands you a FORM and you "
         "write the plan then -- picks and short lines, and the code writes every "
         "mechanic from your picks.\n"
-        "A LONG TITLE OR PARAGRAPH IS TRIMMED, NOT REFUSED. The door cuts it to "
-        "the cap and says what it cut; that is not a problem to fix and not a "
-        "reason to file again. Only content can be refused: no title, no "
-        "paragraph, a paragraph that does not address the want, or a price above "
-        "the want's budget. Save a compact checkpoint and call result.complete "
+        "A LONG HEADLINE IS TRIMMED, NOT REFUSED. The door cuts it at a word "
+        "and says what it cut; that is not a problem to fix and not a reason to "
+        "file again. A title is never cut. A paragraph over 600 characters IS "
+        "refused, so stay inside it. Otherwise only content can be refused: no "
+        "title, no headline, no paragraph, a paragraph that does not address the "
+        "want, or a price above the want's budget. Save a compact checkpoint and "
+        "call result.complete "
         "only after submission succeeds. If no honest proposal is possible or "
         "production refuses it, call result.fail with the exact blocker so the "
         "next cycle can retry with that context.\n\n"

@@ -37,8 +37,10 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`,
 `toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
 
-A PROPOSAL IS SEVEN FIELDS AND ONE CALL (rule 243, bench contract 3.15): `pitch_title`,
-`pitch_body`, `odds`, `total_ask_cents`, `research_links`, `finalist_questions`, `tools_needed`.
+A PROPOSAL IS EIGHT FIELDS AND ONE CALL (rule 243, bench contract 3.15; `headline` added in
+4.0.12): `pitch_title`, `headline` (up to 40 characters, the short title the person's card wears
+once you are picked; longer is trimmed at a word, empty is refused), `pitch_body`, `odds`,
+`total_ask_cents`, `research_links`, `finalist_questions`, `tools_needed`.
 Nothing below this line is asked before the person chooses. The PLAN is a form the chosen agent
 fills, and the keys below are the shape the bench expands that form into.
 

@@ -305,10 +305,39 @@ CONTACT_PICKER_FORMAT = blocks.CONTACT_PICKER_FORMAT
 _MISSING_FIELD_CODES = frozenset({"REJ-31"})
 
 
+def _schema_names(schema: Any, field: str) -> bool:
+    """True when the bench's published proposal schema names `field`."""
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    required = schema.get("required")
+    return (isinstance(properties, dict) and field in properties) or (
+        isinstance(required, list) and field in required
+    )
+
+
+def _is_about_the_headline(error: Any) -> bool:
+    """A jsonschema error on the headline: its own path, or its absence."""
+    path = list(getattr(error, "absolute_path", []) or [])
+    if path[:1] == ["headline"]:
+        return True
+    return getattr(error, "validator", None) == "required" and "'headline'" in str(
+        getattr(error, "message", "")
+    )
+
+
 def _is_a_missing_field(problem: Any) -> bool:
     if not isinstance(problem, dict):
         return False
     if str(problem.get("code") or "").strip() in _MISSING_FIELD_CODES:
+        return True
+    # THE HEADLINE (contract 4.0.12): the door raises one problem on it and
+    # only one, the empty hole (REJ-21, field `headline`); its length is a
+    # trim, never a problem. Nothing here writes the agent's words for it.
+    if str(problem.get("field") or problem.get("path") or "").strip() == "headline" and (
+        str(problem.get("code") or "").strip() == "REJ-21"
+        or "headline is empty" in str(problem.get("detail") or "")
+    ):
         return True
     return " is required" in str(problem.get("detail") or "")
 
@@ -1445,6 +1474,10 @@ class BookOfHousesTollBenchProvider:
             "problems": self._trim_problems(problems),
             "problem_count": len(problems),
             "summary": summary,
+            # TRIMS ARE NOT PROBLEMS (contract 4.0.12): a headline over 40
+            # characters or a research note over its cap is cut at a word at
+            # filing, and this is what would be stored. ALWAYS PRESENT.
+            "trimmed": self._trim_problems(door.get("trimmed")),
             "corrected_ok": bool(door.get("corrected_ok")),
             "corrections": [
                 str(line)[:PROBLEM_TEXT_MAX] for line in (door.get("corrections") or [])
@@ -1568,8 +1601,19 @@ class BookOfHousesTollBenchProvider:
             from jsonschema import Draft202012Validator
         except ImportError as error:  # pragma: no cover - dependency installation failure
             raise RuntimeError("jsonschema is required for proposal validation") from error
+        # THE HEADLINE IS THE BENCH'S TO ASK FOR (contract 4.0.12). A bench
+        # whose schema names it gets the door's own one sentence for an empty
+        # one and a warning, never a problem, for a long one. A bench whose
+        # schema does not name it ignores the key, so the mirror does too
+        # rather than calling it an unexpected property.
+        asks_headline = _schema_names(schema, "headline")
+        instance = (
+            proposal
+            if asks_headline or not isinstance(proposal, dict)
+            else {key: value for key, value in proposal.items() if key != "headline"}
+        )
         errors = sorted(
-            Draft202012Validator(schema).iter_errors(proposal),
+            Draft202012Validator(schema).iter_errors(instance),
             key=lambda item: list(item.path),
         )
         problems = [
@@ -1588,7 +1632,14 @@ class BookOfHousesTollBenchProvider:
             if not (
                 list(error.absolute_path)[:1] == ["finalist_questions"]
             )
+            # The headline is said once, below, in the door's own sentence.
+            and not (asks_headline and _is_about_the_headline(error))
         ]
+        if asks_headline:
+            problems.extend(
+                {"path": row["path"], "message": row["message"]}
+                for row in draft.headline_problems(proposal)
+            )
         smart_goals = proposal.get("smart_goals")
         if not isinstance(smart_goals, list) or len(smart_goals) != 1:
             problems.append({"path": "smart_goals", "message": "must contain exactly one goal"})
@@ -1715,6 +1766,9 @@ class BookOfHousesTollBenchProvider:
         return {
             "ok": not problems,
             "problems": problems,
+            # Said, never refused: the bench trims a long headline at a word.
+            # ALWAYS PRESENT, including empty.
+            "warnings": draft.headline_warnings(proposal) if asks_headline else [],
             "note": (
                 "Local validation uses the current production JSON schema plus required "
                 "pitch, goal, declared-odds-line and declared-block field checks. "
@@ -2303,9 +2357,10 @@ class BookOfHousesTollBenchProvider:
     ) -> dict[str, Any]:
         """FILE ONE PROPOSAL. Two roads, and the proposal itself says which.
 
-        A PROPOSAL IS SEVEN FIELDS (rule 243, 2026-09-11): a title, a
-        paragraph, one odds number, a price, one to three research links, up
-        to three questions for the person, and the tools it needs. It carries
+        A PROPOSAL IS EIGHT FIELDS (rule 243, 2026-09-11; contract 4.0.12
+        added the headline): a title, a short headline for the person's card,
+        a paragraph, one odds number, a price, one to three research links,
+        up to three questions for the person, and the tools it needs. It carries
         no steps, so it takes the small road -- one free call at the validate
         door, then the filing door. A proposal that carries steps is the old
         whole-plan shape and takes the repair road, unchanged, for a bench
@@ -2851,6 +2906,7 @@ class BookOfHousesTollBenchProvider:
                 "smart_goals",
                 "finalist_questions",
                 "pitch_title",
+                "headline",
                 "pitch_body",
                 "person_cost_estimate",
                 # Frozen at bid time (rule 226) but still required by the
@@ -3511,7 +3567,9 @@ class BookOfHousesTollBenchProvider:
         # platform fetches the link ONCE, sniffs the bytes, hashes them and
         # drops them; `claim_url` rides along for a here.now page the person
         # keeps within the day. `filename` names the file on the card.
-        allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename"}
+        # WIN LADDER (bench contract 4.1.0): `proof` rides the same filing.
+        allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename",
+                   "proof"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
             return {

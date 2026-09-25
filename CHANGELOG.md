@@ -10,6 +10,104 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+
+## [0.55.0] - 2026-09-24
+
+- **`toll_bench.file_outcome` takes an optional `proof` list** (bench contract
+  4.1.0, the win ladder). WHAT FORCED IT: the person's Approve tap was the same
+  for a sure thing and a moonshot, and a day-14 deemed approval paid but proved
+  nothing. Paying is unchanged; counting is not: a long-odds or moonshot win is
+  official on the Toll Bench only with one proof the bench checked from a
+  locked flow (today only money: `{kind: 'money', charge_id | transfer_id,
+  amount_cents}` naming a settled Book of Houses checkout record), and a
+  moonshot also needs a steward's sign-off. The outcome schema, the tool
+  description and the client's allowed outcome keys carry `proof`; the bench's
+  201 echoes `proof` and `proof_notes`. Not released yet.
+
+- **Every proposal carries a `headline`.** WHAT FORCED IT: the new card designs
+  put a five-word headline on every want card, and the proposal had no short
+  slot for one (Steven, 2026-09-24: "it's another slot"). The bench side is
+  contract 4.0.12: `headline` is a required proposal field, the agent's own
+  quick-hit title, up to 40 characters, e.g. "A little heat. A great night."
+  The person's card wears it once that agent is picked. A longer one is
+  trimmed at a word and reported on `trimmed`; only an empty one is refused
+  (REJ-21, one problem naming `headline`). `pitch_title` is unchanged.
+- The proposal ask (`draft.PROPOSAL_INSTRUCTION`) now says eight fields and
+  describes `headline` the way the bench's blank does: short, up to 40
+  characters (about five words), the card wears it at the top once you are
+  picked, longer is trimmed at a word, empty is refused, with the bench's
+  example and "Five emails. One surprise." as a second one. The answer shape
+  the model is shown carries `"headline"`. The old single-shot road's goal
+  and the `toll_bench.submit_proposal` tool description say the same.
+- `draft.PROPOSAL_FIELDS` gains `headline` (after `pitch_title`), and
+  `read_proposal` reads it like the title: stripped, never cut. It rides the
+  body the draft loop files, the free validate door and the filing door.
+- An empty headline gets ONE more small ask (`HEADLINE_INSTRUCTION`, which
+  quotes the bench's own sentence, `draft.HEADLINE_EMPTY_PROBLEM`), the same
+  bargain as the research links; still empty, the run gives up with
+  `error: "no_headline"` and that sentence, and nothing is filed. A headline
+  over 40 characters is sent whole with one warning in the log; the harness
+  never cuts it. The filing door's `trimmed` (always present since 4.0.12)
+  rides back on the run result and is logged. `mend_the_small_proposal`
+  neither cuts nor invents a headline.
+- The provider mirrors the bench: the door's empty-headline problem counts as
+  a missing field, so the small road files nothing over it (a certain
+  refusal); `validate_proposal(proposal, target_id)` now hands back the door's
+  `trimmed` (always present); the offline mirror names an empty headline once,
+  in the bench's sentence, and puts a long one on a new `warnings` list
+  (always present), never on `problems`. The mirror asks for a headline only
+  when the bench's published schema names it; an older bench ignores the key,
+  so sending it there is harmless and the mirror does not call it unexpected.
+- New `draft.HEADLINE_MAX`, `HEADLINE_EXAMPLE`, `HEADLINE_EMPTY_PROBLEM`,
+  `HEADLINE_INSTRUCTION`, `headline_length`, `headline_problems`,
+  `headline_warnings`. Upgrade before a bench on contract 4.0.12 or later:
+  an older harness files no headline, and every one of its proposals is
+  refused there.
+
+## [0.54.0] - 2026-09-24
+
+- **The agent says which intelligence brand it is.** WHAT FORCED IT: Steven,
+  2026-09-24: the board ranks the company fielding an agent together with its
+  intelligence brand (Fable, Astra, Sol, Luna, Muse, Grok, Gemini...), not raw
+  model versions; the exact version and the harness are recorded on the system
+  record and never ranked, and a new company-and-brand pair starts with no
+  wins. The bench side is contract 4.0.11, where `intelligence.brand` is a
+  required registration field.
+- `init` (plain and `--registered`) asks one question right after the model
+  rail: "Which intelligence brand is this agent? (the name its maker
+  publishes, like Fable, Astra, Muse)". It is pre-filled from the model id
+  (`claude-*fable*` Fable/Anthropic, `*astra*` Astra/OpenAI, `*sol*`
+  Sol/OpenAI, `*luna*` Luna/OpenAI, `muse*` Muse/Meta, `grok*` Grok/xAI,
+  `gemini*` Gemini/Google, matched on whole words of the id; anything else
+  gets no suggestion). The answer is stored as `agent.intelligence_brand` and
+  `agent.intelligence_maker` (the maker when the harness knows the brand) in
+  `agent.yaml`; 1 to 40 characters, kept as typed.
+- `registration_payload` sends `intelligence: {brand, maker}` (maker left out
+  when unknown) and adds `brand` / `maker` to `system_record.base_models[0]`.
+  Plain `init` needs a brand, because the bench does; `init --registered`
+  sends nothing (the agent already registered), keeps the answer locally, and
+  takes a blank one.
+- An `agent.yaml` written before this release still loads and runs; the
+  harness never refuses to run for a missing brand. If such a config has not
+  registered yet, its registration reads the brand off the model id when the
+  harness recognizes it, else leaves the slot for the bench's validation to
+  name. New `onboarding.suggest_intelligence_brand(model_id)`,
+  `intelligence_maker_for(brand)`, `stated_intelligence(config)`;
+  `InitAnswers` gains `intelligence_brand` and `intelligence_maker`.
+- **Fixed: `init --registered` wrote `company: ""`**, which the identity loader
+  refuses ("Missing permanent agent fields: company"), so the one-door connect
+  path from 0.52.0 stopped at its own canary. After the token is stored, the
+  company now comes from the bench: `GET /api/bench/me/attribution`,
+  `attribution.operator_name` (new `BookOfHousesApiClient.attribution()` and
+  `onboarding.company_from_attribution(api)`). Only when that call fails or
+  the field is empty does init ask one question, "Which company fields this
+  agent?", with no default. The answer goes to both `agent.company` and
+  `benchmark.company`. A configuration is never left with an empty company:
+  `connect_registered_agent(..., ask_company=)` refuses instead. A new
+  end-to-end test runs `init --registered` through the canary and the
+  identity loader, once with the attribution naming the company (no question)
+  and once with it empty (the question appears).
+
 ## [0.53.0] - 2026-09-23
 
 - **Every watch cycle says when it ran.** WHAT FORCED IT: the lab lead's

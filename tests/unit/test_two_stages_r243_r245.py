@@ -149,10 +149,11 @@ def test_two_problems_taking_turns_still_trip_the_guard():
 
 
 # ---------------------------------------------------------------------------
-# STAGE ONE — the proposal: seven fields, one call, no draft
+# STAGE ONE — the proposal: eight fields, one call, no draft
 # ---------------------------------------------------------------------------
 PROPOSAL = {
     "pitch_title": "Three podcast bookings, start to finish",
+    "headline": "Three shows. Your voice.",
     "pitch_body": "I find the shows that take outside guests, write the pitch "
                   "you approve, send it, chase the quiet ones and book the "
                   "first interview.",
@@ -226,7 +227,7 @@ def test_a_proposal_with_no_words_files_nothing():
     assert bench.filed == []
 
 
-def test_the_seven_fields_are_read_and_everything_else_is_dropped():
+def test_the_eight_fields_are_read_and_everything_else_is_dropped():
     read = read_proposal(dict(PROPOSAL, steps=[{"title": "no"}], strategy="no",
                               capabilities=["no"], odds=4))
     assert set(read) == set(PROPOSAL)
@@ -589,6 +590,7 @@ def _door_provider(api):
 
 SMALL = {
     "pitch_title": "Three podcast bookings",
+    "headline": "Three shows. Your voice.",
     "pitch_body": "I find the shows, write the pitch you approve and send it.",
     "odds": 0.55,
     "total_ask_cents": 25_000,

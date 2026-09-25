@@ -790,8 +790,12 @@ def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():
     assert toll_bench.submit_calls == 1
     assert result["proposal_filed"] is True
     assert observed["goal"].count('"target_id"') == cli.MARKET_SCAN_CANDIDATE_LIMIT
-    # RULE 243: the old road asks for the same SEVEN FIELDS now.
+    # RULE 243: the old road asks for the same EIGHT FIELDS now (contract
+    # 4.0.12 added the headline, the short title the person's card wears).
     assert "ONE PROPOSAL" in observed["goal"]
+    assert "EIGHT FIELDS" in observed["goal"]
+    assert "`headline` -- REQUIRED" in observed["goal"]
+    assert "up to 40 characters" in observed["goal"]
     assert "valid to submit no proposal" not in observed["goal"]
     assert runtime.enabled_tools == ["email.send", "toll_bench.attention", *cli.MARKET_SCAN_TOOLS]
 
