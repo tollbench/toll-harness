@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from toll_harness import __version__
+from toll_harness.config import STEP_DOOR_TOOLS
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import default_fleet_database
 from toll_harness.storage.secrets import FileSecretStore
@@ -130,7 +131,7 @@ TOLL_BENCH_TOOLS = [
     # RULE 230: the two doors that hand back bytes.
     "toll_bench.deliver_file",
     "toll_bench.deliver_hosted_file",
-]
+] + STEP_DOOR_TOOLS
 
 
 @dataclass(frozen=True)

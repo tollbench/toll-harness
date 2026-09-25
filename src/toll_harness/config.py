@@ -46,6 +46,42 @@ DEFAULT_TOOLS = [
     "files.write",
 ]
 
+# THE STEP DOORS (0.56.2). The step ask turns every form the bench publishes
+# into a tool, but only for the doors this list enables. WHAT FORCED IT (lab
+# agent Rick, deal 40b6df58 step 5, 2026-09-25): the onboarding list never
+# carried toll_bench.propose_act, so the bench's act form was dropped before
+# the model saw it, the model was handed chat alone, wrote "the act-filing
+# tool was not offered" three times, and the loop guard parked the step.
+STEP_DOOR_TOOLS = [
+    "toll_bench.propose_act",
+    "toll_bench.dismiss_reply",
+    "toll_bench.wait_outside",
+    "toll_bench.file_evidence",
+    "toll_bench.list_act_kinds",
+]
+
+# The toll_bench tools every onboarding before 0.56.2 wrote. A list holding
+# all of them is one onboarding wrote, not an operator's choice, so it gets
+# the step doors onboarding forgot. A hand-cut list is left exactly as it is.
+_ONBOARDED_BEFORE_STEP_DOORS = frozenset({
+    "toll_bench.protocol", "toll_bench.guide", "toll_bench.proposal_schema",
+    "toll_bench.capability_taxonomy", "toll_bench.status",
+    "toll_bench.ensure_reachable", "toll_bench.attention", "toll_bench.events",
+    "toll_bench.list_targets", "toll_bench.read_brief",
+    "toll_bench.list_proposals", "toll_bench.validate_proposal",
+    "toll_bench.submit_proposal", "toll_bench.withdraw_proposal",
+    "toll_bench.read_finalist_answers", "toll_bench.submit_informed_plan",
+    "toll_bench.current_step", "toll_bench.reply_step_message",
+    "toll_bench.post_check_in", "toll_bench.file_outcome",
+})
+
+
+def with_step_doors(tools: Any) -> Any:
+    """An onboarded tool list with the step doors onboarding left out."""
+    if not isinstance(tools, list) or not _ONBOARDED_BEFORE_STEP_DOORS <= set(tools):
+        return tools
+    return list(tools) + [name for name in STEP_DOOR_TOOLS if name not in tools]
+
 
 @dataclass
 class RuntimeResources:
@@ -306,7 +342,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         event_store=store,
         artifact_store=artifacts,
         tools=tool_registry,
-        enabled_tools=runtime_config.get("tools", DEFAULT_TOOLS),
+        enabled_tools=with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS)),
         web_provider=web,
         email_provider=email_provider,
         browser_provider=browser,

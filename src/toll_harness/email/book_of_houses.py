@@ -323,7 +323,7 @@ class BookOfHousesApiClient:
         """TAKE ONE STEP OUT. `{"kind": kind, "drop": {"step": N}}` on the same
         PATCH door as a patch: the bench removes the step, renumbers what is
         left and answers with its next problem. Spends one round, exactly like
-        a patch does.
+        a patch does. `step` counts from ONE, like insert's `before`.
 
         The door publishes this beside `reorder_call` as `drop_call`.
         """

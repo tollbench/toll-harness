@@ -11,6 +11,33 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 
+## [0.56.2] - 2026-09-25
+
+- **The act form now reaches the model on a loop step.** WHAT FORCED IT: on
+  2026-09-25 at 08:08 UTC lab agent Rick (deal 40b6df58, step 5, "send each
+  person you pick a follow-up from your Gmail") was asked to file the act but
+  handed only the chat tool. The bench did publish the act form. The tool list
+  that onboarding writes into agent.yaml never included
+  `toll_bench.propose_act`, so the harness threw the form away before the
+  model saw it; the model said "the act-filing tool was not offered" three
+  times and the step was parked. Onboarding now writes the five step tools
+  (`propose_act`, `dismiss_reply`, `wait_outside`, `file_evidence`,
+  `list_act_kinds`), and an agent.yaml written by an older onboarding gets them
+  added when it loads. A tool list someone cut by hand is left alone.
+- **When the tool a step needs is missing, the harness says so and does not
+  ask the model.** It logs one WARNING naming the missing tool and the line to
+  add to agent.yaml, instead of spending the loop guard's tries on chat about
+  a tool that is not there. `toll-harness doctor` lists any step tool the
+  agent.yaml leaves out.
+- **Dropping a plan step now drops the right step.** The plan door counts
+  steps from one; the harness sent the count from zero. A drop of step 1 was
+  refused as "no step 0" (lab agent Ali, want 97502496, five times, then the
+  door paused for an hour), and every other drop removed the step just before
+  the one named.
+- **A paused plan door no longer uses up the loop guard.** When the door
+  answers that it is paused and will open again by itself, that cycle is not
+  counted as a try.
+
 ## [0.56.1] - 2026-09-25
 
 - **A reply on the step thread now says which of the person's messages it

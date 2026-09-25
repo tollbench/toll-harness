@@ -1836,7 +1836,7 @@ class BookOfHousesTollBenchProvider:
         patch.
 
         A bench that publishes no drop instruction answers the ordinary way
-        and the loop carries on from whatever it says.
+        and the loop carries on from whatever it says. `step` counts from ONE.
         """
         return self._draft_answer(
             self.api.drop_proposal_draft_step, target_id, int(step), kind

@@ -594,7 +594,8 @@ def read_drop(answer: Any, asked_step: int | None = None) -> int | None:
         return asked_step
     if asked_step is None:
         return wanted
-    # The prompt shows the 1-based step number; the door counts from zero.
+    # The prompt shows the 1-based step number; this returns the 0-based
+    # index (the door itself counts from ONE -- `_drop_step` adds it back).
     # Either spelling of the step that was ASKED about reads as that step.
     if wanted in (asked_step, asked_step + 1):
         return asked_step
@@ -4964,9 +4965,14 @@ class DraftLoop:
             path or "?",
             code or "no code",
         )
-        self._sent.append((path, {"drop": {"step": index}}))
+        # THE DOOR COUNTS FROM ONE, like move and insert. Until 0.56.2 this
+        # sent the 0-based index: a drop of step 1 was refused "no step 0 to
+        # drop" (lab agent Ali, want 97502496, five times, plan door paused an
+        # hour), and every other drop took out the step BEFORE the one named.
+        number = index + 1
+        self._sent.append((path, {"drop": {"step": number}}))
         self._last_round = []
-        answer = self.provider.drop_draft_step(target_id, index, kind=kind)
+        answer = self.provider.drop_draft_step(target_id, number, kind=kind)
         self.rounds += 1
         self._record(target_id, kind, answer, f"drop step {index + 1}")
         return answer

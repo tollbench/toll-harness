@@ -140,7 +140,7 @@ def test_a_drop_answer_becomes_the_doors_drop_call():
 
     DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(STEP_ROW), "x")
 
-    assert door.drops == [1]
+    assert door.drops == [2]  # the door counts from ONE (0.56.2)
     assert door.patches == []
 
 
@@ -166,7 +166,7 @@ def test_a_drop_spends_a_round_and_is_recorded_like_a_patch():
     loop._answer_the_fixes("t-1", "plan", _answer(STEP_ROW), "x")
 
     assert loop.rounds == 1
-    assert loop._sent == [("form.steps.1", {"drop": {"step": 1}})]
+    assert loop._sent == [("form.steps.1", {"drop": {"step": 2}})]
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ def test_a_reworded_line_on_a_whole_step_path_is_asked_again():
     assert _said(model, 1).count("TWO EXITS") >= 1
     # The reworded line never reached the door.
     assert door.patches == []
-    assert door.drops == [1]
+    assert door.drops == [2]  # the door counts from ONE (0.56.2)
 
 
 def test_the_second_answer_is_taken_whatever_shape_it_is():
@@ -229,7 +229,7 @@ def test_the_repeated_branch_names_both_exits_on_a_field_path():
     assert SEND_STEP["hand_over_line"] in second
     assert '"verb":"emails"' in second
     # It took the drop.
-    assert door.drops == [1]
+    assert door.drops == [2]  # the door counts from ONE (0.56.2)
 
 
 def test_the_repeated_branch_still_shows_what_was_sent_last_round():

@@ -198,7 +198,7 @@ def test_a_door_with_no_insert_call_falls_back_to_asking_the_agent():
     DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(), "x")
 
     assert door.inserts == []
-    assert door.drops == [1]
+    assert door.drops == [2]  # the door counts from ONE (0.56.2)
     assert "TWO EXITS" in _said(model)
 
 

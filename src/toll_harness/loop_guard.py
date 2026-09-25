@@ -89,6 +89,21 @@ class LoopGuard:
             )
         return True
 
+    def release(self, key: str, state: str) -> None:
+        """Hand back one reserved attempt: the work was never tried.
+
+        0.56.2: a plan door answering `draft_paused` ("opens again by itself")
+        read nothing, so the reservation made for that cycle is returned
+        rather than spent. Three pauses in a row used to park a plan the door
+        was about to take (lab agent Ali, want 97502496).
+        """
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "UPDATE loop_guard SET attempts=MAX(attempts-1,0) "
+                "WHERE work_key=? AND fingerprint=?",
+                (key, state),
+            )
+
     def status(self) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.row_factory = sqlite3.Row

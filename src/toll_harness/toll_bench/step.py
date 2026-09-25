@@ -419,7 +419,29 @@ NEED_TOOLS_SCHEMA: dict[str, Any] = {
     "properties": {"why": {"type": "string", "minLength": 1}},
     "required": ["why"],
 }
+# Where `cli._permitted_step_state` lists the forms the agent's tool list
+# turned off: [{"action": bench action, "tools": [the tool names missing]}].
+FORMS_TURNED_OFF = "forms_turned_off"
 _REPLY_IN_ENDPOINT = re.compile(r"/replies/([^/]+)/dismiss$")
+
+
+# The moves whose first call IS the move: without it the other tools can only
+# talk about the work, never do it.
+_DOOR_OR_NOTHING = frozenset({"file_act", "refile_act", "answer_reply", "outside_work"})
+
+
+def missing_door(call: str, payload: dict[str, Any]) -> str:
+    """One plain line naming the form a move needed and why it is not here."""
+    action = BENCH_ACTIONS.get(call, call)
+    submission = payload.get("submission")
+    off = submission.get(FORMS_TURNED_OFF) if isinstance(submission, dict) else None
+    for row in off or []:
+        if isinstance(row, dict) and row.get("action") == action:
+            tools = ", ".join(str(tool) for tool in row.get("tools") or [])
+            return (f"{call} is not on this agent's tool list; add {tools} to "
+                    "runtime.tools in agent.yaml (the bench published the "
+                    f"{action} form)")
+    return f"the bench published no {action} form with a schema on this step"
 
 
 def step_tools(move: dict[str, Any], payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1088,6 +1110,31 @@ class StepAsk:
         if not tools:
             return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,
                     "why": f"the bench publishes no form for the {move['move']} calls"}
+        door = (move.get("calls") or [None])[0]
+        if door and door not in tools and move["move"] in _DOOR_OR_NOTHING:
+            # 0.56.2: THE MOVE'S OWN DOOR IS NOT HERE. Asking anyway hands the
+            # model chat alone, and it spends the loop guard's tries writing
+            # "the tool was not offered" to the person (Rick, deal 40b6df58).
+            # Say what is missing, once, and ask nothing.
+            why = missing_door(door, payload)
+            self.log.warning("step ask %s step %s: %s; not asking the model",
+                             move["move"], number, why)
+            return {
+                "ok": True,
+                "road": ROAD_STEP_ASK,
+                "move": move["move"],
+                "call": None,
+                "missing_form": door,
+                "why": why,
+                "tool_count": len(tools),
+                "result": {"ok": True, "missing_form": door},
+                "model_calls": 0,
+                "prompt_chars": 0,
+                "prefix_chars": 0,
+                "input_tokens": 0,
+                "cached_tokens": 0,
+                "trail": [],
+            }
         definitions = [_definition(name, tool) for name, tool in tools.items()]
         name: str | None = None
         result: dict[str, Any] = {}

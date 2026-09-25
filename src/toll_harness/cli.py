@@ -25,12 +25,14 @@ from toll_harness.config import (
     build_runtime,
     default_config,
     load_config,
+    with_step_doors,
 )
 from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.fleet import market_target_key
 from toll_harness.loop_guard import LoopGuard
+from toll_harness.toll_bench.step import FORMS_TURNED_OFF
 from toll_harness.loop_guard import fingerprint as loop_fingerprint
 from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
@@ -664,6 +666,7 @@ def command_doctor(arguments: argparse.Namespace) -> int:
             checks["service"] = {"state": "unknown", "error": str(error)}
         if (config.get("toll_bench") or {}).get("connected"):
             service_line = service_notice(checks["service"], checks["service"].get("config"))
+            checks["step_forms"] = step_form_tools_check(config)
     checks["updates"] = check_for_updates(arguments.config, force=True)
     _print(checks)
     _print_update_notices(checks["updates"])
@@ -2308,6 +2311,13 @@ def _process_market_attention(
         planned = _file_the_informed_plan_from_draft(
             resources, obligation, reachability, len(obligations), threshold
         )
+        if (
+            guard is not None
+            and isinstance(planned, dict)
+            and (planned.get("draft_loop") or {}).get("error") == draft.DRAFT_PAUSED
+        ):
+            # The door read nothing; this cycle was not an attempt.
+            guard.release(_loop_key(obligation), loop_states[_loop_key(obligation)])
         if planned is not None:
             return planned
     dispatch = _OBLIGATION_DISPATCH.get(kind)
@@ -2777,6 +2787,11 @@ def _file_the_informed_plan_from_draft(
     if ok:
         _breaker_reset(obligation)
         return payload
+    if not postcondition_error and outcome.get("error") == draft.DRAFT_PAUSED:
+        # A resting door is not a failure (see _TERMINAL_DOOR_ERRORS): no
+        # breaker count, just come back after a while.
+        payload["retry_after_seconds"] = 300.0
+        return payload
     breaker = _breaker_record_failure(
         resources,
         obligation,
@@ -2819,6 +2834,28 @@ _STEP_FORM_TOOLS: dict[str, tuple[str, ...]] = {
 }
 
 
+def step_form_tools_check(config: dict[str, Any]) -> dict[str, Any]:
+    """doctor: the step-form tools this agent.yaml's runtime.tools leaves out.
+
+    A form whose tool is off never reaches the model, so the step it files
+    cannot move (0.56.2, Rick and Ali). Onboarded lists get the step doors
+    added when they load; a hand-cut list does not, and doctor says so.
+    """
+    tools = (config.get("runtime") or {}).get("tools")
+    if not isinstance(tools, list):
+        return {"ok": True, "note": "runtime.tools not set: no restriction"}
+    needed = sorted({tool for group in _STEP_FORM_TOOLS.values() for tool in group})
+    missing = [tool for tool in needed if tool not in tools]
+    loaded = with_step_doors(tools)
+    still = [tool for tool in missing if tool not in loaded]
+    check: dict[str, Any] = {"ok": not still, "missing_in_file": missing}
+    if missing and not still:
+        check["note"] = "added when the config loads; add them to agent.yaml to be explicit"
+    if still:
+        check["fix"] = "add " + ", ".join(still) + " to runtime.tools in agent.yaml"
+    return check
+
+
 def _permitted_step_state(resources: Any, step_state: dict[str, Any]) -> dict[str, Any]:
     """The step payload with only the forms this agent's tools allow.
 
@@ -2830,15 +2867,26 @@ def _permitted_step_state(resources: Any, step_state: dict[str, Any]) -> dict[st
     if not isinstance(submission, dict):
         return step_state
     narrowed = dict(submission)
-    narrowed["actions"] = [
-        action
-        for action in submission.get("actions") or []
-        if not isinstance(action, dict)
-        or all(
-            _tool_enabled(resources, tool)
-            for tool in _STEP_FORM_TOOLS.get(str(action.get("action") or ""), ())
-        )
-    ]
+    kept: list[Any] = []
+    off: list[dict[str, Any]] = []
+    for action in submission.get("actions") or []:
+        missing = [
+            tool
+            for tool in _STEP_FORM_TOOLS.get(
+                str(action.get("action") or "") if isinstance(action, dict) else "", ()
+            )
+            if not _tool_enabled(resources, tool)
+        ]
+        if missing:
+            off.append({"action": action.get("action"), "tools": missing})
+        else:
+            kept.append(action)
+    narrowed["actions"] = kept
+    if off:
+        # The ask names these when the move's own door is among them, so a
+        # form this agent's tool list turned off is never mistaken for a
+        # form the bench did not publish.
+        narrowed[FORMS_TURNED_OFF] = off
     if not _tool_enabled(resources, "toll_bench.reply_step_message"):
         # The parked report rides a thread message.
         narrowed.pop("worker_status", None)
