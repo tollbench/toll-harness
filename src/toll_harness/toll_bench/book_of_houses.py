@@ -484,6 +484,10 @@ class BookOfHousesTollBenchProvider:
         self._act_kinds: dict[str, Any] | None = None
         self._platform_blocks: dict[str, dict[str, Any]] = {}
         self._last_step_id: str | None = None
+        # The person's unanswered message ids per step, oldest first, as the
+        # last current-step read (or reply 200) listed them. A reply that names
+        # nothing is filled from here with the latest (0.56.1).
+        self._unanswered: dict[str, list[str]] = {}
         self._block_refusals: dict[str, int] = {}
         # Contract 3.0: probed once per provider, then remembered. None means
         # "not asked yet"; False means this bench publishes no validate door.
@@ -3072,6 +3076,10 @@ class BookOfHousesTollBenchProvider:
                 "unanswered_elsewhere": thread.get("unanswered_elsewhere") or [],
                 "messages": thread.get("messages") or [],
                 "post_reply": thread.get("post_reply"),
+                # Contract 4.0.4: the list behind unread_from_person, each
+                # entry {id, posted_at, answer_with}. This whitelist dropped it
+                # until 0.56.1, so no reply ever named what it answered.
+                "unanswered_messages": thread.get("unanswered_messages") or [],
             },
             "released_materials": result.get("released_materials") or [],
             "released_materials_count": result.get("released_materials_count", 0),
@@ -3144,6 +3152,8 @@ class BookOfHousesTollBenchProvider:
             payload["current_step"]["deliverable"] = result.get("deliverable")
         self._remember_platform_blocks(step.get("id"), payload)
         self._remember_deliverable(step.get("id"), payload)
+        self._remember_unanswered(
+            str(step.get("id") or ""), thread.get("unanswered_messages") or [])
         self._fit_the_step(payload)
         return payload
 
@@ -3260,14 +3270,42 @@ class BookOfHousesTollBenchProvider:
         else:
             self._platform_blocks.pop(step_id, None)
 
+    def _remember_unanswered(self, step_id: str, rows: Any) -> None:
+        if not step_id or not isinstance(rows, list):
+            return
+        self._unanswered[step_id] = [
+            str(row.get("id")) for row in rows
+            if isinstance(row, dict) and row.get("id")
+        ]
+
     def reply_step_message(
         self,
         deal_id: str,
         step_id: str,
         reply: str,
         idempotency_key: str,
+        answering: str | list[str] | None = None,
     ) -> dict[str, Any]:
-        return self.api.post_step_message(deal_id, step_id, reply, idempotency_key)
+        """A reply on the step thread that NAMES what it answers (0.56.1).
+
+        WHAT FORCED IT: 2026-09-25, lab agent Rick answered the person's one
+        message six times in 70 seconds. The bench pays only what a reply names
+        on `answering`, the harness never sent the key, so every 200 read
+        `answered: []` and the message stayed owed. When the caller names
+        nothing, the latest unanswered message on this step is named, which
+        answers everything before it. No unanswered message, no claim.
+        """
+        if not answering:
+            owed = self._unanswered.get(step_id) or []
+            answering = owed[-1] if owed else None
+        if answering:
+            result = self.api.post_step_message(
+                deal_id, step_id, reply, idempotency_key, answering=answering)
+        else:
+            result = self.api.post_step_message(deal_id, step_id, reply, idempotency_key)
+        if isinstance(result, dict):
+            self._remember_unanswered(step_id, result.get("unanswered_messages"))
+        return result
 
     def report_worker_status(
         self, deal_id: str, step_id: str, state: str, round_number: int,

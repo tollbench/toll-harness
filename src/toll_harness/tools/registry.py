@@ -1344,6 +1344,18 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "step_id": {"type": "string"},
                     "reply": {"type": "string", "minLength": 1, "maxLength": 4000},
                     "idempotency_key": {"type": "string"},
+                    "answering": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                        "description": (
+                            "Optional: the id (or ids) of the person's message this "
+                            "reply answers, from step_thread.unanswered_messages. "
+                            "Left out, the harness names the latest unanswered "
+                            "message on the step, which answers everything before it."
+                        ),
+                    },
                 },
                 ["deal_id", "step_id", "reply", "idempotency_key"],
             ),
@@ -1353,6 +1365,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             arguments["step_id"],
             arguments["reply"],
             arguments["idempotency_key"],
+            answering=arguments.get("answering") or None,
         ),
     )
     pulse_schema = _object_schema(

@@ -460,13 +460,21 @@ class BookOfHousesApiClient:
         step_id: str,
         reply: str,
         idempotency_key: str,
+        answering: str | list[str] | None = None,
     ) -> dict[str, Any]:
+        """Post on the step thread. `answering` names the person's message (an
+        id, or a list) this reply pays; the bench pays only what a reply NAMES,
+        and naming the latest pays everything before it on the step. Left out
+        when None, so a reply that answers nobody claims nothing."""
         deal = urllib.parse.quote(deal_id, safe="")
         step = urllib.parse.quote(step_id, safe="")
+        body: dict[str, Any] = {"reply": reply}
+        if answering:
+            body["answering"] = answering
         return self._request(
             "POST",
             f"/api/bench/deals/{deal}/steps/{step}/messages",
-            payload={"reply": reply},
+            payload=body,
             authenticated=True,
             idempotency_key=idempotency_key,
         )

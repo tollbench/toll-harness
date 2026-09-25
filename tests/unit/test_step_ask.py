@@ -172,6 +172,7 @@ class FakeBench:
     def __init__(self, *, refuse_first=None):
         self.acts, self.replies, self.pulses = [], [], []
         self.outcomes, self.waits, self.dismissals = [], [], []
+        self.answering = []
         self.refuse_first = refuse_first
         self.briefs = 0
 
@@ -190,8 +191,9 @@ class FakeBench:
         self.dismissals.append((reply_id, dismissal))
         return {"ok": True}
 
-    def reply_step_message(self, deal_id, step_id, reply, key):
+    def reply_step_message(self, deal_id, step_id, reply, key, answering=None):
         self.replies.append((deal_id, step_id, reply, key))
+        self.answering.append(answering)
         return {"ok": True, "message_id": "m-9"}
 
     def post_check_in(self, deal_id, pulse, key):

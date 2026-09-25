@@ -11,6 +11,31 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 
+## [0.56.1] - 2026-09-25
+
+- **A reply on the step thread now says which of the person's messages it
+  answers.** WHAT FORCED IT: on 2026-09-25 at 07:20 UTC lab agent Rick
+  (deal 40b6df58, step 17fbac0e) answered the person's one message six times
+  in 70 seconds. The bench only counts a message as answered when the reply
+  names it on `answering`, and the harness never sent that key, so every
+  answer came back `answered: []`, `answering_key_read: null`,
+  `unread_from_person: 1`, and the next poll owed the same answer again.
+  - The step loop fills `answering` itself: the model's own pick when it is
+    one of the owed ids on this step, otherwise the latest unanswered
+    message, which answers everything the person said before it. The model
+    never has to keep this book.
+  - A parked-step sentence names the latest unanswered message when there is
+    one (a parked explanation is an answer) and claims nothing when there is
+    none.
+  - The provider keeps `step_thread.unanswered_messages` (its whitelist
+    dropped the list until now) and fills `answering` the same way for a
+    reply that names nothing, so the `toll_bench.reply_step_message` tool,
+    which takes an optional `answering` of its own, is fixed on the old road
+    too.
+  - If a reply that named a message still comes back unpaid, the harness logs
+    a WARNING naming the message and does not answer that same message again
+    for 15 minutes. A new message from the person is answered as usual.
+
 ## [0.56.0] - 2026-09-25
 
 - **`toll-harness install-service <agent.yaml>` runs the market watch in the

@@ -44,6 +44,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -672,6 +673,113 @@ def _shed(tail: dict[str, Any]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 3b. WHAT A REPLY ANSWERS (0.56.1)
+# ---------------------------------------------------------------------------
+# WHAT FORCED IT: 2026-09-25 07:20 UTC, lab agent Rick, deal 40b6df58, step
+# 17fbac0e. The step loop answered the person's message 871c5dbb six times in
+# 70 seconds. The bench pays only the message a reply NAMES on `answering`;
+# the harness never sent the key, so every 200 read `answered: []`,
+# `answering_key_read: null`, `unread_from_person: 1`, and the next poll owed
+# the same answer again. The harness now names it: the model's own pick when
+# it is one of the owed ids, else the LATEST unanswered message on the step,
+# which pays everything the person said before it. The model never keeps
+# this book.
+#
+# And if a reply that named a message still comes back unpaid, the harness
+# says so in the log and holds off answering that same message again for a
+# while, so a bench that does not read the key costs one reply, not six.
+UNPAID_REPLY_HOLD_SECONDS = 900.0
+_UNPAID_REPLIES: dict[str, float] = {}
+
+
+def unanswered_on_step(payload: dict[str, Any] | None) -> list[str]:
+    """The ids of the person's unanswered messages on this step, oldest first.
+
+    Read off `step_thread.unanswered_messages` (contract 4.0.4). A bench that
+    predates that list: the person's messages on the thread, but only while
+    `unread_from_person` says something is owed (since 3.13 the thread carries
+    only the unanswered ones)."""
+    thread = (payload or {}).get("step_thread") if isinstance(payload, dict) else None
+    if not isinstance(thread, dict):
+        return []
+    rows = thread.get("unanswered_messages")
+    if isinstance(rows, list) and rows:
+        return [str(row.get("id")) for row in rows if isinstance(row, dict) and row.get("id")]
+    if not thread.get("unread_from_person"):
+        return []
+    return [
+        str(item.get("id"))
+        for item in thread.get("messages") or []
+        if isinstance(item, dict) and item.get("id") and item.get("who") == "person"
+    ]
+
+
+def answering_for(owed: list[str], asked: Any = None) -> str | list[str] | None:
+    """What a reply names on `answering`. None when nothing is owed: a reply
+    that answers nobody claims nothing. The model's own pick when every id in
+    it is owed; otherwise the latest owed message, which answers the rest."""
+    if not owed:
+        return None
+    if isinstance(asked, str) and asked.strip() in owed:
+        return asked.strip()
+    if isinstance(asked, list) and asked:
+        picked = [str(item).strip() for item in asked]
+        if all(item in owed for item in picked):
+            return picked if len(picked) > 1 else picked[0]
+    return owed[-1]
+
+
+def _named(answering: str | list[str] | None) -> list[str]:
+    if not answering:
+        return []
+    return [answering] if isinstance(answering, str) else [str(item) for item in answering]
+
+
+def reply_is_held(message_id: str, now: float | None = None) -> bool:
+    """True while a reply that named this message came back unpaid recently."""
+    now = time.monotonic() if now is None else now
+    for key in [key for key, at in _UNPAID_REPLIES.items()
+                if now - at > UNPAID_REPLY_HOLD_SECONDS]:
+        _UNPAID_REPLIES.pop(key, None)
+    return message_id in _UNPAID_REPLIES
+
+
+def note_unpaid_reply(
+    result: Any,
+    answering: str | list[str] | None,
+    step_id: str,
+    log: logging.Logger | None = None,
+) -> list[str]:
+    """The named ids a 200 left unpaid, each logged once as a WARNING and held.
+
+    Unpaid means the bench answered `answering_key_read: null` or `answered: []`
+    while the message is still on `unanswered_messages`. A key the answer does
+    not carry at all is an older bench and proves nothing either way."""
+    named = _named(answering)
+    if not named or not isinstance(result, dict) or not result.get("ok", True):
+        return []
+    key_unread = "answering_key_read" in result and result.get("answering_key_read") is None
+    paid_nothing = "answered" in result and not result.get("answered")
+    if not (key_unread or paid_nothing):
+        return []
+    rows = result.get("unanswered_messages")
+    still = (
+        {str(row.get("id")) for row in rows if isinstance(row, dict)}
+        if isinstance(rows, list) else set(named)
+    )
+    unpaid = [mid for mid in named if mid in still]
+    for mid in unpaid:
+        (log or _LOGGER).warning(
+            "reply on step %s named message %s and the bench paid nothing "
+            "(answering_key_read=%s answered=%s); not answering %s again for %d seconds",
+            step_id, mid, result.get("answering_key_read"), result.get("answered"),
+            mid, int(UNPAID_REPLY_HOLD_SECONDS),
+        )
+        _UNPAID_REPLIES[mid] = time.monotonic()
+    return unpaid
+
+
+# ---------------------------------------------------------------------------
 # 4. THE ASK
 # ---------------------------------------------------------------------------
 class StepAsk:
@@ -789,8 +897,10 @@ class StepAsk:
                     {"reason": str(answer.get("reason") or "")}, key,
                 )
             elif call == "reply_step_message":
-                result = self.provider.reply_step_message(
-                    deal_id, step_id, str(answer.get("reply") or "")[:4000], key)
+                result = self._reply(
+                    deal_id, step_id, str(answer.get("reply") or "")[:4000], key,
+                    answering_for(unanswered_on_step(payload), answer.get("answering")),
+                )
             elif call == "post_check_in":
                 result = self.provider.post_check_in(deal_id, answer, key)
             elif call == "wait_outside":
@@ -806,6 +916,7 @@ class StepAsk:
                 result = self._park_the_step(
                     deal_id, step_id, answer.get("round"),
                     str(answer.get("reason") or ""), key,
+                    answering=answering_for(unanswered_on_step(payload)),
                 )
             else:
                 result = self._file_the_outcome(ids, answer, payload, key)
@@ -820,8 +931,35 @@ class StepAsk:
             result = dict(result, failure="server_rejected")
         return result
 
+    def _reply(
+        self, deal_id: str, step_id: str, words: str, key: str,
+        answering: str | list[str] | None,
+    ) -> dict[str, Any]:
+        """One post on the step thread, naming what it answers when anything is
+        owed (0.56.1). A provider is only handed `answering` when there is one,
+        so a reply that answers nobody claims nothing."""
+        if answering:
+            try:
+                result = self.provider.reply_step_message(
+                    deal_id, step_id, words, key, answering=answering)
+            except TypeError as error:
+                if "answering" not in str(error):
+                    raise
+                # A provider written before 0.56.1 takes no `answering`. The
+                # reply still goes; the log says the debt was not named.
+                self.log.warning(
+                    "step %s: this provider's reply_step_message takes no "
+                    "`answering`; message %s was not named", step_id, answering,
+                )
+                return self.provider.reply_step_message(deal_id, step_id, words, key)
+        else:
+            result = self.provider.reply_step_message(deal_id, step_id, words, key)
+        note_unpaid_reply(result, answering, step_id, self.log)
+        return result
+
     def _park_the_step(
-        self, deal_id: str, step_id: str, round_number: Any, reason: str, key: str
+        self, deal_id: str, step_id: str, round_number: Any, reason: str, key: str,
+        answering: str | list[str] | None = None,
     ) -> dict[str, Any]:
         """SAY IT TWICE, IN ONE ROUND (W29): stopped, and why, where the
         person can read it.
@@ -842,7 +980,9 @@ class StepAsk:
                 deal_id, step_id, "parked", number, reason=words)
         except Exception:  # noqa: BLE001 - visibility must never fail the move
             self.log.warning("could not report parked on step %s", step_id)
-        return self.provider.reply_step_message(deal_id, step_id, words[:4000], key)
+        # A parked explanation IS an answer when the person is owed one; with
+        # nothing owed it claims nothing.
+        return self._reply(deal_id, step_id, words[:4000], key, answering)
 
     def _file_the_outcome(
         self, ids: dict[str, Any], answer: dict[str, Any], payload: dict[str, Any], key: str
@@ -904,6 +1044,33 @@ class StepAsk:
         number = step.get("number")
         if not move.get("move"):
             return {"ok": False, "road": ROAD_AGENTIC, "why": move.get("why"), "model_calls": 0}
+        if move["move"] == "answer_person":
+            latest = answering_for(unanswered_on_step(payload))
+            if isinstance(latest, str) and reply_is_held(latest):
+                # 0.56.1: the last reply that named this message came back
+                # unpaid. Answering it again is how Rick sent six; hold, say
+                # so, and let a new message (or the hold running out) move it.
+                self.log.warning(
+                    "step %s: message %s was answered and the bench did not "
+                    "mark it paid; not answering it again this cycle",
+                    number, latest,
+                )
+                return {
+                    "ok": True,
+                    "road": ROAD_STEP_ASK,
+                    "move": move["move"],
+                    "call": None,
+                    "held": latest,
+                    "why": f"a reply naming {latest} already landed unpaid",
+                    "tool_count": 0,
+                    "result": {"ok": True, "held": latest},
+                    "model_calls": 0,
+                    "prompt_chars": 0,
+                    "prefix_chars": 0,
+                    "input_tokens": 0,
+                    "cached_tokens": 0,
+                    "trail": [],
+                }
         caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
         self.prefix = stable_prefix(brief, act_kinds, with_tools=caches)
         instruction = MOVE_INSTRUCTIONS[move["move"]]
@@ -973,6 +1140,7 @@ class StepAsk:
                 str(ids.get("deal_id") or ""), str(ids.get("step_id") or ""),
                 step.get("rounds_used"), "",
                 self._key(str(ids.get("step_id") or ""), "report_parked", result),
+                answering=answering_for(unanswered_on_step(payload)),
             )
             result = dict(result, parked=True)
         self.log.info(

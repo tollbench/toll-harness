@@ -63,6 +63,7 @@ class TollBenchProvider(Protocol):
         step_id: str,
         reply: str,
         idempotency_key: str,
+        answering: str | list[str] | None = None,
     ) -> dict[str, Any]: ...
 
     def post_check_in(
