@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 
-from tests.unit.plan_door import Door, only, reply, row
+from tests.unit.plan_door import Door, holes_written, only, reply, row
 from toll_harness.core.types import ModelMessage, ModelResponse
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench.draft import DraftLoop, read_drop, whole_step_path
@@ -47,11 +47,22 @@ def _said(model, index=0):
 
 
 # Two REAL rows off one captured answer, on the same step of the same plan.
-# One stops at the step -- that is the step being named, and there is no line
-# on it to reword. The other goes on to name one number on it.
-PLAN = reply("unknown_fields")
-STEP_ROW = row(PLAN, path="form.steps.1", problem="wrong_kind")
-FIELD_ROW = row(PLAN, path="form.steps.1.declared_odds")
+# One stops at the step and names no field of it -- that is the step being
+# named, and there is no line on it to reword. The other goes on to name one
+# thing on it.
+#
+# 0.55.3 MOVED THESE OFF THE `unknown_fields` CAPTURE. Its step-level row was
+# the falling-odds row (REJ-29), which names `declared_odds` on the step's
+# path: that row is about ONE NUMBER, and the whole-step road it used to take
+# is what told Sam (prod, 2026-09-25) to replace or drop a step whose only
+# fault was a number. It is narrowed to the number now (the test at the end of
+# this file), so the step-level row here is the email capture's REJ-40 row,
+# which names no field at all. The holes on that step are marked written and a
+# who step is marked present, so neither road runs ahead of the one under test.
+PLAN = holes_written(reply("email_step"))
+PLAN["form_steps"][0]["person_slot"] = "who"
+STEP_ROW = row(PLAN, path="form.steps.1", problem="no_source", codes=["REJ-40"])
+FIELD_ROW = row(PLAN, path="form.steps.1.tool.args.subject")
 
 # The second step of that plan, every field of it as the agent sent it.
 SEND_STEP = PLAN["form"]["steps"][1]
@@ -76,7 +87,7 @@ def test_the_captured_rows_are_the_two_kinds():
     # The step-level row stops at the step; the other names a field on it.
     assert STEP_ROW["path"] == "form.steps.1"
     assert whole_step_path(STEP_ROW["path"]) == 1
-    assert FIELD_ROW["path"] == "form.steps.1.declared_odds"
+    assert FIELD_ROW["path"] == "form.steps.1.tool.args.subject"
     assert whole_step_path(FIELD_ROW["path"]) is None
 
 
@@ -216,7 +227,7 @@ def test_the_repeated_branch_names_both_exits_on_a_field_path():
     # The second ask carries the whole step and the path to send it to.
     assert '"steps_path":"form.steps.1"' in second
     assert SEND_STEP["hand_over_line"] in second
-    assert '"verb":"prepares"' in second
+    assert '"verb":"emails"' in second
     # It took the drop.
     assert door.drops == [1]
 
@@ -239,8 +250,8 @@ def test_the_repeated_branch_still_shows_what_was_sent_last_round():
 def test_a_whole_step_replacement_on_a_field_path_is_not_aimed_back_at_the_field():
     """`_aim` files a stray patch at the path that was asked for. A step sent
     back WHOLE against a field question is the right answer to the repeated
-    ask, and re-aiming it at `...declared_odds` would write a dict into a
-    number."""
+    ask, and re-aiming it at `...subject` would write a dict into a
+    subject line."""
     field = FIELD_ROW["path"]
     replacement = dict(SEND_STEP, declared_odds=0.8)
     door = Door(_answer(FIELD_ROW), {"ok": True, "ready": True})

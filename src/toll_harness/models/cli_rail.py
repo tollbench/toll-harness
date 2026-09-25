@@ -40,6 +40,17 @@ To act, include one or more tool_calls whose arguments match that tool's JSON
 schema. A reply without tool_calls does nothing; the run only ends through the
 result.complete or result.fail tools."""
 
+# 2026-09-25: on a tools-free proposal ask Ali (Codex) refused ("No tools
+# are available... expose result.complete") and Trey wrapped the proposal in
+# a result.complete tool_call, because the envelope wording said the run only
+# ends through result.complete. A call with no tools gets no catalogue and no
+# envelope, only this line.
+_NO_TOOLS_INSTRUCTION = """\
+# How to reply
+There are no tools on this call. Reply with EXACTLY the one JSON object the
+message above asks for and nothing else - no prose, no markdown fence, no
+tool calls."""
+
 _CORRECTION = (
     "Your previous reply could not be parsed as the required JSON envelope. "
     "Reply again with EXACTLY one JSON object of the form "
@@ -63,6 +74,15 @@ def _render_prompt(
         for tool in tools
     ]
     transcript = [{"role": message.role, "content": message.content} for message in messages]
+    if not tools:
+        return (
+            f"{system}\n\n"
+            "# Conversation so far\n"
+            "Normalized transcript, oldest first. tool_result blocks are the "
+            "harness's answers to your earlier tool_calls:\n"
+            f"{json.dumps(transcript, ensure_ascii=False)}\n\n"
+            f"{_NO_TOOLS_INSTRUCTION}"
+        )
     return (
         f"{system}\n\n"
         "# Available tools\n"
@@ -88,7 +108,12 @@ def _strip_fences(raw: str) -> str:
     return text.strip()
 
 
-def _parse_envelope(raw: str) -> tuple[str, list[ToolCall], list[JsonObject]]:
+_TERMINAL_TOOLS = ("result.complete", "result.fail")
+
+
+def _parse_envelope(
+    raw: str, *, tools_offered: bool = True
+) -> tuple[str, list[ToolCall], list[JsonObject]]:
     text = _strip_fences(raw)
     try:
         value = json.loads(text)
@@ -99,10 +124,34 @@ def _parse_envelope(raw: str) -> tuple[str, list[ToolCall], list[JsonObject]]:
         value = json.loads(text[start : end + 1])
     if not isinstance(value, dict):
         raise ValueError("envelope must be a JSON object")
-    commentary = str(value.get("text") or "")
+    # 2026-09-25: the five lab agents on tollbench.com answered a proposal ask
+    # with the bare eight-field object instead of the envelope. It parsed, had
+    # no "text", read as an empty envelope, and no bid was filed on a live
+    # want. An object with neither envelope key IS the answer; a nested
+    # "text" object or list is the answer too.
+    if "text" not in value and "tool_calls" not in value:
+        commentary = json.dumps(value, ensure_ascii=False)
+    elif isinstance(value.get("text"), (dict, list)):
+        commentary = json.dumps(value["text"], ensure_ascii=False)
+    else:
+        commentary = str(value.get("text") or "")
     calls_raw = value.get("tool_calls") or []
     if not isinstance(calls_raw, list):
         raise ValueError("tool_calls must be a list")
+    # 2026-09-25: on a tools-free ask Trey (Codex) put the proposal inside a
+    # result.complete tool_call with empty text, and the draft loop read no
+    # answer. On a call that offered NO tools, one empty-text result.complete
+    # or result.fail carrying an object is the answer. With tools offered it
+    # stays a tool call: that is how a real run ends.
+    if not tools_offered and not commentary and len(calls_raw) == 1:
+        only = calls_raw[0]
+        if isinstance(only, dict) and only.get("name") in _TERMINAL_TOOLS:
+            arguments = only.get("arguments")
+            if isinstance(arguments, dict):
+                answer = arguments["result"] if "result" in arguments else arguments
+                if isinstance(answer, dict):
+                    commentary = json.dumps(answer, ensure_ascii=False)
+                    return commentary, [], [{"type": "text", "text": commentary}]
     calls: list[ToolCall] = []
     normalized: list[JsonObject] = []
     if commentary:
@@ -264,7 +313,7 @@ class _CliRailAdapter(ModelAdapter):
         prompt = _render_prompt(system, messages, tools)
         raw, usage = self._invoke_cli(prompt)
         try:
-            commentary, calls, normalized = _parse_envelope(raw)
+            commentary, calls, normalized = _parse_envelope(raw, tools_offered=bool(tools))
         except ValueError:
             # One corrective retry, then degrade to a text-only response so the
             # runtime's own "continue the goal" nudge keeps the run alive
@@ -278,7 +327,9 @@ class _CliRailAdapter(ModelAdapter):
                 raw={"first": usage.raw, "retry": retry_usage.raw},
             )
             try:
-                commentary, calls, normalized = _parse_envelope(retry_raw)
+                commentary, calls, normalized = _parse_envelope(
+                    retry_raw, tools_offered=bool(tools)
+                )
             except ValueError:
                 text = retry_raw.strip()
                 return ModelResponse(

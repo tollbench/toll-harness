@@ -1603,6 +1603,27 @@ _TERMINAL_DOOR_ERRORS = frozenset(
 )
 
 
+# WHAT THIS AGENT'S OWN PROPOSAL WAS FILED AT, per want (0.55.3). The plan
+# door's answer does not carry the proposal's odds, and a plan's odds line is
+# asked about with every number on it, so the number this process filed goes
+# in beside the rest. Process-local like the memos above: after a restart the
+# line says null, never a guess.
+_FILED_PROPOSAL_ODDS: dict[str, float] = {}
+
+
+def _remember_filed_odds(target_id: str, outcome: Any) -> None:
+    proposal = outcome.get("proposal") if isinstance(outcome, dict) else None
+    odds = proposal.get("odds") if isinstance(proposal, dict) else None
+    if (
+        target_id
+        and isinstance(outcome, dict)
+        and outcome.get("filed")
+        and isinstance(odds, (int, float))
+        and not isinstance(odds, bool)
+    ):
+        _FILED_PROPOSAL_ODDS[target_id] = float(odds)
+
+
 def _remember_closed(target: dict[str, Any], error: Any) -> bool:
     """Memo a want the door closed; True when it was just added."""
     if str(error or "") not in _TERMINAL_DOOR_ERRORS:
@@ -2606,6 +2627,7 @@ def _bid_through_the_draft_loop(
         )
         return None
     filed = bool(outcome.get("filed"))
+    _remember_filed_odds(target_id, outcome)
     identity = resources.agent_identity
     fleet = getattr(resources.toll_bench, "fleet", None)
     if filed and fleet is not None and identity is not None:
@@ -2674,6 +2696,7 @@ def _file_the_informed_plan_from_draft(
         return None
     brief = _brief_for_the_loop(resources, target_id)
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)
+    loop.proposal_odds = _FILED_PROPOSAL_ODDS.get(target_id)
     outcome = loop.run(
         target_id,
         kind="plan",
@@ -2694,13 +2717,24 @@ def _file_the_informed_plan_from_draft(
     # agent, and the other proposals are already under it. Coming back to the
     # target next cycle cannot change any of that, so it is memoized exactly
     # like `bidding_closed` and `draft_stalled` and never asked again.
+    #
+    # WHAT IS HELD, AND WHERE (0.55.3). Nothing on disk. The memo is
+    # `_CLOSED_TARGET_MEMO`, in this process only, keyed on the want and its
+    # round, and a worker restart clears it. The bench is what stops asking:
+    # it stamps the proposal's plan as failed and drops the plan from this
+    # agent's attention. To walk the plan again, the bench reopens it and the
+    # worker is restarted; the loop guard's row for it
+    # (`file_informed_plan:<target>:<proposal>::`) parks only after three
+    # attempts on one unchanged state, and `toll-harness loop-guard
+    # <agent.yaml> --reset <that key>` clears it.
     if _remember_closed(
         {"target_id": target_id, "round": brief.get("round")},
         outcome.get("error") if isinstance(outcome, dict) else None,
     ):
         _LOGGER.warning(
-            "the plan door closed target %s (%s); this agent is done with that "
-            "want and will not be asked for a plan on it again",
+            "the plan door closed target %s (%s); the bench stops asking this "
+            "agent for that plan. Held only in this process: a worker restart "
+            "clears it once the bench reopens the plan",
             target_id,
             outcome.get("error"),
         )

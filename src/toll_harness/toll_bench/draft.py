@@ -391,6 +391,71 @@ FIX_INSTRUCTION = (
 )
 
 
+# THREE ASKS THAT MAY BE ANSWERED WITH SEVERAL PATCHES (0.55.3). Every other
+# fix ask says "change exactly this one path", which is right for one wrong
+# thing and wrong for a line of numbers or a row about the whole plan: Sam
+# (2026-09-25) was told to change one number, five rounds running, while each
+# change made the next step fall. Short and plain, because weak models are in
+# this fleet.
+ODDS_FIX_INSTRUCTION = (
+    "THE BENCH NAMED A NUMBER ON YOUR ODDS LINE. The odds are one line, not "
+    "one number. `the_odds_line` holds every number on it: your overall "
+    "forecast (`form.odds`), then each step's `declared_odds` in order, each "
+    "with its exact path, the odds your proposal was filed at, and the "
+    "bench's own rule. `change_this` is what it named and `say` is its "
+    "sentence.\n"
+    "A step's number is the chance the person ends up with the thing once "
+    "that step is done. So the line starts at or above `form.odds` and never "
+    "falls from one step to the next. The bench puts steps of its own into "
+    "the plan (a connect step, a who step) and each of those carries the "
+    "number of your step right after it, so the bench's step numbers can run "
+    "ahead of yours.\n"
+    "Fix the WHOLE line in this one answer: one patch for every number that "
+    "has to change, each at its own path. Lowering `form.odds` or an earlier "
+    "step is as good a fix as raising a later one. Every number is greater "
+    "than 0 and less than 1. Patch only paths shown in `the_odds_line`.\n"
+    'Answer: {"patches": [{"path": "form.steps.0.declared_odds", "value": '
+    '0.5}, {"path": "form.steps.1.declared_odds", "value": 0.55}]}.'
+)
+
+PLAN_WIDE_FIX_INSTRUCTION = (
+    "THE BENCH NAMED THE PLAN AS A WHOLE, NOT ONE PLACE IN IT. "
+    "`the_bench_says` is its own sentence and `accepted` is what it takes, "
+    "when it says. Fix it by changing NAMED places inside the plan: "
+    "`form.odds`, `form.overview`, `form.span_days`, or one field of one "
+    "step, `form.steps.<index>.<field>` (index 0 is step 1; "
+    "`fields_on_a_step` lists the fields). `the_odds_line` shows every "
+    "step with its path. Send as many patches as the fix takes, in one "
+    "answer.\n"
+    "Never patch `form` itself, never send `form.steps` whole, and never add "
+    "a key the plan does not have: a patch anywhere else is not sent.\n"
+    'Answer: {"patches": [{"path": "form.steps.2.declared_odds", "value": '
+    '0.6}]}.'
+)
+
+LINE_FIX_INSTRUCTION = (
+    "THE SAME THING MOVED TO ANOTHER STEP. Last round the bench named "
+    "`{field}` on one step; now it names it on another. Fixing one step at a "
+    "time is moving it along the plan. `the_line` is `{field}` on every step, "
+    "with the path of each, and `what_the_bench_says` is its sentence.\n"
+    "Fix every step that needs it in this ONE answer: one patch per step you "
+    "change, each at its own path, and leave the rest as they are.\n"
+    'Answer: {{"patches": [{{"path": "<a path from the_line>", "value": '
+    '...}}]}}.'
+)
+
+LAST_TRY_INSTRUCTION = (
+    "THIS IS THE LAST TRY THE BENCH GIVES THIS ROW. If this answer does not "
+    "clear it, the plan closes and the person is asked to pick someone else. "
+    "Read the bench's sentence once more and fix exactly what it says.\n"
+)
+
+EMPTY_SEVERAL_INSTRUCTION = (
+    "NOTHING USABLE CAME BACK LAST TIME. Answer with patches to named places "
+    'in the plan only, as JSON: {"patches": [{"path": ..., "value": ...}]}. '
+)
+
+
 # ---------------------------------------------------------------------------
 # READING THE MODEL — JSON, however it wrapped it
 # ---------------------------------------------------------------------------
@@ -1127,6 +1192,254 @@ def _is_a_field_patch(patches: Any, asked: str) -> bool:
     if not rows:
         return False
     return all(row.startswith(asked + ".") for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# WHERE A PATCH CAN LAND, AND WHAT A ROW MAY BE ANSWERED WITH (0.55.3)
+# ---------------------------------------------------------------------------
+# WHAT FORCED ALL OF THIS (Sam, prod want 355b9b91, 2026-09-25). The plan door
+# named a falling odds line one step at a time, and each fix ask said "change
+# exactly this one number", so Sam raised step 1, which made step 2 fall, and
+# so on down five steps. Then the door named a row with no step and the path
+# `form`. The loop asked for a patch AT `form`, the model sent
+# `form = {"step": 6, "declared_odds": 0.84}`, the door stored that as a key
+# called `form` inside the form, and the next two rounds went on
+# `form.form = null`. Every one of those rounds was charged against the row,
+# and the plan closed `plan_failed`.
+#
+# Three things follow, and none of them is about odds or about one code:
+#   * the form has four places at the top and no others, so a path that names
+#     the form itself, the whole step list, or a key the form does not have is
+#     never sent, on any road;
+#   * a row whose path is not one of those places is answered by asking for
+#     patches to named places, with the bench's sentence in front of the model;
+#   * a key the door says may NOT be there, with nothing it would take instead,
+#     comes off, unless it is a key the step cannot stand without, because
+#     taking that off only brings the same row back as `empty` next round.
+FORM_TOP_KEYS = frozenset({"overview", "odds", "span_days", "steps"})
+PLAN_MUST_CARRY = frozenset({"overview", "odds", "span_days"})
+# What the door asks for again the moment a step lacks it (plan_form's own
+# step questions). Taking one of these off answers nothing.
+STEP_MUST_CARRY = frozenset({"verb", "do_line", "hand_over_line", "declared_odds",
+                             "proof", "who"})
+NOT_ALLOWED = "not_allowed"
+# The numbers the plan's odds line is made of: the overall forecast, then one
+# per step. A row about either is a row about the line.
+ODDS_FIELDS = frozenset({"odds", "declared_odds"})
+_BRACKET_INDEX = re.compile(r"\[(\d+)\]")
+
+
+def path_parts(path: Any) -> list[str]:
+    """A dotted path as its parts; `steps[2]` reads as `steps.2`."""
+    text = _BRACKET_INDEX.sub(r".\1", str(path or "").strip())
+    return [part for part in text.split(".") if part]
+
+
+def form_parts(path: Any) -> list[str] | None:
+    """The parts of a path INSIDE the form, or None when it is not a form path.
+
+    `form.steps.2.do_line` is ["steps", "2", "do_line"]; `form` is [] (the form
+    itself); `steps.2.title` is None, the older document dialect, which this
+    package does not judge.
+    """
+    parts = path_parts(path)
+    if not parts or parts[0] != "form":
+        return None
+    return parts[1:]
+
+
+def names_a_place(path: Any) -> bool:
+    """True when a patch at `path` lands on ONE real place in the plan.
+
+    The form has `overview`, `odds`, `span_days` and `steps` at the top and
+    nothing else. A place is one of the three plan fields, one whole step, or
+    anything inside a step. NOT a place: an empty path, `form` itself,
+    `form.steps` (every step at once), and a key the form does not have
+    (`form.form`). The door stores a patch at any of those as a stray key and
+    charges the row a try for it. A step number past the end is the door's to
+    judge: it answers `not_found` and charges nothing. A path in the older
+    document dialect (no `form.`) is the door's to judge too.
+    """
+    if not path_parts(path):
+        return False
+    parts = form_parts(path)
+    if parts is None:
+        return True
+    if not parts or parts[0] not in FORM_TOP_KEYS:
+        return False
+    if parts[0] != "steps":
+        return len(parts) == 1
+    return len(parts) >= 2 and parts[1].isdigit()
+
+
+def is_a_leaf_place(path: Any) -> bool:
+    """A place that is ONE value: a plan field, or a field inside one step.
+
+    A whole step is a place and not a leaf. The asks that let the model patch
+    several paths at once (the odds line, the plan-wide row) take leaves only,
+    because a step sent back whole from a question about numbers is a step
+    rewritten by accident.
+    """
+    if not names_a_place(path):
+        return False
+    parts = form_parts(path)
+    if parts is None:
+        return True
+    return parts[0] != "steps" or len(parts) >= 3
+
+
+def value_in_form(form: Any, path: Any) -> tuple[bool, Any]:
+    """(is the key there, what it holds) for a form path."""
+    parts = form_parts(path)
+    if not parts or not isinstance(form, dict):
+        return False, None
+    node: Any = form
+    for part in parts:
+        if isinstance(node, dict):
+            if part not in node:
+                return False, None
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            return False, None
+    return True, node
+
+
+def accepted_of(row: Any) -> Any:
+    """What the row says the place takes, in the shape the door sent it.
+
+    A list stays a list; a floor or a range sent as an object stays an object
+    (a `list()` of a dict would keep only its key names). Nothing is [].
+    """
+    value = (row or {}).get("accepted") if isinstance(row, dict) else None
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def field_of(row: Any, path: Any) -> str:
+    """The name of the thing a row is about: its slot, or the path's last key."""
+    slot = str((row or {}).get("slot") or "").strip() if isinstance(row, dict) else ""
+    if slot and slot != "step":
+        return slot.split(".")[-1]
+    for part in reversed(path_parts(path)):
+        if not part.isdigit() and part not in ("form", "steps"):
+            return part
+    return ""
+
+
+def can_come_off(row: Any, path: str, answer: Any) -> bool:
+    """True when this row is answered by TAKING THE KEY OFF, with no model.
+
+    Rule (0.55.3): `not_allowed` on one key, with nothing on `accepted`, says
+    the key may not be there, so a new value for it is not an answer. It comes
+    off -- a null, which is how the door blanks a value -- when all of these
+    hold: the agent fixes it, the path is a leaf inside one step, the key is
+    one a step can stand without, the step's own table does not mark it
+    required, and it holds one plain value right now (a value already blanked
+    is not blanked twice: that row goes to the model with the bench's words).
+
+    A key the step MUST carry is not taken off. The door asks for it again
+    the moment it is empty, so taking it off buys the same row back as
+    `empty` and spends one of the row's three tries doing it. Until the bench
+    relabels them, that is exactly the odds rows: the falling-line row reads
+    `not_allowed` with nothing accepted, and blanking the number would cost a
+    try on every step.
+    """
+    if not isinstance(row, dict) or row.get("who_fixes") != AGENT:
+        return False
+    if row.get("problem") != NOT_ALLOWED or accepted_of(row):
+        return False
+    form = form_of(answer)
+    parts = form_parts(path)
+    if not parts or parts[0] != "steps" or len(parts) < 3:
+        return False
+    if not names_a_place(path) or parts[-1].isdigit():
+        return False
+    if len(parts) == 3 and parts[2] in STEP_MUST_CARRY:
+        return False
+    for slot in slots_of(step_entry(answer, int(parts[1]) + 1)):
+        if slot.get("path") == path and slot.get("required"):
+            return False
+    there, value = value_in_form(form, path)
+    return there and value is not None and not isinstance(value, (dict, list))
+
+
+def odds_line(answer: Any, proposal_odds: Any = None) -> dict[str, Any]:
+    """EVERY NUMBER ON THE ODDS LINE, with the path of each (0.55.3).
+
+    The overall forecast and each step's declared_odds, in form order, beside
+    the bench's own rule for them (`forecast_context`) and the odds this
+    agent's proposal was filed at. A number judged against its neighbours is
+    never asked about without its neighbours: asked for one number at a time,
+    a model raises step 1, and step 2 is the next row, and so on down the plan.
+
+    ALWAYS PRESENT, INCLUDING EMPTY: `your_proposal_odds` is null when this
+    agent does not know what it filed at, never left out.
+    """
+    form = form_of(answer) or {}
+    steps: list[dict[str, Any]] = []
+    for index, step in enumerate(form.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        do = " ".join(str(step.get("do_line") or "").split())
+        steps.append(
+            {
+                "path": f"form.steps.{index}.declared_odds",
+                "declared_odds": step.get("declared_odds"),
+                "verb": step.get("verb"),
+                "do": do if len(do) <= 60 else do[:59] + "…",
+            }
+        )
+    out: dict[str, Any] = {
+        "overall": {"path": "form.odds", "odds": form.get("odds")},
+        "steps": steps,
+        "your_proposal_odds": proposal_odds,
+    }
+    # The bench's own words about the numbers, as it sent them, minus the
+    # want itself (already on every ask). Whatever it adds here rides along.
+    forecast = answer.get("forecast_context") if isinstance(answer, dict) else None
+    if isinstance(forecast, dict):
+        out["the_bench_says"] = {
+            key: value for key, value in forecast.items()
+            if key != "goal" and value is not None
+        }
+    return out
+
+
+def the_line_of(answer: Any, field: str) -> list[dict[str, Any]]:
+    """One field on every step, with its path: what a problem that moves from
+    step to step is about. [] when no step carries it."""
+    form = form_of(answer) or {}
+    out: list[dict[str, Any]] = []
+    for index, step in enumerate(form.get("steps") or []):
+        if isinstance(step, dict) and field in step:
+            out.append({"path": f"form.steps.{index}.{field}", "value": step.get(field)})
+    return out
+
+
+def attempts_on(answer: Any, row: Any) -> tuple[int, int | None]:
+    """(used, left) the door reports for THIS row, or (0, None).
+
+    `correction_attempts` counts the one row the door pointed at
+    (`next_fix`), so it is read only when that is the row being worked.
+    """
+    pointed = next_fix_of(answer)
+    if pointed is None or not isinstance(row, dict) or fix_key(pointed) != fix_key(row):
+        return 0, None
+    counts = answer.get("correction_attempts") if isinstance(answer, dict) else None
+    if not isinstance(counts, dict):
+        return 0, None
+
+    def whole(value: Any) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    return whole(counts.get("used")) or 0, whole(counts.get("left"))
 
 
 def read_outline(answer: dict[str, Any]) -> dict[str, Any]:
@@ -2417,7 +2730,10 @@ FORM_INSTRUCTION = (
     "The plan itself needs `overview` (the scope of work in complete "
     "sentences: the work, the deliverables, the boundaries, what you need "
     "from the person) and `odds` (YOUR chance of achieving the whole goal "
-    "within `span_days`, a number greater than 0 and less than 1).\n"
+    "within `span_days`, a number greater than 0 and less than 1). Each "
+    "step's `declared_odds` is that same chance judged once the step is done, "
+    "so the line starts at or above `odds` and never falls from one step to "
+    "the next (`forecast_context` is the bench's own rule for the numbers).\n"
     "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
     "this plan does not need; a step that carries none is a normal step.\n"
     "NEVER GIVE YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR. A design "
@@ -2728,6 +3044,20 @@ class DraftLoop:
         # What the door said it corrected on the way in, over the whole run.
         # A trim is never retried; it is logged and carried.
         self.bench_fixed: list[Any] = []
+        # WHAT THE LAST ROUND SENT, AND WHICH ROW IT ANSWERED (0.55.3). "Your
+        # last patch did not clear this" is said only about a row this loop
+        # really answered with a patch; Sam was told it at round 4 about a
+        # number it had never patched, because the round before had written a
+        # slot while the same row stood.
+        self._last_round: list[dict[str, Any]] = []
+        self._answered: dict[str, list[dict[str, Any]]] = {}
+        self._last_answered: tuple[str, str, str, Any] | None = None
+        # A key taken off because the door said it may not be there, and the
+        # door's sentence about it, so a later ask about that place says why.
+        self._taken_off: dict[str, dict[str, Any]] = {}
+        # The odds this agent's proposal on this want was filed at, when the
+        # caller knows it; the odds line carries it, null when unknown.
+        self.proposal_odds: Any = None
 
     # -- the model ---------------------------------------------------------
     # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER. The example goes first
@@ -2949,6 +3279,7 @@ class DraftLoop:
     def _put(self, target_id: str, kind: str, outline: dict[str, Any]) -> dict[str, Any]:
         answer = self.provider.put_draft(target_id, outline, kind=kind)
         self.rounds = 0
+        self._last_round = []
         self._record(target_id, kind, answer, "outline")
         return answer
 
@@ -3016,6 +3347,20 @@ class DraftLoop:
                     str(entry.get("path") or "?"),
                 )
                 continue
+            # NOT A PLACE IN THE PLAN, NOT SENT (0.55.3). The form has four
+            # keys at the top; a patch at `form` itself, at `form.steps` whole
+            # or at a key the form does not have is stored by the door as a
+            # stray key (`form.form`) and costs the row a try every round.
+            if not names_a_place(entry.get("path")):
+                self.log.warning(
+                    "draft loop %s target=%s: %s is not a place in the plan (the "
+                    "form holds overview, odds, span_days and steps); it was "
+                    "not sent",
+                    kind,
+                    target_id,
+                    str(entry.get("path") or "?"),
+                )
+                continue
             sending.append(entry)
         if not sending:
             self.log.warning(
@@ -3051,6 +3396,10 @@ class DraftLoop:
                 self._preview(entry.get("value")),
             )
             self._sent.append((path, entry.get("value")))
+        self._last_round = [
+            {"path": str(entry.get("path") or ""), "value": entry.get("value")}
+            for entry in patches
+        ]
         answer = self.provider.patch_draft(target_id, list(patches), kind=kind)
         self.rounds += 1
         self._record(target_id, kind, answer, what)
@@ -3218,6 +3567,15 @@ class DraftLoop:
         send = answer.get("send") or ""
         if send:
             payload["how_to_send_it"] = send
+        # THE BENCH'S OWN RULE FOR THE NUMBERS (0.55.3). The door sends it on
+        # the form answer and this ask used to leave it behind, so a model
+        # wrote an overall forecast above its first steps and the door then
+        # named the line one step at a time.
+        forecast = answer.get("forecast_context")
+        if isinstance(forecast, dict) and forecast:
+            payload["forecast_context"] = {
+                key: value for key, value in forecast.items() if key != "goal"
+            }
         if self._tools_ride_the_outline:
             # The `tool` pick comes off this want's list, and on a provider
             # that caches nothing the list is not in the prefix.
@@ -4054,14 +4412,24 @@ class DraftLoop:
         """
         path = str(row.get("path") or "")
         slot = str(row.get("slot") or "")
+        index = row.get("step")
+        numbered = isinstance(index, int) and not isinstance(index, bool) and index > 0
         if slot and (not path or whole_step_path(path) is not None):
             for entry in slots_of(step_entry(answer, row.get("step"))):
                 if entry.get("name") == slot and entry.get("path"):
                     return str(entry["path"])
+            # A FIELD OF THE STEP ITSELF IS ITS OWN ADDRESS (0.55.3). The
+            # falling-odds row names `declared_odds` on the step's path, and
+            # the whole-step road that path leads to asks the model to replace
+            # or drop a step whose only fault is one number.
+            if slot in FORM_STEP_FIELDS:
+                if path:
+                    return f"{path}.{slot}"
+                if numbered:
+                    return f"{self._form_prefix(answer)}steps.{index - 1}.{slot}"
         if path:
             return path
-        index = row.get("step")
-        if isinstance(index, int) and not isinstance(index, bool) and index > 0:
+        if numbered:
             return f"{self._form_prefix(answer)}steps.{index - 1}"
         return path
 
@@ -4123,7 +4491,6 @@ class DraftLoop:
         Greg spent rounds 123-132 on one problem, asked in the same words
         every time, and answered it the same way every time.
         """
-        last_named: str | None = None
         named_before: dict[str, int] = {}
         # SLOTS BEFORE WORDS. The steps whose holes have been written, and
         # whether this run has yet written any: the FIRST time a model is
@@ -4157,8 +4524,16 @@ class DraftLoop:
             # the door pointed at it. It costs no model call, so waiting for
             # the door to work its way down to it is paying for a fix we
             # already have in hand.
+            # EXCEPT OVER A ROW THAT NAMES NO PLACE (0.55.3). The door charges
+            # its tries to the row it points at, and against a row at `form`
+            # every patch reads as an answer to it: Sam's plan closed on three
+            # rounds of that. Such a row is worked first, and worked alone.
             unknown = [entry for entry in mine if entry.get("problem") == UNKNOWN_FIELD]
-            if unknown and fix.get("problem") != UNKNOWN_FIELD:
+            if (
+                unknown
+                and fix.get("problem") != UNKNOWN_FIELD
+                and names_a_place(self._patch_path(answer, fix))
+            ):
                 fix = unknown[0]
             key = fix_key(fix)
             named_before[key] = named_before.get(key, 0) + 1
@@ -4198,7 +4573,6 @@ class DraftLoop:
                     ", ".join(extra),
                     where,
                 )
-                last_named = key
                 answer = self._patch(
                     target_id,
                     kind,
@@ -4206,6 +4580,7 @@ class DraftLoop:
                     "take off " + ", ".join(extra),
                     standing=answer,
                 )
+                self._note_answered(key, fix, where, [{"path": where, "value": value}])
                 continue
 
             # NO WHO STEP ABOVE A STEP THAT REACHES SOMEBODY. The slot table
@@ -4217,7 +4592,7 @@ class DraftLoop:
                     target_id, kind, fix, answer, index, str(fix.get("path") or "")
                 )
                 if inserted is not None:
-                    last_named = key
+                    self._last_answered = None
                     answer = inserted
                     # AN INSERT RENUMBERS EVERY STEP BELOW IT, and `written`
                     # is kept by step NUMBER. Step 3's holes, written before
@@ -4228,6 +4603,42 @@ class DraftLoop:
                     # are filled owes none and is skipped anyway.
                     written.clear()
                     continue
+
+            path = self._patch_path(answer, fix)
+
+            # A KEY THAT MAY NOT BE THERE COMES OFF (0.55.3). `not_allowed`
+            # with nothing on `accepted` says the key may not be there, so a
+            # new value is not an answer to it -- and asking a model for one
+            # is how a key gets re-valued round after round. Every such row
+            # goes in one patch with no model call. `can_come_off` keeps the
+            # keys a step cannot stand without; those go to the model below,
+            # with the bench's sentence.
+            if can_come_off(fix, path, answer):
+                offs: dict[str, dict[str, Any]] = {path: fix}
+                for entry in mine:
+                    other = self._patch_path(answer, entry)
+                    if other not in offs and can_come_off(entry, other, answer):
+                        offs[other] = entry
+                form = form_of(answer)
+                for where, entry in offs.items():
+                    self._taken_off[where] = {
+                        "was": value_in_form(form, where)[1],
+                        "say": entry.get("say"),
+                    }
+                self.log.info(
+                    "draft loop %s target=%s: the bench says %s may not be there "
+                    "and names nothing it would take instead; taking it off",
+                    kind,
+                    target_id,
+                    ", ".join(offs),
+                )
+                blanks = [{"path": where, "value": None} for where in offs]
+                answer = self._patch(
+                    target_id, kind, blanks, "take off " + ", ".join(offs),
+                    standing=answer,
+                )
+                self._note_answered(key, fix, path, blanks)
+                continue
 
             # SLOTS BEFORE WORDS. Everything above this point is answered with
             # no model at all; from here a model is asked, and a HOLE is not
@@ -4247,72 +4658,134 @@ class DraftLoop:
                 target_id, kind, answer, want, owing, written
             )
             if filled is not answer:
-                last_named = key
+                # That round wrote holes; it did not answer this row.
+                self._last_answered = None
                 answer = filled
                 continue
 
-            path = self._patch_path(answer, fix)
-            repeated = key == last_named
+            form = form_of(answer)
+            # NOT A PLACE: the row names the form itself, the whole step list,
+            # or a key the form does not have. Nothing is ever sent there; the
+            # model is asked for patches to named places instead.
+            place = names_a_place(path)
+            field = field_of(fix, path)
+            odds = field in ODDS_FIELDS
+            used, left = attempts_on(answer, fix)
+            answered_before = self._answered.get(key)
+            # "AGAIN" ONLY WHEN IT IS TRUE (0.55.3): this row was answered with
+            # a patch and it is still here -- last round, or at any round the
+            # door has charged a try for.
+            repeated = answered_before is not None and (
+                (self._last_answered is not None and self._last_answered[0] == key)
+                or used >= 1
+            )
+            # THE SAME THING ON THE NEXT STEP: last round answered this field
+            # and this problem on one step, and now the door names it on
+            # another. One step at a time is moving it along, so the ask
+            # switches to the whole line of that field at once.
+            moved = (
+                not repeated
+                and self._last_answered is not None
+                and self._last_answered[0] != key
+                and self._last_answered[1:3] == (field, str(fix.get("problem") or ""))
+                and self._last_answered[3] != number
+            )
+            parts = form_parts(path) or []
+            line = (
+                the_line_of(answer, field)
+                if moved and place and not odds and len(parts) == 3 and parts[0] == "steps"
+                else []
+            )
+            # Asks that may be answered with several patches: the odds line,
+            # a row about the whole plan, and a field that moved.
+            several = odds or not place or bool(line)
             # THE WHOLE STEP, OR ONE THING ON IT. A path that stops at
             # `form.steps.2` is the STEP being named, and rewording a line of
             # it cannot clear that.
-            whole = whole_step_path(path)
-            payload: dict[str, Any] = {
-                "want": want,
-                "change_this": {
+            whole = whole_step_path(path) if place else None
+            said = says_on_step(rows, number)
+            payload: dict[str, Any] = {"want": want}
+            if place:
+                payload["change_this"] = {
                     "path": path,
                     "say": fix.get("say"),
-                    "accepted": list(fix.get("accepted") or []),
-                },
-                "step_number": number,
-                # The plan in one line per step, and the ONE step being
-                # changed. Never the draft: a thirty-step document in front of
-                # a one-field fix is the cost this loop exists to avoid.
-                "plan": outline_summary(answer.get("draft")),
-                "step": _fit(self._step_for(answer, index)),
-            }
+                    "accepted": accepted_of(fix),
+                }
+                payload["step_number"] = number
+            else:
+                # NO PATH TO COPY. A `change_this.path` of `form` is what the
+                # model answered with `form = {...}`.
+                payload["the_bench_says"] = fix.get("say")
+                payload["accepted"] = accepted_of(fix)
+                payload["it_names"] = field or None
+                payload["step_number"] = number
+                payload["fields_on_a_step"] = list(FORM_STEP_FIELDS)
+            # The plan in one line per step, and the ONE step being changed.
+            # Never the draft: a thirty-step document in front of a one-field
+            # fix is the cost this loop exists to avoid.
+            payload["plan"] = outline_summary(answer.get("draft"))
+            if place or index is not None:
+                payload["step"] = _fit(self._step_for(answer, index))
             # WHAT GOES IN THIS STEP, as the door states it. A plain step has
             # no slots and says so; an email step names every argument, who
             # fills it and where its value comes from.
             entry = step_entry(answer, number)
             if entry is not None:
                 payload["this_step"] = entry
-            said = says_on_step(rows, number)
-            if said:
-                payload["what_the_bench_says"] = said
+            if said or not place:
+                payload["what_the_bench_says"] = said or [fix.get("say")]
             # A PLAN-LEVEL FIX SEES THE PLAN-LEVEL FIELDS. Asked for form.odds
             # with only a one-line outline in front of it, a model has no
             # overview or span to forecast against.
-            if path in _PLAN_FIELD_PATHS:
-                held = form_of(answer) or {}
+            if path in _PLAN_FIELD_PATHS or odds or not place:
+                held = form or {}
                 payload["the_plan"] = {
-                    name: held.get(name)
-                    for name in ("overview", "odds", "span_days")
+                    name: held.get(name) for name in ("overview", "odds", "span_days")
                 }
+            # EVERY NUMBER ON THE LINE, for any row about a number on it and
+            # for any row about the whole plan.
+            if odds or not place:
+                payload["the_odds_line"] = odds_line(answer, self.proposal_odds)
+            if line:
+                payload["the_line"] = line
+            gone = self._taken_off.get(path)
+            if gone:
+                payload["the_bench_had_this_taken_off"] = gone
             # THE TWO EXITS, and the whole step to choose between them with.
             # A step-level problem is answered by replacing the step or
             # dropping it, so the ask carries EVERY field of it -- `_fit`
             # sheds keys, and a field the model cannot see is a field it
             # cannot fill in when it sends the step back.
-            if whole is not None or (repeated and index is not None):
+            if not several and (whole is not None or (repeated and index is not None)):
                 payload["step"] = self._whole_step_for(answer, index)
                 payload["steps_path"] = _step_path(path, index)
-            instruction = FIX_INSTRUCTION
-            if whole is not None:
+            if not place:
+                instruction = PLAN_WIDE_FIX_INSTRUCTION
+            elif odds:
+                instruction = ODDS_FIX_INSTRUCTION
+            elif line:
+                instruction = LINE_FIX_INSTRUCTION.format(field=field)
+            elif whole is not None:
                 instruction = WHOLE_STEP_FIX_INSTRUCTION
+            else:
+                instruction = FIX_INSTRUCTION
             if repeated:
                 # REWORDING DID NOT WORK. Say it plainly and name both exits,
                 # whichever path the bench used: the prod loop on 2026-09-11
                 # was named `form.steps.0.do_line` three times and patched
                 # that one line three times ("picks" -> "selects") while the
-                # verb and the hand-over line kept the check true.
+                # verb and the hand-over line kept the check true. An ask that
+                # already covers several places says "send something
+                # different" instead: replacing a step is no fix for a number.
                 head = REPEATED_FIX_INSTRUCTION
-                if index is not None:
+                if index is not None and not several:
                     head = REPEATED_STEP_EXITS_INSTRUCTION
                 instruction = head + instruction
                 payload["your_last_patch_did_not_clear_this"] = {
-                    "path": path,
-                    "you_sent_last_round": self._last_sent_for(path),
+                    "path": path if place else None,
+                    "you_sent_last_round": (
+                        self._last_sent_for(path) if place else answered_before
+                    ),
                 }
                 self.log.info(
                     "draft loop %s target=%s round=%d: %s again; telling the "
@@ -4322,18 +4795,34 @@ class DraftLoop:
                     self.rounds + 1,
                     key,
                 )
-            last_named = key
+            elif moved:
+                self.log.info(
+                    "draft loop %s target=%s round=%d: %s moved from step %s to "
+                    "step %s; asking for the whole line of it",
+                    kind,
+                    target_id,
+                    self.rounds + 1,
+                    field,
+                    self._last_answered[3] if self._last_answered else "?",
+                    number,
+                )
+            if used >= 1 and left == 1:
+                instruction = LAST_TRY_INSTRUCTION + instruction
+            what = f"fix {path if place else 'the plan'}"
             # LAW A: and the tail of every fix ask.
             instruction = with_the_person_said(instruction, payload, answer)
-            reply = self._ask(
-                instruction, payload, f"fix {path or '?'}", head=self._head()
-            )
+            reply = self._ask(instruction, payload, what, head=self._head())
             patches = read_patches(reply, path)
             # THE STEP COMES OUT (0.38.3). A drop is not a patch: it is the
             # door's own instruction, and it is the second exit on every
             # step-level problem.
             dropping = read_drop(reply, index)
-            if dropping is None and (whole is not None or repeated) and index is not None:
+            if (
+                dropping is None
+                and not several
+                and (whole is not None or repeated)
+                and index is not None
+            ):
                 # A WHOLE-STEP QUESTION ANSWERED WITH ONE FIELD is the wrong
                 # shape: ask once more with the step in front of it, and take
                 # the field patch only if the second answer is the same shape.
@@ -4355,8 +4844,10 @@ class DraftLoop:
                     patches = read_patches(reply, path)
                     dropping = read_drop(reply, index)
             if dropping is not None:
+                self._last_answered = None
                 answer = self._drop_step(target_id, kind, dropping, path, key)
                 continue
+            patches = self._what_lands(patches, several, kind, target_id)
             if not patches:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
                 # fenced reply with nothing in it, a refusal, a timeout); twice
@@ -4367,32 +4858,83 @@ class DraftLoop:
                     "(reply=%s, answer %s); asking once more",
                     kind,
                     target_id,
-                    path,
+                    path or "the plan",
                     self.last_reply,
                     answer_shape(reply),
                 )
-                reply = self._ask(EMPTY_ANSWER_INSTRUCTION + instruction, payload,
-                                  f"fix {path or '?'} (again)", head=self._head())
-                patches = read_patches(reply, path)
+                again = EMPTY_SEVERAL_INSTRUCTION if several else EMPTY_ANSWER_INSTRUCTION
+                reply = self._ask(again + instruction, payload,
+                                  f"{what} (again)", head=self._head())
+                patches = self._what_lands(
+                    read_patches(reply, path), several, kind, target_id
+                )
             if not patches:
                 self.log.warning(
                     "draft loop %s target=%s: no patch came back for %s twice "
                     "(reply=%s, answer %s); stopping this draft",
                     kind,
                     target_id,
-                    path,
+                    path or "the plan",
                     self.last_reply,
                     answer_shape(reply),
                 )
                 break
-            patches = self._aim(patches, path, kind, target_id)
-            answer = self._patch(
-                target_id, kind, patches, f"fix {path or '?'}", standing=answer
-            )
+            if not several:
+                # One path was asked for, so a stray patch is filed there. An
+                # ask that named several places takes each where it was put.
+                patches = self._aim(patches, path, kind, target_id)
+            answer = self._patch(target_id, kind, patches, what, standing=answer)
+            self._note_answered(key, fix, path, patches)
         # A PAUSE CAN BE WHAT ENDED THE LOOP, or what it was handed. A paused
         # body reads closed and spent, so it leaves by the while and not by the
         # check inside it, and a draft that came in paused never enters at all.
         return self._paused(target_id, kind, answer) or answer
+
+    def _note_answered(
+        self, key: str, row: Any, path: str, patches: Sequence[dict[str, Any]]
+    ) -> None:
+        """Which row the round just sent answered, and with what (0.55.3)."""
+        self._answered[key] = [
+            {"path": str(entry.get("path") or ""), "value": entry.get("value")}
+            for entry in patches
+        ]
+        self._last_answered = (
+            key,
+            field_of(row, path),
+            str((row or {}).get("problem") or ""),
+            (row or {}).get("step"),
+        )
+
+    def _what_lands(
+        self,
+        patches: Sequence[dict[str, Any]],
+        several: bool,
+        kind: str,
+        target_id: str,
+    ) -> list[dict[str, Any]]:
+        """The patches that land on a real place, and the rest said out loud.
+
+        An ask that let the model patch several places takes LEAVES only: a
+        step sent back whole from a question about a number rewrites the step
+        by accident. Every ask refuses a path that is not a place at all
+        (`form`, `form.steps`, `form.form`), before it costs a round.
+        """
+        kept: list[dict[str, Any]] = []
+        for entry in patches or []:
+            where = entry.get("path")
+            lands = is_a_leaf_place(where) if several else names_a_place(where)
+            if lands:
+                kept.append(entry)
+                continue
+            self.log.warning(
+                "draft loop %s target=%s: the model patched %s, which is not %s "
+                "in the plan; it was not sent",
+                kind,
+                target_id,
+                str(where or "?"),
+                "one value" if several and names_a_place(where) else "a place",
+            )
+        return kept
 
     def _whole_step_for(self, answer: Any, index: int | None) -> Any:
         """EVERY field of one step, un-shed.
@@ -4423,6 +4965,7 @@ class DraftLoop:
             code or "no code",
         )
         self._sent.append((path, {"drop": {"step": index}}))
+        self._last_round = []
         answer = self.provider.drop_draft_step(target_id, index, kind=kind)
         self.rounds += 1
         self._record(target_id, kind, answer, f"drop step {index + 1}")
@@ -4456,6 +4999,7 @@ class DraftLoop:
             code or "no code",
         )
         self._sent.append((path, {"insert": {"before": before, "step": step}}))
+        self._last_round = []
         answer = self.provider.insert_draft_step(target_id, before, step, kind=kind)
         self.rounds += 1
         self._record(target_id, kind, answer, f"insert before step {before}")

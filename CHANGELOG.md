@@ -11,6 +11,86 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 
+## [0.55.3] - 2026-09-25
+
+- **A plan-door row is answered at a real place, and the odds line is asked
+  about whole.** WHAT FORCED IT: on 2026-09-25 lab agent Sam, picked on a
+  tollbench.com want, lost its plan in 11 rounds. The door named a falling
+  odds line one step at a time, and each fix ask said "change exactly this one
+  number", so Sam raised step 1, which made step 2 fall, and so on for five
+  rounds. The door then named a row with no step and the path `form`. The loop
+  asked for a patch AT `form`, the model sent
+  `form = {"step": 6, "declared_odds": 0.84}`, the door stored that as a key
+  named `form` inside the form, and two more rounds went on `form.form = null`.
+  All three were charged against the row and the plan closed `plan_failed`.
+  What changed, one rule per shape and none per code:
+  - **A path that is not a place in the plan is never sent, on any road.** The
+    form has `overview`, `odds`, `span_days` and `steps` at the top and nothing
+    else, so `form`, `form.steps` whole and any other top-level key (`form.form`)
+    are refused before they cost a round.
+  - **A row whose path is not a place is asked for leaf patches.** The model is
+    shown the door's own sentence, what it accepts, every step's number with
+    its path, and the fields a step has, and never a path to copy. A stray key
+    is no longer taken off ahead of such a row, because the door charges every
+    patch against it.
+  - **A number on the odds line is asked about with the whole line.** Any row
+    about `odds` or `declared_odds` shows the overall forecast and every step's
+    number with its path, the bench's own rule (`forecast_context`) and the odds
+    this agent's proposal was filed at (null after a restart). One answer may
+    patch every number that has to change. The form ask carries the bench's
+    rule too, and says the line starts at or above `odds` and never falls.
+  - **A row that names a field of the step on the step's path is narrowed to
+    that field.** The falling-odds row names `declared_odds` on `form.steps.N`,
+    and the whole-step road it used to take told the model to replace or drop a
+    step whose only fault was a number.
+  - **`not_allowed` with nothing accepted takes the key off**, a null with no
+    model call, unless it is a key the step cannot stand without (verb,
+    do_line, hand_over_line, declared_odds, proof, who, a slot the step's
+    table marks required, the plan's own fields). Taking one of those off only
+    brings the same row back as `empty` and spends a try; the prod door still
+    labels the falling-odds row this way. A later ask about a key taken off
+    says what the door said about it.
+  - **"Your last patch did not clear this" is said only after a real patch.**
+    Sam was told it at round 4 about a number it had never patched, because
+    the round before had written a slot while the row stood.
+  - **The strategy switches early.** A field and problem that move from one
+    step to the next are asked for as a line, every step at once; the door's
+    own charged try counts as a repeat; and the door's last try on a row is
+    said out loud.
+- The plan-close log line now says what is held: nothing on disk, only this
+  process's memo, which a worker restart clears once the bench reopens the plan.
+
+
+## [0.55.2] - 2026-09-25
+
+- **A tools-free ask on the CLI rail asks for the object, and a
+  `result.complete` answer is the answer.** WHAT FORCED IT: on 2026-09-25, on
+  a tools-free proposal ask, Ali (Codex) refused ("No tools are available...
+  expose result.complete") and Trey wrapped the proposal in a
+  `result.complete` tool_call, because the envelope wording said the run only
+  ends through `result.complete`. A call with no tools now gets no tool
+  catalogue and no envelope instruction, only one line: reply with exactly
+  the one JSON object the message asks for, no prose, no fence, no tool
+  calls. On such a call, an empty-text reply whose only tool_call is
+  `result.complete` or `result.fail` carrying an object (under `result`, or
+  the arguments themselves) reads as that object. With tools offered nothing
+  changes: `result.complete` still ends a real run.
+
+
+## [0.55.1] - 2026-09-25
+
+- **The CLI rail reads a bare JSON answer as the answer, not as an empty
+  envelope.** WHAT FORCED IT: on 2026-09-25 the five lab agents on
+  tollbench.com answered a proposal ask with the bare eight-field proposal
+  object instead of `{"text": ..., "tool_calls": [...]}`. It parsed, had no
+  `text` key, read as an empty reply with no retry, and the draft loop gave up
+  with `no_proposal`: no bid was filed on a live want. `_parse_envelope` now
+  treats an object with neither `text` nor `tool_calls` as the whole answer
+  (its JSON becomes the text), and a `text` that holds an object or list reads
+  as that object's JSON. A real envelope and the corrective-retry paths are
+  unchanged. The Claude Code, Codex and external adapters all share the fix.
+
+
 ## [0.55.0] - 2026-09-24
 
 - **`toll_bench.file_outcome` takes an optional `proof` list** (bench contract

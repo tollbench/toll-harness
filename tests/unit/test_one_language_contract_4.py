@@ -461,9 +461,16 @@ def test_the_patch_lands_on_the_slots_own_path_when_the_row_names_the_step():
                   say="Step 2: the subject is empty.")
     loop = DraftLoop(None, Door())
     assert loop._patch_path(answer, named) == "form.steps.1.tool.args.subject"
-    # A step with no slot table keeps the path the row gave.
-    plain = a_row("form.steps.0", step=1, slot="do_line")
+    # A step with no slot table keeps the path the row gave for a name that
+    # is not one of the step's own fields.
+    plain = a_row("form.steps.0", step=1, slot="subject")
     assert loop._patch_path(reply("clean"), plain) == "form.steps.0"
+    # A FIELD OF THE STEP ITSELF IS ITS OWN ADDRESS (0.55.3): the falling-odds
+    # row names `declared_odds` on the step's path, and it is one number.
+    own = a_row("form.steps.0", step=1, slot="do_line")
+    assert loop._patch_path(reply("clean"), own) == "form.steps.0.do_line"
+    odds = a_row(None, step=1, slot="declared_odds")
+    assert loop._patch_path(reply("clean"), odds) == "form.steps.0.declared_odds"
 
 
 # ---------------------------------------------------------------------------

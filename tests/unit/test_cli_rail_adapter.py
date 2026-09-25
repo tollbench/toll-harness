@@ -123,6 +123,171 @@ def test_claude_code_accepts_fenced_envelope(tmp_path):
     assert [call.name for call in response.tool_calls] == ["state.save"]
 
 
+PROPOSAL = {
+    "pitch_title": "A summit-day text drip",
+    "headline": "Wear the hat. Work the room.",
+    "pitch_body": "A timed feed of texts that runs your whole summit day.",
+    "odds": 0.6,
+    "total_ask_cents": 0,
+    "research_links": [],
+    "finalist_questions": [],
+    "tools_needed": [],
+}
+
+
+def test_bare_json_answer_is_the_answer_not_an_empty_envelope(tmp_path):
+    # 2026-09-25: the lab agents answered a proposal ask with the bare object.
+    # It parsed, had no "text", and read as an empty reply: no bid was filed.
+    runner = _claude_runner([_claude_payload(json.dumps(PROPOSAL))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert json.loads(response.text) == PROPOSAL
+    assert response.tool_calls == []
+    assert response.stop_reason == "end_turn"
+    assert len(runner.calls) == 1  # no corrective retry
+    assert response.message.content == [{"type": "text", "text": response.text}]
+
+
+def test_text_holding_an_object_reads_as_that_object(tmp_path):
+    runner = _claude_runner([_claude_payload(json.dumps({"text": PROPOSAL}))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert json.loads(response.text) == PROPOSAL
+    assert response.tool_calls == []
+
+
+def test_text_holding_a_list_reads_as_that_list(tmp_path):
+    runner = _claude_runner([_claude_payload(json.dumps({"text": [1, "two"]}))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert json.loads(response.text) == [1, "two"]
+
+
+def test_real_envelope_with_string_text_is_unchanged(tmp_path):
+    inner = json.dumps(PROPOSAL)
+    runner = _claude_runner([_claude_payload(json.dumps({"text": inner}))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert response.text == inner
+    assert response.tool_calls == []
+    assert response.stop_reason == "end_turn"
+
+
+def test_envelope_with_tool_calls_only_is_unchanged(tmp_path):
+    envelope = json.dumps({"tool_calls": [{"name": "result.complete", "arguments": {}}]})
+    runner = _claude_runner([_claude_payload(envelope)])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert response.text == ""
+    assert [call.name for call in response.tool_calls] == ["result.complete"]
+    assert response.stop_reason == "tool_use"
+
+
+def test_external_adapter_inherits_the_bare_answer_read(tmp_path):
+    def run(argv, *, input, capture_output, text, timeout, cwd):
+        return SimpleNamespace(returncode=0, stdout=json.dumps(PROPOSAL), stderr="")
+
+    adapter = ExternalAgentAdapter(command=["my-agent"], workdir=tmp_path, runner=run)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert json.loads(response.text) == PROPOSAL
+    assert response.tool_calls == []
+
+
+def test_tools_free_ask_gets_no_catalogue_and_no_envelope(tmp_path):
+    # 2026-09-25: on a tools-free proposal ask Ali refused ("expose
+    # result.complete") and Trey wrapped the answer in result.complete,
+    # because the envelope said the run only ends through result.complete.
+    runner = _claude_runner([_claude_payload(json.dumps(PROPOSAL))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="Be exact.", messages=MESSAGES, tools=[])
+
+    prompt = runner.calls[0]["prompt"]
+    assert "Be exact." in prompt
+    assert "# Conversation so far" in prompt
+    assert "Walk the target briefing" in prompt
+    assert "# Available tools" not in prompt
+    assert "result.complete" not in prompt
+    assert '"tool_calls"' not in prompt
+    assert "There are no tools on this call" in prompt
+    assert "EXACTLY the one JSON object" in prompt
+    assert json.loads(response.text) == PROPOSAL
+
+
+def test_prompt_with_tools_is_unchanged(tmp_path):
+    runner = _claude_runner(
+        [_claude_payload(json.dumps({"tool_calls": [{"name": "state.save"}]}))]
+    )
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    prompt = runner.calls[0]["prompt"]
+    assert "# Available tools" in prompt
+    assert "the run only ends through the\nresult.complete or result.fail tools" in prompt
+    assert "There are no tools on this call" not in prompt
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"result": PROPOSAL}, PROPOSAL],
+    ids=["under-result", "arguments-themselves"],
+)
+def test_tools_free_result_complete_wrapped_answer_is_the_answer(tmp_path, arguments):
+    envelope = {"text": "", "tool_calls": [{"name": "result.complete", "arguments": arguments}]}
+    runner = _claude_runner([_claude_payload(json.dumps(envelope))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=[])
+
+    assert json.loads(response.text) == PROPOSAL
+    assert response.tool_calls == []
+    assert response.stop_reason == "end_turn"
+
+
+def test_result_complete_with_tools_offered_stays_a_tool_call(tmp_path):
+    # With tools offered, result.complete is how a real run ends.
+    envelope = {
+        "text": "",
+        "tool_calls": [{"name": "result.complete", "arguments": {"summary": "done"}}],
+    }
+    runner = _claude_runner([_claude_payload(json.dumps(envelope))])
+    adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert [call.name for call in response.tool_calls] == ["result.complete"]
+    assert response.tool_calls[0].arguments == {"summary": "done"}
+    assert response.stop_reason == "tool_use"
+
+
+def test_real_tool_call_with_text_stays_a_tool_call(tmp_path):
+    envelope = {
+        "text": "Saving first.",
+        "tool_calls": [{"name": "state.save", "arguments": {"data": {"step": 2}}}],
+    }
+    for tools in (TOOLS, []):
+        runner = _claude_runner([_claude_payload(json.dumps(envelope))])
+        adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
+
+        response = adapter.invoke(system="s", messages=MESSAGES, tools=tools)
+
+        assert response.text == "Saving first."
+        assert [call.name for call in response.tool_calls] == ["state.save"]
+
+
 def test_claude_code_surfaces_cli_error_payload(tmp_path):
     runner = _claude_runner([_claude_payload("credit exhausted", is_error=True)])
     adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=runner)
