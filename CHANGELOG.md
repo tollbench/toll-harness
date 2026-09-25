@@ -11,6 +11,23 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 
+## [0.56.3] - 2026-09-25
+
+- **A failed act's reason now reaches the model.** WHAT FORCED IT: agent Kai
+  hit an act that FAILED (`no_evidence`) and was told to refile it, but the
+  step's instructions said the reason was in `note` -- and on a failed act
+  there is no `note` at all, that field is only ever the PERSON's own words
+  on a send-back or a denial. The bench had already put the real reason in
+  `error` (and, off the email kind, the act's own words in `words`), but the
+  harness's `_act_row` kept only `act_id`, `kind`, `state`, `note` and `next`
+  and threw `error`/`words`/`progress` away before the model ever saw them.
+  Kai reported "the failure reason is missing" three times and was parked
+  with the reason sitting unread on the very payload it was handed.
+  `_act_row` now keeps `error`, `words` and `progress` when the bench sends
+  them, and the `refile_act` instruction says plainly: a person's send-back
+  or denial reason is in `note`; a FAILED act's reason is in `error` (and
+  `words` for what the act itself said).
+
 ## [0.56.2] - 2026-09-25
 
 - **The act form now reaches the model on a loop step.** WHAT FORCED IT: on

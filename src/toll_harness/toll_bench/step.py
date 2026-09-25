@@ -345,11 +345,13 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "chat: it does not close the step and does not open an ask."
     ),
     "refile_act": (
-        "The person sent your act back, or it was denied or failed, and their "
-        "reason is in `note` on that act. That act is DEAD: never re-file the "
-        "same words and never wait on it. File ONE changed act that answers "
-        "them with a propose_act tool. If their reason is not something you "
-        "can act on, say so on the thread with reply_step_message instead."
+        "That act came back and is DEAD: never re-file the same words and "
+        "never wait on it. If the PERSON sent it back or said no, their "
+        "reason is in `note`. If it FAILED instead, nobody said no -- read "
+        "`error` (and `words` for what the act itself said) for why. File "
+        "ONE changed act that answers that reason with a propose_act tool. "
+        "If it is not something you can act on, say so on the thread with "
+        "reply_step_message instead."
     ),
     "file_act": (
         "Your signed plan declared an act on this step and it is not filed "
@@ -581,9 +583,18 @@ def _person_messages(thread: dict[str, Any], limit: int = PERSON_MESSAGE_LIMIT) 
 
 
 def _act_row(act: dict[str, Any]) -> dict[str, Any]:
+    # `note` is the person's own reason on sent_back/denied/retired. A FAILED
+    # act (no_evidence, recipient_bounced, ...) carries no `note` at all --
+    # the bench's agent_view_for_step puts that reason in `error` (and, off
+    # the email kind, the act's own detail lines in `words`; a family act's
+    # `progress` says how far it got). Dropping those three here left the
+    # reason nowhere the model could read: agent Kai reported "the failure
+    # reason is missing" three times on a failed act and was parked, when the
+    # reason was sitting in `error` on the very payload this row is built
+    # from (2026-09-25).
     row = {
         key: act.get(key)
-        for key in ("act_id", "kind", "state", "note", "next")
+        for key in ("act_id", "kind", "state", "note", "error", "words", "progress", "next")
         if act.get(key) is not None
     }
     for key in ("to", "subject", "with", "summary", "receipt", "sent_at", "executed_at"):
