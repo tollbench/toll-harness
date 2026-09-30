@@ -102,6 +102,7 @@ def test_plain_init_asks_the_brand_after_the_rail_with_the_suggestion_and_sends_
             "",  # brand: take the suggestion
             "Oak Works",  # company
             "",  # mode
+            "",  # default approach (0.57.0, optional): Enter skips it
             "",  # connect
             "",  # agent email
             "https://example.com",
@@ -147,7 +148,7 @@ def test_plain_init_takes_a_typed_brand_as_given(tmp_path, monkeypatch):
     )
     asked = _scripted_input(
         monkeypatch,
-        ["Oak", "D", "gpt-5.2", "Nemotron", "Oak Works", "", "n"],
+        ["Oak", "D", "gpt-5.2", "Nemotron", "Oak Works", "", "", "n"],
     )
     arguments = cli.build_parser().parse_args(["init", str(tmp_path / "agent")])
 

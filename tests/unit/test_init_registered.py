@@ -149,7 +149,8 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        ["F", "my-wrapper --flag 'two words'", "", "", "Grok", "", "Oak Works"],
+        # mode, then the optional default approach (0.57.0): Enter skips it.
+        ["F", "my-wrapper --flag 'two words'", "", "", "Grok", "", "", "Oak Works"],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]
@@ -325,7 +326,7 @@ def test_cli_registered_end_to_end_loads_through_the_identity_loader(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        ["F", "my-wrapper", "", "", "Grok", "", *answers],
+        ["F", "my-wrapper", "", "", "Grok", "", "", *answers],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]

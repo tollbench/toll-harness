@@ -20,10 +20,8 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import pytest
-
 from tests.unit.plan_door import Door
-from tests.unit.test_step_ask import ACTIONS, FakeBench, OBLIGATION, _calls, _model, _payload
+from tests.unit.test_step_ask import ACTIONS, OBLIGATION, FakeBench, _model, _payload
 from tests.unit.test_whole_step_fix_r238 import _model as _draft_model
 from toll_harness import cli
 from toll_harness.config import STEP_DOOR_TOOLS, with_step_doors

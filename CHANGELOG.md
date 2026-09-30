@@ -10,6 +10,104 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.57.1] - 2026-09-30
+
+- **The act door's `issues` and `failure` reach the model, and a calendar
+  event carries every slot the bench lists.** WHAT FORCED IT: the harness
+  check of 2026-09-30 against bench contract 4.1.6 and 4.1.7. The bench now
+  answers an act-door refusal with `issues` [{slot, problem, accepted,
+  example}], puts `failure` {code, vendor_message, slot} and `lines` on act
+  views, and lets a calendar slot take whatever kind the service's own form
+  takes (a plain ISO string start is legal). The harness dropped or refused
+  all of it: `issues` and `failure` were not in the standing-refusal keys, so
+  the next cycle never read them; the step-ask act row dropped `failure` and
+  `lines`; and `propose_act` refused a calendar event with a string `start`
+  or a missing field before the bench could answer, and kept `with` (the
+  guest slot, contract 4.1.5) off a calendar event. Now `issues` and
+  `failure` ride the standing refusal, the act row keeps `failure` and
+  `lines`, calendar `start` and `end` carry no type in the tool schema (the
+  bench names the kind and a wrong one comes back in `issues` with an
+  example), and only the keys each branch actually shapes are held out of the
+  pass-through. The harness keeps no copy of a form.
+
+
+## [0.57.0] - 2026-09-29
+
+- **The agent picks its approach first, then writes the proposal to fit it.**
+  WHAT FORCED IT: on 2026-09-29 Steven ruled a new proposal row (the "A1
+  Essential" row) for the person choosing between agents. Each row leads with
+  the agent's APPROACH (three words, one per dial), its CAPABILITIES and a
+  STEP ESTIMATE, and the bench added three optional slots to the proposal
+  door for them (contract 4.1.3). Steven: "we need to get them to choose a
+  strategy then design it based on that." The proposal ask now says CHOOSE
+  YOUR APPROACH FIRST: one stop on each dial (risk: Careful, Middle risk or
+  Aggressive; finish: Scrappy, Middle finish or Polished; path: Proven path,
+  Middle path or Creative), picked for THIS want, and then the headline,
+  title, paragraph, price and odds written to follow it. It also asks for
+  one or two capability lines (up to 60 characters, in the agent's own words,
+  what it brings to THIS want) and a first step estimate `{total, you}`. The
+  agent's default approach and a short profile (name, brand, company, what
+  its tools let it do, the operator's instructions) ride the same ask.
+- **The three slots are sent in the bench's spelling, and never cost a
+  bid.** `approach`, `capabilities` and `step_estimate` are read off the
+  model's answer and settled: dial words in any case or common short form
+  ("careful", "mid", "bold", the brief's `polish`/`novelty` keys) become the
+  dial's own word; a word that is not a stop drops that dial; a dial the model
+  left out is filled from the agent's default, and an approach still missing
+  a dial is dropped rather than sent half-filled. A third capability line is
+  dropped and a long one cut at a word. `you` above `total` is clamped to
+  `total`; a half-filled estimate is dropped, never guessed. The old
+  eight-field answer still files exactly as before. If the free validate door
+  or the filing door refuses one of the three by name, that slot comes off,
+  the refusal is logged, and the proposal goes once more without it; the
+  answer says which slot on `row_slots_dropped`.
+- **An optional default approach at `init`.** One new question after the
+  operating mode, "Give this agent a default approach for its proposals?"
+  (Enter skips it; each dial may be skipped too), or the flags
+  `--approach-risk`, `--approach-finish`, `--approach-path`. It is stored in
+  `agent.yaml` as `strategy.approach` and, when all three dials are set, sent
+  at registration as `approach`; a door that refuses it costs the default,
+  never the registration. An agent that registered before this has its
+  default sent to `POST /api/bench/me/approach` when its worker starts, if
+  `GET /me` says something different (never cleared from here, and a bench
+  whose `/me` has no `approach` is left alone). Older harness versions ignore
+  the `strategy` key.
+- **Tool descriptions.** `toll_bench.submit_proposal` names the three
+  optional slots and no longer asks for capability taxonomy keys;
+  `toll_bench.capability_taxonomy` says a proposal's capabilities are the
+  agent's own words now.
+
+## [0.56.4] - 2026-09-25
+
+- **The act door is the bench's: an act goes to the server as filed.**
+  WHAT FORCED IT: on 2026-09-25 at 09:32 UTC lab agents Rick (deal 40b6df58,
+  step 5, "send each person you pick a short personal follow-up") and Ali
+  (step 7) were parked on prod loop steps. The bench published one act form
+  per open item with `repeat_item` const and required, and current_step said
+  "file it at file_at now with repeat_item". The model did. The harness's
+  `propose_act` kept its own allow-list of act fields and its own three kinds,
+  had never heard of `repeat_item`, and refused `invalid_act_fields` before
+  anything reached the server; the retry without the item then failed the
+  bench's own schema (`arguments fails required`), three cycles running.
+  `propose_act` no longer refuses a key or a kind: meeting and
+  calendar_event keep their shaping and carry any key it does not know, every
+  other kind (email, record, post, outside, calls, and whatever the bench adds)
+  goes as filed, and the bench fills and refuses in its own words. The email
+  checks the harness ran itself (`to`, exactly one contact, subject, body) are
+  gone too: on a loop over people the bench fills the recipient from the item,
+  and on a follow-up it fills the subject from the thread. Rule 229's
+  platform-owned block was the one local refusal left (0.57.1 also drops the
+  calendar_event summary/start/end check).
+- **A refusal from the act door comes back in the door's own words.** A 4xx
+  from the door is returned, not raised: `error` is its word, `message` its
+  sentence, and every other key it sent (`kinds`, `fields`, the open items)
+  rides at the top level, so the retry reads what the bench said. A 5xx still
+  raises. The next cycle's standing refusal keeps `kinds` and `fields` too.
+- **The `toll_bench.propose_act` tool says the same.** One door, the kinds
+  `toll_bench.list_act_kinds` lists, and on a loop step the act names its item
+  with `repeat_item` exactly as current_step says. The act schema documents
+  `repeat_item`, `contact_ref` and `found_contact` and takes any other key the
+  bench does.
 
 ## [0.56.3] - 2026-09-25
 

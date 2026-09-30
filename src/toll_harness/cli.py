@@ -32,7 +32,6 @@ from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.fleet import market_target_key
 from toll_harness.loop_guard import LoopGuard
-from toll_harness.toll_bench.step import FORMS_TURNED_OFF
 from toll_harness.loop_guard import fingerprint as loop_fingerprint
 from toll_harness.models.bedrock import BedrockModelAdapter
 from toll_harness.models.probe import BedrockProbe
@@ -68,9 +67,10 @@ from toll_harness.service import (
 )
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
-from toll_harness.toll_bench import draft
+from toll_harness.toll_bench import draft, row_slots
 from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.toll_bench.step import (
+    FORMS_TURNED_OFF,
     ROAD_AGENTIC,
     StepAsk,
     platform_move,
@@ -474,6 +474,56 @@ def _ask_intelligence_brand(model_id: str | None, *, required: bool) -> dict[str
     return {"intelligence_brand": brand, "intelligence_maker": intelligence_maker_for(brand)}
 
 
+# THE DEFAULT APPROACH (0.57.0, optional). Steven, 2026-09-29: "we need to get
+# them to choose a strategy then design it based on that ... add that to the
+# onboarding process (optional)". One question after the operating mode; each
+# dial may be skipped, and skipping all three (the default) means no default:
+# the model picks per want. `--approach-risk/--approach-finish/--approach-path`
+# answer it without a prompt.
+APPROACH_QUESTION = (
+    "Give this agent a default approach for its proposals? (optional; it still "
+    "picks what fits each want)"
+)
+
+
+def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None:
+    """The dials the init flags set, in the bench's words; None when no flag.
+
+    A word that is not a stop of its dial stops init before anything is
+    written, naming the dial's three words.
+    """
+    out: dict[str, str] = {}
+    given = False
+    for dial, words in row_slots.APPROACH_DIALS.items():
+        raw = getattr(arguments, f"approach_{dial}", None)
+        if raw is None or not str(raw).strip():
+            continue
+        given = True
+        word = row_slots.dial_word(dial, str(raw))
+        if word is None:
+            raise ValueError(f"--approach-{dial} takes one of: {', '.join(words)}")
+        out[dial] = word
+    return out if given else None
+
+
+def _ask_default_approach(flagged: dict[str, str] | None) -> dict[str, str] | None:
+    """The flags' answer when there is one, else the one optional question."""
+    if flagged is not None:
+        return flagged or None
+    if not _yes_no(APPROACH_QUESTION, default=False):
+        return None
+    out: dict[str, str] = {}
+    for dial, words in row_slots.APPROACH_DIALS.items():
+        pick = _choose(
+            f"Default {dial}",
+            [("", f"No default {dial} (picked per want)"), *((word, word) for word in words)],
+            default_key="",
+        )
+        if pick:
+            out[dial] = pick
+    return out or None
+
+
 def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
     """Connect an agent that already entered at the door and holds its token."""
     token = os.environ.get(AGENT_TOKEN_ENV, "").strip()
@@ -487,10 +537,14 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         f"Connecting an agent that already registered; its token comes from "
         f"{AGENT_TOKEN_ENV} and is never shown.\n"
     )
+    flagged = _approach_from_flags(arguments)
     rail = _pick_model_rail()
     # Already registered: the brand is kept locally only, never sent.
     brand = _ask_intelligence_brand(rail["model_id"], required=False)
     mode = _prompt("Operating mode", default="Autonomous").title()
+    # Kept locally too: the bench registered this agent already, so the
+    # default is the model's starting point on every proposal.
+    approach = _ask_default_approach(flagged)
     answers = InitAnswers(
         # /me names the agent and the attribution its company once the token
         # is stored; these are placeholders until then.
@@ -500,6 +554,7 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         connect_toll_bench=True,
         use_book_of_houses_email=True,
         registered=True,
+        approach=approach,
         **rail,
         **brand,
     )
@@ -548,6 +603,7 @@ def command_init(arguments: argparse.Namespace) -> int:
 
     if config_path.exists() and not arguments.force:
         raise FileExistsError(f"Refusing to overwrite {config_path}; pass --force")
+    flagged = _approach_from_flags(arguments)
     print("Toll Harness\n")
     print(ONE_DOOR_LINE + "\n")
     agent_name = _prompt("Agent name")
@@ -555,6 +611,7 @@ def command_init(arguments: argparse.Namespace) -> int:
     brand = _ask_intelligence_brand(rail["model_id"], required=True)
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
+    approach = _ask_default_approach(flagged)
     connect = _yes_no("Connect to Toll Bench / Book of Houses?", default=True)
     use_email = _yes_no("Use Book of Houses agent email?", default=True) if connect else False
     company_url = responsible_name = jurisdiction = verification_recipient = None
@@ -573,6 +630,7 @@ def command_init(arguments: argparse.Namespace) -> int:
         responsible_legal_name=responsible_name,
         responsible_jurisdiction=jurisdiction,
         verification_recipient=verification_recipient,
+        approach=approach,
         **rail,
         **brand,
     )
@@ -1211,6 +1269,13 @@ _STEP_MOVE_CALLS = (
 _REFUSAL_KEYS = (
     "error", "code", "status", "message", "refusal", "field", "reason",
     "fix", "move", "allowed", "unexpected_fields", "deliverable",
+    # 0.56.4: the act door names its kinds and the fields it wants; the next
+    # try reads them in the door's own words.
+    "kinds", "fields",
+    # 0.57.1: the act door's `issues` [{slot, problem, accepted, example}] and
+    # a failed act's `failure` {code, vendor_message, slot} are the bench's
+    # words for what to fix; a standing refusal carries them to the next cycle.
+    "issues", "failure",
 )
 
 # A `stand_in` refusal QUOTES the stand-in it refused, and the check-in door
@@ -2633,6 +2698,11 @@ def _bid_through_the_draft_loop(
     brief = _brief_for_the_loop(resources, target_id, target.get("want"))
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)
     loop.standing_direction = _lab_lead_direction(resources)
+    # THE APPROACH FIRST (0.57.0): the agent's default style is where the
+    # model starts, and what the agent is and can do is what its capability
+    # lines are drawn from.
+    loop.approach_default = getattr(resources, "approach_default", None)
+    loop.agent_profile = _agent_profile(resources)
     outcome = loop.run(
         target_id,
         kind="bid",
@@ -2999,6 +3069,41 @@ def _the_step_ask(
     payload["breaker"] = breaker
     payload["retry_after_seconds"] = breaker["retry_after_seconds"]
     return payload
+
+
+# What an agent's tools let it do, in plain words, for the proposal's
+# `capabilities` lines (0.57.0). A family the agent has no tool for is not
+# said; nothing here names a secret, a path or a token.
+_TOOL_FAMILY_WORDS = (
+    ("email", "sends and reads email from its own mailbox"),
+    ("web", "searches and reads the web"),
+    ("browser", "drives a real web browser"),
+    ("http", "calls web APIs"),
+    ("files", "reads and writes files"),
+)
+PROFILE_INSTRUCTIONS_MAX = 600
+
+
+def _agent_profile(resources: Any) -> dict[str, Any]:
+    """Who this agent is and what it can do, for the proposal ask. {} if unknown."""
+    profile: dict[str, Any] = {}
+    identity = getattr(resources, "agent_identity", None)
+    for key in ("name", "intelligence", "company"):
+        value = getattr(identity, key, None)
+        if isinstance(value, str) and value.strip():
+            profile[key] = value.strip()
+    runtime = getattr(resources, "runtime", None)
+    tools = getattr(runtime, "enabled_tools", None)
+    families = {
+        str(name).split(".", 1)[0] for name in (tools if isinstance(tools, list) else [])
+    }
+    can = [words for family, words in _TOOL_FAMILY_WORDS if family in families]
+    if can:
+        profile["can"] = can
+    instructions = getattr(runtime, "operator_instructions", None)
+    if isinstance(instructions, str) and instructions.strip():
+        profile["operator_instructions"] = instructions.strip()[:PROFILE_INSTRUCTIONS_MAX]
+    return profile
 
 
 def _lab_lead_direction(resources: Any) -> str:
@@ -3453,6 +3558,28 @@ def _market_watch_proposals_only(
         time.sleep(max(arguments.interval, scan_interval, retry))
 
 
+def _sync_default_approach(resources: Any) -> dict[str, Any] | None:
+    """At worker start, the bench learns the default agent.yaml sets (0.57.0).
+
+    Only a WHOLE default that differs from what `GET /me` says is sent, once,
+    to `POST /api/bench/me/approach`; see the provider's
+    `sync_default_approach`. Never raises: a worker that cannot set its
+    default still bids, and every proposal carries its approach anyway.
+    """
+    configured = getattr(resources, "approach_default", None)
+    provider = getattr(resources, "toll_bench", None)
+    sync = getattr(provider, "sync_default_approach", None)
+    if not configured or not callable(sync):
+        return None
+    try:
+        outcome = sync(configured)
+    except Exception as error:  # noqa: BLE001 - never stops a worker
+        _LOGGER.warning("Default approach sync failed (%s)", type(error).__name__)
+        return None
+    _LOGGER.info("Default approach at start: %s", outcome)
+    return outcome
+
+
 def command_market_watch(arguments: argparse.Namespace) -> int:
     proposals_only = bool(getattr(arguments, "proposals_only", False))
     if proposals_only and getattr(arguments, "no_bid", False):
@@ -3461,6 +3588,7 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
             "--no-bid would leave it nothing to do"
         )
     resources = build_runtime(arguments.config)
+    _sync_default_approach(resources)
     if proposals_only:
         try:
             return _market_watch_proposals_only(arguments, resources)
@@ -3896,6 +4024,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not install the persistent Toll Bench market worker",
     )
+    for dial, words in row_slots.APPROACH_DIALS.items():
+        initialize.add_argument(
+            f"--approach-{dial}",
+            metavar="WORD",
+            help=(
+                f"Optional default approach, {dial} dial: {', '.join(words)}. "
+                "Any of the three approach flags skips the approach question."
+            ),
+        )
     initialize.set_defaults(handler=command_init)
 
     doctor = subcommands.add_parser("doctor", help="Check configuration and provider access")

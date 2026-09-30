@@ -83,7 +83,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from toll_harness.core.types import ModelMessage
-from toll_harness.toll_bench import blocks, programs
+from toll_harness.toll_bench import blocks, programs, row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
 
@@ -2195,14 +2195,40 @@ PROPOSAL_FIELDS = (
     "tools_needed",
 )
 
+# THE THREE ROW SLOTS (bench contract 4.1.3, Steven 2026-09-29) ride beside
+# the eight fields: `approach`, `capabilities`, `step_estimate`. WHAT FORCED
+# THEM: the person now chooses between proposals on one row each (the "A1
+# Essential" row), and the row prints the approach across the top, the
+# agent's capability lines and "Your part: N steps". Steven: "we need to get
+# them to choose a strategy then design it based on that." So the ask below
+# puts the APPROACH FIRST and asks for the rest to follow it. All three are
+# OPTIONAL at the door: a proposal without them still files, and
+# `row_slots` settles their spelling and drops what it cannot settle.
+ROW_SLOT_FIELDS = row_slots.ROW_SLOT_FIELDS
+APPROACH_WORDS = "; ".join(
+    f"{dial}: {', '.join(words[:-1])} or {words[-1]}"
+    for dial, words in row_slots.APPROACH_DIALS.items()
+)
+
 PROPOSAL_INSTRUCTION = (
-    "Answer the want below with a PROPOSAL: eight fields, ONE reply, nothing "
-    "else. A proposal is your short answer to what this person wants; it is "
-    "what they choose between. You do NOT write a plan here -- no steps, no "
-    "blocks, no account rows, no deliverables, no grant requests, no finish "
-    "line, no wins, no capabilities, no skill research, no separate strategy "
-    "block. If they pick you, the bench hands you a form and you write the "
-    "plan then.\n"
+    "Answer the want below with a PROPOSAL, in ONE reply and nothing else. A "
+    "proposal is your short answer to what this person wants; it is what they "
+    "choose between, one row per agent, side by side. You do NOT write a plan "
+    "here -- no steps, no blocks, no account rows, no deliverables, no grant "
+    "requests, no finish line, no wins, no skill research, no separate "
+    "strategy block. If they pick you, the bench hands you a form and you "
+    "write the plan then.\n"
+    "CHOOSE YOUR APPROACH FIRST, THEN DESIGN THE PROPOSAL AROUND IT.\n"
+    "`approach` -- decide it BEFORE you write anything else: one stop on each "
+    f"of three dials, in exactly these words. {APPROACH_WORDS}. Pick what "
+    "fits THIS want and what the person said. `your_default_approach`, when "
+    "it is there, is your usual style: start from it, and move a dial when "
+    "this want calls for it. The person's row prints the three words across "
+    "the top.\n"
+    "Then write the eight fields below so they clearly FOLLOW that approach: "
+    "the headline, the title, the paragraph, the price and the odds of an "
+    "Aggressive, Scrappy, Creative proposal read differently from a Careful, "
+    "Polished, Proven path one.\n"
     f"`pitch_title` -- what you are offering, up to {PROPOSAL_TITLE_MAX} "
     "characters.\n"
     f"`headline` -- REQUIRED. A short quick-hit title in your own words, up to "
@@ -2214,8 +2240,8 @@ PROPOSAL_INSTRUCTION = (
     "their card. Longer is trimmed at a word and the answer says what was "
     "cut; an empty one is refused.\n"
     f"`pitch_body` -- ONE paragraph, up to {PROPOSAL_BODY_MAX} characters: "
-    "what they get and roughly how. THIS IS YOUR STRATEGY; there is no other "
-    "place for it.\n"
+    "what they get and roughly how, the way your approach does it. THIS IS "
+    "YOUR STRATEGY; there is no other place for it.\n"
     "`odds` -- your honest chance this person ends up with the thing, between "
     "0 and 1.\n"
     "`total_ask_cents` -- what you charge, in whole cents, inside the want's "
@@ -2251,12 +2277,22 @@ PROPOSAL_INSTRUCTION = (
     "neither is a slug you assembled out of a service and a verb. A service "
     "that is not on that list is named on the STEP that uses it, as an "
     "outside act, never here. File [] when you need none.\n"
+    "`capabilities` -- one or two short lines, up to "
+    f"{row_slots.CAPABILITY_LINE_MAX} characters each, in your own words: what "
+    "YOU bring to THIS want that another agent may not, e.g. \"Calendar and "
+    "Gmail audit\" or \"Hires and manages human assistants\". Draw on "
+    "`your_profile` when it is there. Not a generic skill list.\n"
+    "`step_estimate` -- your first guess at the plan you would write if "
+    'picked: {"total": 7, "you": 2}, how many steps in all and how many of '
+    "them need the person (0 up to total). It follows your approach too.\n"
     f"A paragraph over {PROPOSAL_BODY_MAX} characters is REFUSED by the bench, "
     "not trimmed, so count and stay inside it; do not pad it.\n"
-    'Answer: {"pitch_title": "...", "headline": "...", "pitch_body": "...", '
-    '"odds": 0.0, '
+    'Answer, approach first: {"approach": {"risk": "...", "finish": "...", '
+    '"path": "..."}, "pitch_title": "...", "headline": "...", '
+    '"pitch_body": "...", "odds": 0.0, '
     '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
-    '[...], "tools_needed": [...]}.'
+    '[...], "tools_needed": [...], "capabilities": ["..."], '
+    '"step_estimate": {"total": 0, "you": 0}}.'
 )
 
 LINKS_INSTRUCTION = (
@@ -2520,21 +2556,31 @@ def pick_tools(named: Any, brief: Any) -> tuple[list[str], list[str]]:
     return kept, dropped
 
 
-def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
-    """The eight fields out of the model's answer, and nothing else.
+def read_proposal(answer: dict[str, Any], notes: list[str] | None = None) -> dict[str, Any]:
+    """The eight fields and the three row slots out of the model's answer,
+    and nothing else.
 
     FIELD NAMES ARE A CONTRACT. A field the door does not name is a field the
     door will not read, so anything else the model volunteered is dropped here
     rather than filed. Nothing is trimmed and nothing is invented: an `odds`
     outside 0..1 is the one coercion, because a probability is the one field
     whose range is arithmetic rather than an opinion.
+
+    THE ROW SLOTS ARE OPTIONAL (contract 4.1.3). `approach`, `capabilities`
+    and `step_estimate` are read when the answer carries them, in the door's
+    spelling (`row_slots`), and simply left off when it does not -- the old
+    eight-field answer still reads whole. What could not be settled is said
+    in `notes` when the caller passes a list for it. The approach may come
+    back PARTIAL here; the draft loop completes it from the agent's default
+    or drops it (`row_slots.complete_approach`).
     """
     if not isinstance(answer, dict):
         return {}
     holder = answer
+    wanted = PROPOSAL_FIELDS + ROW_SLOT_FIELDS
     for key in ("proposal", "bid"):
         inner = answer.get(key)
-        if isinstance(inner, dict) and any(field in inner for field in PROPOSAL_FIELDS):
+        if isinstance(inner, dict) and any(field in inner for field in wanted):
             holder = inner
             break
     out: dict[str, Any] = {}
@@ -2575,6 +2621,19 @@ def read_proposal(answer: dict[str, Any]) -> dict[str, Any]:
     tools = [tool for tool in tools if tool]
     if tools:
         out["tools_needed"] = tools
+    slots, said = row_slots.read_row_slots(holder)
+    if holder is not answer:
+        # "Approach first" can put the approach BESIDE a wrapped proposal:
+        # {"approach": {...}, "proposal": {...}}. A slot the wrapper lacks is
+        # read off the outside.
+        outside, said_outside = row_slots.read_row_slots(answer)
+        for key, value in outside.items():
+            if key not in slots:
+                slots[key] = value
+                said.extend(line for line in said_outside if line.startswith(key))
+    out.update(slots)
+    if notes is not None:
+        notes.extend(said)
     return out
 
 
@@ -2597,6 +2656,13 @@ def mend_the_small_proposal(
       * THE PARAGRAPH CAP (REJ-21). A `pitch_body` over the cap, by the
         door's own count, is cut at a sentence or word boundary.
 
+    And a fourth that is never a refusal:
+
+      * THE ROW SLOTS (contract 4.1.3). `approach`, `capabilities` and
+        `step_estimate` are put in the door's spelling, and one that cannot
+        be settled -- a half-filled approach or estimate -- comes off rather
+        than being refused for the whole proposal (`row_slots.settle`).
+
     It does not invent a research link, a title, a headline or a price. A
     field that is simply not there is not something this package can mend.
     And it never cuts a headline: the bench trims a long one at a word and
@@ -2605,7 +2671,8 @@ def mend_the_small_proposal(
     if not isinstance(proposal, dict):
         return {}, []
     mended: list[str] = []
-    out = dict(proposal)
+    out, settled = row_slots.settle(dict(proposal))
+    mended.extend(settled)
     asked_now = out.get("finalist_questions")
     # A FLAT list only. `[[...]]` is the old whole-plan bid's shape -- one
     # group of four -- and it has a road of its own; reading it as a list of
@@ -3028,6 +3095,12 @@ class DraftLoop:
         # The lab lead's standing direction (focus.md), riding the proposal
         # call when set; empty means the call is unchanged.
         self.standing_direction: str = ""
+        # THE AGENT'S DEFAULT APPROACH (agent.yaml `strategy.approach`, 0.57.0)
+        # and what it is (name, brand, company, what it can do), both riding
+        # the proposal call when set. The default is the model's starting
+        # point, never its answer; it also fills a dial the model left out.
+        self.approach_default: dict[str, str] | None = None
+        self.agent_profile: dict[str, Any] = {}
         self.prompt_chars = 0
         self.cached_tokens = 0
         # This agent's own accepted plans, read ONCE per run (the client's
@@ -3679,12 +3752,18 @@ class DraftLoop:
         }
         if self.standing_direction:
             payload["lab_lead_standing_direction"] = self.standing_direction
+        if self.approach_default:
+            payload["your_default_approach"] = dict(self.approach_default)
+        if self.agent_profile:
+            payload["your_profile"] = dict(self.agent_profile)
         if self._tools_ride_the_outline:
             # Nothing caches here, so the rules ride the one call that makes
             # the choice rather than a prefix nobody is charged less for.
             payload["the_rules"] = SHORT_FRONT_DOOR
+        slot_notes: list[str] = []
         proposal = read_proposal(
-            self._ask(PROPOSAL_INSTRUCTION, payload, "proposal", head=self._head())
+            self._ask(PROPOSAL_INSTRUCTION, payload, "proposal", head=self._head()),
+            slot_notes,
         )
         if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
             return self._gave_up(
@@ -3694,6 +3773,7 @@ class DraftLoop:
                 "The model was asked for a proposal and answered with no "
                 "title and no paragraph.",
             )
+        proposal = self._the_row_slots(target_id, proposal, slot_notes)
         # THE TOOL LIST IS THE WANT'S, NOT THE MODEL'S (REJ-01). One name the
         # list does not carry costs the whole bid, so an off-list name comes
         # off here and is logged; a service that is not on the list belongs on
@@ -3748,13 +3828,17 @@ class DraftLoop:
         proposal = self._fit_the_body(target_id, proposal)
         self.log.info(
             "proposal for target=%s: %d of %d fields, %d link(s), %d "
-            "question(s), %d tool(s)",
+            "question(s), %d tool(s); approach=%s capabilities=%d "
+            "step_estimate=%s",
             target_id,
-            len(proposal),
+            len([key for key in proposal if key in PROPOSAL_FIELDS]),
             len(PROPOSAL_FIELDS),
             len(proposal.get("research_links") or []),
             len(proposal.get("finalist_questions") or []),
             len(proposal.get("tools_needed") or []),
+            " / ".join((proposal.get("approach") or {}).values()) or "none",
+            len(proposal.get("capabilities") or []),
+            proposal.get("step_estimate") or "none",
         )
         if not file:
             return {
@@ -3784,6 +3868,14 @@ class DraftLoop:
         }
         if fixed:
             out["bench_fixed"] = fixed
+        # A ROW SLOT THE DOOR REFUSED WAS DROPPED AND THE PROPOSAL WENT ONCE
+        # MORE WITHOUT IT (0.57.0); what was filed is what the run carries.
+        dropped = [slot for slot in (filed.get("row_slots_dropped") or []) if slot]
+        if dropped:
+            out["row_slots_dropped"] = dropped
+            out["proposal"] = {
+                key: value for key, value in proposal.items() if key not in dropped
+            }
         # CONTRACT 4.0.12: the filing door's 201 carries `trimmed`, every cut
         # it made ({path, from, to, from_chars, to_chars}, `to` is what was
         # stored). A trim is not a refusal: logged, carried, never retried.
@@ -3811,6 +3903,30 @@ class DraftLoop:
                 out["error"],
                 self._preview(out["message"]),
             )
+        return out
+
+    def _the_row_slots(
+        self, target_id: str, proposal: dict[str, Any], notes: list[str]
+    ) -> dict[str, Any]:
+        """THE APPROACH WHOLE OR NOT AT ALL, and every note said (0.57.0).
+
+        The door takes one stop on each of the three dials or no approach at
+        all. A dial the model left out is filled from the agent's default when
+        the default has it; an approach still missing a dial is dropped rather
+        than sent half-filled, and with no approach at all the default is the
+        agent's own standing answer. Capabilities and the step estimate were
+        settled as they were read. Nothing here fails a proposal.
+        """
+        approach, said = row_slots.complete_approach(
+            proposal.get("approach"), self.approach_default
+        )
+        out = {key: value for key, value in proposal.items() if key != "approach"}
+        if approach:
+            # The approach goes FIRST on the wire too: it is what the rest
+            # was written to follow.
+            out = {"approach": approach, **out}
+        for note in [*notes, *said]:
+            self.log.info("proposal for target=%s: %s", target_id, note)
         return out
 
     def _fit_the_body(
@@ -3908,7 +4024,7 @@ class DraftLoop:
                 "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
                 "your_proposal": {
                     key: proposal.get(key)
-                    for key in ("pitch_title", "pitch_body")
+                    for key in ("approach", "pitch_title", "pitch_body")
                     if proposal.get(key)
                 },
             },

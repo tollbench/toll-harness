@@ -17,6 +17,7 @@ from toll_harness.config import STEP_DOOR_TOOLS
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import default_fleet_database
 from toll_harness.storage.secrets import FileSecretStore
+from toll_harness.toll_bench import row_slots
 
 HARNESS_LABEL = f"Toll Harness {__version__}"
 
@@ -164,6 +165,10 @@ class InitAnswers:
     # optionally, the maker. None when the operator stated none.
     intelligence_brand: str | None = None
     intelligence_maker: str | None = None
+    # THE AGENT'S DEFAULT APPROACH (0.57.0, optional): one stop per dial
+    # ({risk, finish, path}, any of them may be left out), in the bench's own
+    # words. None means no default: the model picks per want.
+    approach: dict[str, str] | None = None
 
 
 def _atomic_text(path: Path, value: str, mode: int) -> None:
@@ -302,6 +307,9 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
             f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer"
         )
     maker = (answers.intelligence_maker or "").strip() or intelligence_maker_for(brand)
+    approach, approach_notes = row_slots.normalize_approach(answers.approach)
+    if approach_notes:
+        raise ValueError("Default approach: " + "; ".join(approach_notes))
     agent_id = str(uuid.uuid4())
     destination.mkdir(parents=True, exist_ok=True)
     config_path = destination / "agent.yaml"
@@ -380,6 +388,10 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
             "registry_no": None,
         },
     }
+    if approach:
+        # Written only when the operator set a dial: an agent.yaml without
+        # `strategy` has no default, and 0.56 and older ignore the key.
+        config["strategy"] = {"approach": approach}
     save_config(config_path, config)
     data_directory(config_path, config).mkdir(parents=True, exist_ok=True)
     secrets_store = secret_store(config_path, config)
@@ -428,6 +440,13 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
     }
     if intelligence is not None:
         payload["intelligence"] = intelligence
+    # THE DEFAULT APPROACH (contract 4.1.3, optional): the agent's standing
+    # style, the fallback for a proposal that carries none. Sent only WHOLE --
+    # the bench takes one stop on each of the three dials or none -- so a
+    # partial default stays a local starting point for the model.
+    approach, _notes = row_slots.configured_approach(config)
+    if row_slots.is_complete(approach):
+        payload["approach"] = approach
     return {
         **payload,
         "system_record": {
@@ -443,6 +462,17 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
             "version_hash": protocol["rules_version_hash"],
         },
     }
+
+
+def _problem_words(answer: Any) -> str:
+    """The door's own sentence(s) for a refusal, bounded, for onboarding state."""
+    rows = answer.get("problems") if isinstance(answer, dict) else None
+    words = [
+        str(row.get("message") or row.get("detail") or row.get("error") or "")
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict)
+    ]
+    return "; ".join(word for word in words if word)[:300] or "refused"
 
 
 def _save_connected_metadata(
@@ -603,6 +633,15 @@ def advance_connected_onboarding(
     if not maker_id:
         payload = registration_payload(config, protocol)
         validation = public_api.validate_registration(payload)
+        if not validation.get("ok") and "approach" in payload:
+            # THE APPROACH IS OPTIONAL (0.57.0). A door that refuses it -- or
+            # does not know it yet -- costs the default, never the
+            # registration: drop it, say so, and ask the free door once more.
+            slimmer, dropped = row_slots.drop_named(payload, validation)
+            if dropped:
+                state["approach_dropped"] = _problem_words(validation)
+                payload = slimmer
+                validation = public_api.validate_registration(payload)
         if not validation.get("ok"):
             state["status"] = "VALIDATION_FAILED"
             state["validation"] = {
@@ -618,7 +657,25 @@ def advance_connected_onboarding(
             _save_connected_metadata(path, config, status=VALIDATED)
             return {"status": VALIDATED, "validation": state["validation"]}
 
-        registration = public_api.register(payload, toll_bench["idempotency_key"])
+        try:
+            registration = public_api.register(payload, toll_bench["idempotency_key"])
+        except BookOfHousesApiError as error:
+            slimmer, dropped = (
+                row_slots.drop_named(payload, error.body, error.message)
+                if 400 <= error.status < 500
+                else (payload, [])
+            )
+            if not dropped:
+                raise
+            # A refusal writes nothing, so the one retry without the approach
+            # takes a key of its own rather than replaying the refused body.
+            state["approach_dropped"] = str(error.message or error.code)[:300]
+            payload = slimmer
+            registration = public_api.register(
+                payload, f"{toll_bench['idempotency_key']}-noapproach"
+            )
+        if "approach" in payload:
+            state["approach"] = registration.get("approach") or payload["approach"]
         returned_token = registration.pop("rest_token", None)
         if returned_token:
             store.set(token_name, returned_token)

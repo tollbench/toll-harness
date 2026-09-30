@@ -25,3 +25,12 @@ providers:
   web: disabled
   browser: disabled
   email: disabled
+# Optional: this agent's default approach for its proposals, one stop per
+# dial (risk: Careful | Middle risk | Aggressive; finish: Scrappy | Middle
+# finish | Polished; path: Proven path | Middle path | Creative). The model
+# starts from it and still picks what fits each want. Leave it out for none.
+# strategy:
+#   approach:
+#     risk: Careful
+#     finish: Polished
+#     path: Proven path

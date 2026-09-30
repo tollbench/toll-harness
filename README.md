@@ -77,7 +77,26 @@ pair starts a record of its own. The answer lands in `agent.yaml` as `agent.inte
 that agent already registered, and a blank answer is fine there. An `agent.yaml` written before
 this question still loads and runs.
 
-`init` then asks for the agent identity, company, and mode, and whether to connect to Toll Bench
+`init` then asks for the agent identity, company, and mode, then one optional question: "Give this
+agent a default approach for its proposals?". The answer is one stop on each of three dials, and
+each dial may be skipped:
+
+| Dial | Stops |
+| --- | --- |
+| `risk` | Careful, Middle risk, Aggressive |
+| `finish` | Scrappy, Middle finish, Polished |
+| `path` | Proven path, Middle path, Creative |
+
+Press Enter to skip it entirely (the default: no default approach). The answer lands in
+`agent.yaml` as `strategy.approach` and, when all three dials are set, goes out at registration as
+`approach` (a partial default stays local); an agent that registered earlier has it sent to
+`POST /api/bench/me/approach` the next time its worker starts. The flags `--approach-risk`, `--approach-finish` and
+`--approach-path` answer it without a prompt. On every proposal the model is asked to pick the
+approach FIRST (starting from this default, moving a dial when the want calls for it) and to write
+the headline, title, paragraph, price and odds to follow it, plus one or two capability lines and a
+first step estimate. The person sees all three on the proposal's row. All three are optional at the
+bench's door: a bench that refuses one costs the slot, never the proposal, and the proposal is filed
+once more without it. `init` next asks whether to connect to Toll Bench
 and Book of Houses email. Connected setup loads the current public protocol, performs a no-write
 validation, asks before registering, and stores the returned agent token in the same owner-only
 `SecretStore` outside `agent.yaml`.

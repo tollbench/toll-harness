@@ -1108,10 +1108,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ToolDefinition(
             "toll_bench.capability_taxonomy",
             (
-                "Read the closed capability list (rule 110): the only keys a bid's "
-                "`capabilities` block may use (rule 226). Twenty keys in three tiers. Call "
-                "this before filing and copy the KEYS, not the labels -- an invented key is "
-                "refused by name at the door."
+                "Read the closed capability list (rule 110): twenty keys in three tiers. "
+                "Since contract 4.1.3 a proposal's `capabilities` are NOT these keys: they "
+                "are one or two short lines in your own words (up to 60 characters each) "
+                "saying what you bring to THIS want. Read this list for words, if it helps."
             ),
             _object_schema({}, []),
         ),
@@ -1140,11 +1140,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 + " A block whose connection nothing on its step opens is refused "
                 "REJ-35, and an older bench may still refuse a missing named block "
                 "REJ-32; those two refusals hand back the same template."
-                "THE FIVE HOMEWORK BLOCKS ARE REQUIRED "
-                "(contract 2.42, rule 226) and an empty one is REJ-31: strategy (how this agent "
-                "will actually get it done, 1..600 chars); capabilities (1..8 KEYS from the "
-                "closed capability taxonomy -- call toll_bench.capability_taxonomy or read the "
-                "schema, never invent a key); wins (up to 3 {deal_id, note}, each naming one of "
+                "THE HOMEWORK BLOCKS an older bench still asks for "
+                "(contract 2.42, rule 226; an empty one is REJ-31): strategy (how this agent "
+                "will actually get it done, 1..600 chars); wins (up to 3 {deal_id, note}, "
+                "each naming one of "
                 "THIS AGENT'S OWN deals that ended resolved -- it is checked against the "
                 "record, so cite a real one or send [] if there are none, which is not a "
                 "penalty); research_links (1..3 {url, note} actually looked up for THIS want); "
@@ -1163,7 +1162,17 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "config.options. A date, a number, a form or a file is a control on a STEP "
                 "of the plan, where the work is. The contact book is not a question here: "
                 "the person picks who a message goes to on a step of the plan, after they "
-                "have chosen you."
+                "have chosen you. "
+                "THREE OPTIONAL ROW SLOTS (contract 4.1.3) put the proposal on the "
+                "person's row beside the others: approach, one stop on each of three "
+                "dials in exactly these words -- risk: Careful, Middle risk or "
+                "Aggressive; finish: Scrappy, Middle finish or Polished; path: Proven "
+                "path, Middle path or Creative -- chosen FIRST, with the pitch written "
+                "to follow it; capabilities, one or two short lines (up to 60 "
+                "characters each) in your own words, what you bring to THIS want "
+                "(no longer taxonomy keys); and step_estimate {total, you}, your first "
+                "guess at the plan's steps and how many need the person (you <= "
+                "total). Leave any of them out and the proposal still files."
             ),
             _object_schema(
                 {
@@ -1384,45 +1393,29 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             (
                 "ACT (rules 212 and 219): file ONE exact act on the step you are "
                 "working; the platform executes it after the person approves it word "
-                "for word. ONE door, three kinds. kind 'email': to, subject, body_text "
-                "(+ purpose) -- on approval Book of Houses sends it from your platform "
-                "mailbox. kind 'calendar_event': summary, start, end (+ description, "
-                "location, attendees) -- start and end are objects like {\"dateTime\": "
-                "\"2026-09-04T18:00:00-07:00\", \"timeZone\": \"America/Los_Angeles\"}, "
-                "and the deal must already hold a calendar grant or you get 409 "
-                "no_calendar_access. kind 'meeting' (RULE 223, intent only): with (the "
-                "invitee's email) and optionally with_name, duration_min (default 30), "
-                "window ('next week' default | 'this week' | 'next N days' | {start, "
-                "end}), title, description, location ('video' default), offer_count "
-                "(default 3). On the person's one Allow the PLATFORM reads their Google "
-                "Calendar, emails the invitee three open times with a pick link from "
-                "your mailbox, books the pick on both calendars with a video link and "
-                "carries change and cancel; no pick in 5 days lapses the act. You never "
-                "touch a slot, a time or an email body. A meeting is ONE move at this "
-                "door: you declare the act and nothing else. The calendar it reads is "
-                "connected by the plan's own GRANT step, filed before the block (rule "
-                "230), so the platform finds the open times itself and the person "
-                "never types a time. Optionally pass message: the words that OPEN the invite "
-                "email, written by you (who you are, why you are writing); the "
-                "platform owns the three times, the pick link and the AI-disclosure "
-                "line and appends them, the person approves the whole email, and you "
-                "must NOT put times or dates in message. progress rides current_step "
-                "under acts[].progress. Whatever the "
-                    "kind, the person sees it on their "
-                "step and approves, sends back, or stops, and the receipt lands on the "
-                "ledger. Your step stays yours; when the act is done, file your outcome "
-                "as usual. Never ask the person to send an email or make the calendar "
-                "entry themselves. A BLOCK STEP IS NOT YOURS TO FILE (rule 229): when a "
-                "step of your plan declared a registry block, the PLATFORM files that act "
-                "the moment the step opens and files the step outcome when it executes. "
-                "Read declared_acts and acts on current_step: a standing or performed "
-                "block means file nothing, wait. After a deny or a failure the step is "
-                "yours again, and then you file ONE changed act. "
-                "RULE 220 -- ANSWERING A REPLY IS AN ACT: when "
-                "owed_replies on this step is not empty, the ONLY act it takes is "
-                "the answer. Send kind email with in_reply_to set to that reply's "
-                "id and your body_text; everything else on the step is refused "
-                "422 reply_owed until you do."
+                "for word. ONE door, and the kinds are the ones the bench lists: "
+                "toll_bench.list_act_kinds is the source of truth for every kind and "
+                "its fields. Send the act as the step's form (current_step "
+                "submission.actions) shows it; any field the bench takes rides "
+                "through as you filed it, and a refusal comes back in the bench's "
+                "own words (error, message, kinds, fields, and issues: a list of "
+                "{slot, problem, accepted, example}) -- fix exactly that. A failed "
+                "act shows `failure` {code, vendor_message, slot} on current_step. ON A "
+                "LOOP STEP the act names its item: repeat_item, exactly as "
+                "current_step says (a contact id, or the ISO date on a schedule). "
+                "kind 'email': contact_ref (or found_contact), subject, body_text "
+                "-- never a raw address. kind 'calendar_event': summary, start, end "
+                "in the kind the step's form shows (a plain ISO string or a "
+                "{\"dateTime\", \"timeZone\"} object, whichever the service "
+                "takes), plus any slot the form lists, such as with. "
+                "kind 'meeting' (rule 223, intent "
+                "only): with, and optionally with_name, duration_min, window, title, "
+                "message -- the platform owns the times. A BLOCK STEP IS NOT YOURS "
+                "TO FILE (rule 229): a standing or performed platform block on "
+                "current_step means file nothing; after a deny or a failure file ONE "
+                "changed act. RULE 220: while owed_replies on this step is not "
+                "empty, the only act it takes is the answer: kind email with "
+                "in_reply_to and body_text."
             ),
             _object_schema(
                 {
@@ -1431,15 +1424,29 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "act": _object_schema(
                         {
                             "kind": {"type": "string",
-                                     "description": "email | calendar_event | meeting"},
+                                     "description": "a kind toll_bench.list_act_kinds "
+                                         "lists: email | calendar_event | meeting | "
+                                         "record | post | outside | calls"},
+                            "repeat_item": {
+                                "type": "string",
+                                "description": (
+                                    "on a loop step: the item this act is for, "
+                                    "exactly as current_step names it (a contact "
+                                    "id, or the ISO date on a schedule)"),
+                            },
+                            "contact_ref": {"type": "string",
+                                            "description": "email: the person's pick "
+                                                "from the contact picker"},
+                            "found_contact": {"type": "object",
+                                              "description": "email: a researched person "
+                                                  "{name, email, source_url}"},
                             "with": {"type": "string",
                                      "description": "meeting: the invitee's email (required)"},
                             "with_name": {"type": "string",
                                           "description": "meeting: the invitee's first name"},
                             "duration_min": {"type": "integer",
                                              "description": "meeting: 15 to 240, default 30"},
-                            "window": {"type": "string",
-                                       "description": "meeting: 'next week' | 'this week' | "
+                            "window": {"description": "meeting: 'next week' | 'this week' | "
                                            "'next N "
                                            "days' | {start, end}"},
                             "title": {"type": "string",
@@ -1451,7 +1458,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                                         "description": "meeting: the words that open the invite "
                                             "email; written by you, no times or dates"},
                             "to": {"type": "string",
-                                   "description": "email: the one recipient"},
+                                   "description": "email: not a raw address -- use "
+                                       "contact_ref; the bench says so if sent"},
                             "subject": {"type": "string",
                                         "description": "email: the subject line"},
                             "body_text": {"type": "string",
@@ -1468,10 +1476,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                             },
                             "summary": {"type": "string",
                                         "description": "calendar_event: the event title"},
-                            "start": {"type": "object",
-                                      "description": "calendar_event: {dateTime, timeZone}"},
-                            "end": {"type": "object",
-                                    "description": "calendar_event: {dateTime, timeZone}"},
+                            "start": {"description": "calendar_event: the kind the step's "
+                                                      "form shows; a wrong kind comes back in "
+                                                      "issues with an example"},
+                            "end": {"description": "calendar_event: the kind the step's "
+                                                    "form shows; a wrong kind comes back in "
+                                                    "issues with an example"},
                             "description": {"type": "string",
                                             "description": "calendar_event: optional notes"},
                             "location": {"type": "string",
@@ -1481,7 +1491,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                             "purpose": {"type": "string"},
                         },
                         ["kind"],
-                    ),
+                    ) | {"additionalProperties": True},
                     "idempotency_key": {"type": "string"},
                 },
                 ["deal_id", "step_id", "act", "idempotency_key"],

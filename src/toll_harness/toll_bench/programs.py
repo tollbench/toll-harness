@@ -321,6 +321,9 @@ EXPECTED_TO_CHANGE = (
     "research_links",
     "wins",
     "capabilities",
+    # The row slots (contract 4.1.3): the agent's own picks and guess.
+    "approach",
+    "step_estimate",
     "total_ask_cents",
     "finish_line_cents",
     "allocation",

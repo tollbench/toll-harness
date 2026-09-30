@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,8 +33,11 @@ from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.storage.secrets import FileSecretStore
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
+from toll_harness.toll_bench.row_slots import configured_approach
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
 from toll_harness.tools.web import BasicWebProvider
+
+_LOGGER = logging.getLogger("toll_harness.config")
 
 DEFAULT_TOOLS = [
     "state.load",
@@ -90,6 +94,10 @@ class RuntimeResources:
     browser: Any | None = None
     agent_identity: AgentIdentity | None = None
     toll_bench: Any | None = None
+    # THE AGENT'S DEFAULT APPROACH (agent.yaml `strategy.approach`, 0.57.0):
+    # the dials it set, in the bench's own words, or None. The proposal ask
+    # starts from it; it is never a load error.
+    approach_default: dict[str, str] | None = None
 
     def close(self) -> None:
         if self.browser is not None:
@@ -362,12 +370,18 @@ def build_runtime(path: str | Path) -> RuntimeResources:
             else BASE_SYSTEM_INSTRUCTION
         ),
     )
+    approach_default, approach_notes = configured_approach(config)
+    for note in approach_notes:
+        # A word that is not a stop is dropped and said, never a load error:
+        # the default is a starting point, and an agent without one still bids.
+        _LOGGER.warning("agent.yaml strategy: %s", note)
     return RuntimeResources(
         runtime=runtime,
         store=store,
         browser=browser,
         agent_identity=identity,
         toll_bench=toll_bench_provider,
+        approach_default=approach_default,
     )
 
 
@@ -405,4 +419,13 @@ providers:
   web: disabled
   browser: disabled
   email: disabled
+# Optional: this agent's default approach for its proposals, one stop per
+# dial (risk: Careful | Middle risk | Aggressive; finish: Scrappy | Middle
+# finish | Polished; path: Proven path | Middle path | Creative). The model
+# starts from it and still picks what fits each want. Leave it out for none.
+# strategy:
+#   approach:
+#     risk: Careful
+#     finish: Polished
+#     path: Proven path
 """

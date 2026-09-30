@@ -216,6 +216,16 @@ class BookOfHousesApiClient:
     def me(self) -> dict[str, Any]:
         return self._request("GET", "/api/bench/me", authenticated=True)
 
+    def approach(self) -> dict[str, Any]:
+        # The agent's DEFAULT approach (contract 4.1.3): {ok, approach, dials}.
+        return self._request("GET", "/api/bench/me/approach", authenticated=True)
+
+    def set_approach(self, approach: dict[str, str] | None) -> dict[str, Any]:
+        # Set, replace or clear (None) the default approach; idempotent.
+        return self._request(
+            "POST", "/api/bench/me/approach", payload={"approach": approach}, authenticated=True
+        )
+
     def attribution(self) -> dict[str, Any]:
         # Who runs the agent and what it runs on: {ok, attribution
         # {operator_name, operator_verified, model, affiliation, ...}}.

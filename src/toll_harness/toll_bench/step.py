@@ -594,7 +594,8 @@ def _act_row(act: dict[str, Any]) -> dict[str, Any]:
     # from (2026-09-25).
     row = {
         key: act.get(key)
-        for key in ("act_id", "kind", "state", "note", "error", "words", "progress", "next")
+        for key in ("act_id", "kind", "state", "note", "error", "words", "progress", "next",
+                    "failure", "lines")
         if act.get(key) is not None
     }
     for key in ("to", "subject", "with", "summary", "receipt", "sent_at", "executed_at"):

@@ -9,7 +9,7 @@ from typing import Any
 from toll_harness.core.budget import measure
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks, draft, programs
+from toll_harness.toll_bench import blocks, draft, programs, row_slots
 from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
@@ -1611,10 +1611,17 @@ class BookOfHousesTollBenchProvider:
         # schema does not name it ignores the key, so the mirror does too
         # rather than calling it an unexpected property.
         asks_headline = _schema_names(schema, "headline")
+        # THE ROW SLOTS (contract 4.1.3) the same way: a bench whose schema
+        # does not name one ignores it at the door, so the mirror does too.
+        unnamed = {
+            key
+            for key in ("headline", *row_slots.ROW_SLOT_FIELDS)
+            if not _schema_names(schema, key)
+        }
         instance = (
-            proposal
-            if asks_headline or not isinstance(proposal, dict)
-            else {key: value for key, value in proposal.items() if key != "headline"}
+            {key: value for key, value in proposal.items() if key not in unnamed}
+            if isinstance(proposal, dict) and unnamed
+            else proposal
         )
         errors = sorted(
             Draft202012Validator(schema).iter_errors(instance),
@@ -2152,6 +2159,16 @@ class BookOfHousesTollBenchProvider:
             )
             return door["corrected_plan"], []
         fixed, mended = draft.mend_the_small_proposal(proposal, brief)
+        # A ROW SLOT THE DOOR STILL REFUSES COMES OFF (0.57.0). All three are
+        # optional, so an approach, a capability line or a step estimate the
+        # door calls the wrong kind of thing is never worth the whole bid: it
+        # is dropped, said, and the door asked once more.
+        fixed, dropped = row_slots.drop_named(fixed, problems)
+        if dropped:
+            mended = [
+                *mended,
+                *(f"{slot}: dropped, the door refused it" for slot in dropped),
+            ]
         if not mended:
             return proposal, problems
         _LOGGER.warning(
@@ -2384,6 +2401,10 @@ class BookOfHousesTollBenchProvider:
                     ),
                 }
             raise
+        original_slots = [
+            slot for slot in row_slots.ROW_SLOT_FIELDS
+            if isinstance(proposal, dict) and proposal.get(slot)
+        ]
         if draft.is_small_proposal(proposal):
             # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
             # There are no steps to repair and no blocks to merge -- but the
@@ -2485,6 +2506,43 @@ class BookOfHousesTollBenchProvider:
             try:
                 result = self.api.submit_proposal(target_id, proposal, idempotency_key)
             except BookOfHousesApiError as first:
+                # THE ROW SLOTS ARE OPTIONAL (contract 4.1.3, 0.57.0). A 4xx that
+                # names `approach`, `capabilities` or `step_estimate` -- a bench
+                # that calls one the wrong kind of thing, or one that does not
+                # know it yet -- costs the slot, never the bid: drop it, say
+                # so, and file once more without it. Once: a second refusal is
+                # the door's answer, handled below like any other.
+                slimmer, dropped = (
+                    row_slots.drop_named(proposal, first.body, first.message)
+                    if 400 <= first.status < 500
+                    else (proposal, [])
+                )
+                if dropped:
+                    _LOGGER.warning(
+                        "Target %s: the filing door refused the proposal over "
+                        "%s (%s %s); dropped %s and filed once more without it",
+                        target_id,
+                        ", ".join(dropped),
+                        first.status,
+                        first.rej or first.code,
+                        ", ".join(dropped),
+                    )
+                    self._log_refusal(
+                        "filing",
+                        target_id,
+                        {
+                            "status": first.status,
+                            "code": first.code,
+                            "rej": first.rej,
+                            "detail": first.message,
+                            "body": getattr(first, "body", None),
+                            "row_slots_dropped": dropped,
+                        },
+                    )
+                    proposal = slimmer
+                    result = self.api.submit_proposal(
+                        target_id, proposal, f"{idempotency_key}-rowslots"
+                    )
                 # RULE 228: THE REFUSAL CARRIES THE FORM. A REJ-32 body holds
                 # the same plan_template the brief published, so the one move
                 # left is to fill it in and file once. Once: a second refusal
@@ -2493,7 +2551,7 @@ class BookOfHousesTollBenchProvider:
                 # what it hands back is the row, and the brief's template is
                 # where the row is published. Repair from there, or let the
                 # door's own words be the answer.
-                if first.rej == REJ_GRANT_STEP_REMOVED:
+                elif first.rej == REJ_GRANT_STEP_REMOVED:
                     proposal, moved = self._retire_grant_step_after(
                         target_id, first, proposal, self._published_steps(brief)
                     )
@@ -2662,6 +2720,16 @@ class BookOfHousesTollBenchProvider:
                     agent_id=self.fleet_agent_id,
                 )
         receipt = self._filing_receipt(result)
+        gone = [
+            slot
+            for slot in row_slots.ROW_SLOT_FIELDS
+            if slot in original_slots and slot not in proposal
+        ]
+        if gone and isinstance(receipt, dict):
+            # WHAT WENT WITHOUT ITS ROW SLOT, and which. The proposal the run
+            # carries is the one filed, not the one the model wrote.
+            receipt = dict(receipt)
+            receipt["row_slots_dropped"] = gone
         if trims and isinstance(receipt, dict):
             # WHAT THE BENCH FIXED ON THE WAY IN rides the receipt, because
             # the filing door answers with ids and a status and says nothing
@@ -2705,6 +2773,55 @@ class BookOfHousesTollBenchProvider:
         receipt = {key: value for key, value in result.items() if key not in dropped}
         receipt["echo_omitted"] = dropped
         return receipt
+
+    def sync_default_approach(self, configured: Any) -> dict[str, Any]:
+        """THE BENCH HOLDS THE DEFAULT AGENT.YAML SETS (0.57.0). Never raises.
+
+        An agent registered before its default existed (every lab agent) can
+        only set it at `POST /api/bench/me/approach` (contract 4.1.3). So at
+        worker start: when agent.yaml sets a WHOLE default (all three dials)
+        and `GET /me` carries an `approach` that differs, the yaml's is sent
+        once. Nothing is ever cleared from here, a partial default stays a
+        local starting point, and a bench whose /me has no `approach` key
+        (one before 4.1.3) is left alone.
+        """
+        wanted, _notes = row_slots.normalize_approach(configured)
+        if not row_slots.is_complete(wanted):
+            return {"synced": False, "reason": "no_whole_default"}
+        try:
+            me = self.api.me()
+        except Exception as error:  # noqa: BLE001 - a start-up nicety never stops a worker
+            return {"synced": False, "reason": "me_unreadable", "error": type(error).__name__}
+        if not isinstance(me, dict) or "approach" not in me:
+            return {"synced": False, "reason": "bench_has_no_default_approach"}
+        held, _ = row_slots.normalize_approach(me.get("approach"))
+        if held == wanted:
+            return {"synced": False, "reason": "already_set", "approach": wanted}
+        try:
+            answer = self.api.set_approach(wanted)
+        except BookOfHousesApiError as error:
+            _LOGGER.warning(
+                "Default approach: the bench refused %s from agent.yaml (%s %s: %s)",
+                wanted,
+                error.status,
+                error.code,
+                error.message,
+            )
+            return {
+                "synced": False,
+                "reason": "refused",
+                "status": error.status,
+                "message": error.message,
+            }
+        except Exception as error:  # noqa: BLE001
+            return {"synced": False, "reason": "unreachable", "error": type(error).__name__}
+        stored = (answer or {}).get("approach") if isinstance(answer, dict) else None
+        _LOGGER.info(
+            "Default approach: the bench held %s; set it to %s from agent.yaml",
+            held,
+            stored or wanted,
+        )
+        return {"synced": True, "approach": stored or wanted, "was": held}
 
     WITHDRAW_CAUSES = ("cannot_deliver", "other")
     WITHDRAW_REASON_LIMIT = 1000
@@ -3405,23 +3522,45 @@ class BookOfHousesTollBenchProvider:
         return self.api.declare_outside_wait(
             deal_id, step_id, payload, idempotency_key)
 
+    # The fields each propose_act branch SHAPES (rules 219 and 223). Only
+    # those are kept out of the pass-through for that branch; every other key
+    # (`with` on a calendar event, repeat_item, whatever the bench adds) rides
+    # to the bench exactly as filed. Not a list of what the door takes.
+    # A meeting is intent only (rule 223): a slot, a time or an email body is
+    # never carried onto it, so every email and calendar field stays out.
+    _SHAPED_MEETING_FIELDS = frozenset({
+        "kind", "to", "contact_ref", "found_contact", "seat",
+        "subject", "body_text", "purpose", "in_reply_to",
+        "summary", "start", "end", "description", "location", "attendees",
+        "with", "with_name", "duration_min", "window", "title",
+        "offer_count", "message",
+    })
+    _SHAPED_CALENDAR_FIELDS = frozenset({
+        "kind", "summary", "start", "end", "description", "location",
+        "attendees", "purpose",
+    })
+
     def propose_act(
         self, deal_id: str, step_id: str, act: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
         """ACT (rules 212 and 219): you propose, the platform executes. ONE
-        door for every kind. kind 'email' -- the exact email on the step you
-        are working, which the person approves word for word and Book of
-        Houses sends from your platform mailbox. kind 'calendar_event' -- the
-        exact event, on a step whose deal already holds a calendar grant,
-        which the person approves and Book of Houses puts on their calendar."""
-        allowed = {"kind", "to", "contact_ref", "found_contact", "seat",
-                   "subject", "body_text", "purpose",
-                   "in_reply_to",
-                   "summary", "start", "end", "description", "location",
-                   "attendees",
-                   # rule 223: the meeting kind's intent fields
-                   "with", "with_name", "duration_min", "window", "title",
-                   "offer_count", "message"}
+        door for every kind, and the kinds are the bench's
+        (`list_act_kinds`). On a loop step the act names its item with
+        `repeat_item`, exactly as current_step says.
+
+        THE BENCH IS THE ONE DOOR (0.56.4). What forced it: lab agents Rick
+        (deal 40b6df58, step 5) and Ali (step 7) filed a loop-step email with
+        `repeat_item`, as the bench's own form and current_step told them to,
+        and this method refused it `invalid_act_fields` from a private
+        allow-list before it reached the server; the retry without the item
+        failed the bench's schema, and both steps were parked. So the act goes
+        to the bench as filed: no key and no kind is refused here. The one
+        local refusal left is rule 229's, a block the platform is running.
+        meeting and calendar_event keep their shaping and carry any key it
+        does not shape (0.57.1: calendar_event no longer refuses a missing
+        summary, start or end -- the bench answers with `issues`); every
+        other kind goes as filed. A refusal from the door
+        comes back in the door's own words (`_act_refusal`)."""
         # RULE 229: HANDS OFF A BLOCK THE PLATFORM IS RUNNING. It filed the
         # act itself when the step opened; a second copy is a duplicate the
         # bench refuses 409, and the person sees two Allow cards for one
@@ -3448,14 +3587,12 @@ class BookOfHousesTollBenchProvider:
                     "a deny or a failure."
                 ),
             }
-        unexpected = sorted(set(act) - allowed)
-        if unexpected:
-            return {"ok": False, "error": "invalid_act_fields", "unexpected_fields": unexpected}
-        kind = str(act.get("kind") or "email").strip().lower()
-        if kind not in ("email", "calendar_event", "meeting"):
-            return {"ok": False, "error": "unknown_act_kind",
-                    "kinds": ["email", "calendar_event", "meeting"]}
+        kind = kind_asked
+        # What the shaping below does not know rides along as filed:
+        # repeat_item today, whatever the door takes next week.
         if kind == "meeting":
+            passed = {key: value for key, value in act.items()
+                      if key not in self._SHAPED_MEETING_FIELDS}
             # RULE 223: intent only. You say who, how long and roughly when;
             # the platform reads the person's calendar, offers the invitee the
             # times, books the pick and carries change and cancel. You never
@@ -3476,14 +3613,20 @@ class BookOfHousesTollBenchProvider:
                     payload[field] = act[field]
             if act.get("purpose"):
                 payload["purpose"] = str(act["purpose"])[:120]
-            return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
+            return self._file_act(deal_id, step_id, {**passed, **payload},
+                                  idempotency_key)
         if kind == "calendar_event":
-            for field in ("summary", "start", "end"):
-                if not act.get(field):
-                    return {"ok": False, "error": "missing_act_field", "field": field}
-            payload: dict[str, Any] = {
-                "kind": kind, "summary": str(act["summary"])[:400],
-                "start": act["start"], "end": act["end"]}
+            # 0.57.1: no local refusal. A calendar slot takes whatever kind the
+            # service's own form takes; the bench answers a missing or wrong
+            # one in `issues` with an example.
+            passed = {key: value for key, value in act.items()
+                      if key not in self._SHAPED_CALENDAR_FIELDS}
+            payload = {"kind": kind}
+            if act.get("summary"):
+                payload["summary"] = str(act["summary"])[:400]
+            for field in ("start", "end"):
+                if act.get(field):
+                    payload[field] = act[field]
             for field in ("description", "location"):
                 if act.get(field):
                     payload[field] = str(act[field])
@@ -3491,44 +3634,42 @@ class BookOfHousesTollBenchProvider:
                 payload["attendees"] = act["attendees"]
             if act.get("purpose"):
                 payload["purpose"] = str(act["purpose"])[:120]
+            return self._file_act(deal_id, step_id, {**passed, **payload},
+                                  idempotency_key)
+        # email and every other kind: as filed. The bench fills what it
+        # holds (the recipient from a loop's item, a follow-up's subject from
+        # its thread, an answer's recipient and subject from the reply) and
+        # refuses what is wrong in its own words.
+        return self._file_act(deal_id, step_id, dict(act, kind=kind),
+                              idempotency_key)
+
+    def _file_act(
+        self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        try:
             return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
-        answering = str(act.get("in_reply_to") or "").strip()
-        if answering:
-            # RULE 220: an ANSWER. The bench fills the recipient and the
-            # subject from the thread -- they are the thread's, not ours -- so
-            # only the words are required here.
-            if not str(act.get("body_text") or "").strip():
-                return {"ok": False, "error": "missing_act_field",
-                        "field": "body_text"}
-            payload = {"kind": kind, "in_reply_to": answering,
-                       "body_text": act["body_text"]}
-            if act.get("purpose"):
-                payload["purpose"] = str(act["purpose"])[:120]
-            return self.api.propose_act(deal_id, step_id, payload,
-                                        idempotency_key)
-        contact_ref = str(act.get("contact_ref") or "").strip()
-        found_contact = act.get("found_contact")
-        if act.get("to") or bool(contact_ref) == bool(found_contact):
-            return {
-                "ok": False,
-                "error": "contact_required",
-                "message": "An email needs exactly one contact_ref or found_contact.",
-            }
-        for field in ("subject", "body_text"):
-            if not str(act.get(field) or "").strip():
-                return {"ok": False, "error": "missing_act_field", "field": field}
-        payload = {
-            "kind": kind, "subject": act["subject"], "body_text": act["body_text"]
-        }
-        if contact_ref:
-            payload["contact_ref"] = contact_ref
-        else:
-            payload["found_contact"] = found_contact
-        if act.get("seat") is not None:
-            payload["seat"] = act["seat"]
-        if act.get("purpose"):
-            payload["purpose"] = str(act["purpose"])[:120]
-        return self.api.propose_act(deal_id, step_id, payload, idempotency_key)
+        except BookOfHousesApiError as refusal:
+            if not 400 <= int(refusal.status or 0) < 500:
+                raise
+            return self._act_refusal(refusal)
+
+    @staticmethod
+    def _act_refusal(refusal: BookOfHousesApiError) -> dict[str, Any]:
+        """The act door's answer, VERBATIM, where a model reading a tool
+        result sees it: `error` is the door's word, `message` its sentence,
+        and every other key it sent (kinds, fields, the reply it names, the
+        open items) rides at the top level untouched."""
+        body = refusal.body if isinstance(refusal.body, dict) else {}
+        out: dict[str, Any] = {key: value for key, value in body.items()
+                               if key not in ("ok", "error", "code")}
+        sentence = body.get("error") if isinstance(body.get("error"), str) else ""
+        out.update(ok=False, status=refusal.status, error=refusal.code)
+        if sentence and not out.get("message"):
+            out["message"] = sentence
+        elif sentence and out.get("message") != sentence:
+            out["refusal"] = sentence
+        out.setdefault("message", refusal.message)
+        return out
 
     def dismiss_reply(
         self, deal_id: str, step_id: str, reply_id: str,

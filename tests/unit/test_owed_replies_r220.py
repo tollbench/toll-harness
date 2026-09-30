@@ -70,14 +70,17 @@ def test_an_answering_act_sends_only_the_words():
     assert key == 'k-1'
 
 
-def test_an_answering_act_still_needs_the_words():
-    provider, _api = _provider()
+def test_an_answering_act_without_words_is_the_bench_s_to_answer():
+    """0.56.4: the bench is the one door. An answer with no words goes to the
+    bench as filed, and the bench's refusal is the one the model reads; the
+    harness no longer answers for it (Rick and Ali, 2026-09-25)."""
+    provider, api = _provider()
 
-    out = provider.propose_act('d-1', 's-1',
-                               {'kind': 'email', 'in_reply_to': 'msg-1'}, 'k-2')
+    provider.propose_act('d-1', 's-1',
+                         {'kind': 'email', 'in_reply_to': 'msg-1'}, 'k-2')
 
-    assert out['error'] == 'missing_act_field'
-    assert out['field'] == 'body_text'
+    (_name, _deal, _step, payload, _key) = api.calls[0]
+    assert payload == {'kind': 'email', 'in_reply_to': 'msg-1'}
 
 
 def test_an_ordinary_act_is_unchanged_by_the_reply_branch():

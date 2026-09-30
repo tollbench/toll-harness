@@ -229,8 +229,12 @@ def test_a_proposal_with_no_words_files_nothing():
 
 def test_the_eight_fields_are_read_and_everything_else_is_dropped():
     read = read_proposal(dict(PROPOSAL, steps=[{"title": "no"}], strategy="no",
-                              capabilities=["no"], odds=4))
+                              wins=[], odds=4))
     assert set(read) == set(PROPOSAL)
+    # Since 0.57.0 `capabilities` is one of the three OPTIONAL row slots
+    # (contract 4.1.3), the agent's own lines: read, not dropped.
+    assert read_proposal(dict(PROPOSAL, capabilities=["Books shows"]))[
+        "capabilities"] == ["Books shows"]
     # The one coercion: a probability is arithmetic, not an opinion.
     assert read["odds"] == 1.0
     assert read_proposal({"proposal": PROPOSAL})["pitch_title"] == PROPOSAL["pitch_title"]

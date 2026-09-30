@@ -1,9 +1,9 @@
 """RULE 219 — one act door, two kinds.
 
 An approved email act sat unsent while an approved calendar act executed, so
-the platform folded them into one door. The harness follows: propose_act takes
-an email or a calendar event, validates what that kind actually needs, and
-never invents a second tool for the second kind.
+the platform folded them into one door. The harness follows: propose_act is
+one tool for every kind, and never invents a second tool for the second kind.
+Since 0.56.4 the kinds and the fields are the bench's: an act goes as filed.
 """
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 
@@ -105,23 +105,30 @@ def test_a_calendar_event_is_an_act_at_the_same_door():
                        'attendees': ['ruby@example.com']}
 
 
-def test_each_kind_is_held_to_its_own_words():
+def test_the_shaped_kinds_keep_their_words_and_email_is_the_bench_s():
+    """calendar_event keeps its shaping; an email goes to the bench as filed
+    (0.56.4): on a loop the bench fills the recipient from the item and on a
+    follow-up the subject from the thread, so only the bench can say what is
+    missing."""
     provider, api = _provider()
-    assert provider.propose_act('d-1', 's-1', {
-        'kind': 'calendar_event', 'summary': 'Practice session 1'},
-        'k-3')['error'] == 'missing_act_field'
-    assert provider.propose_act('d-1', 's-1', {
-        'kind': 'email', 'contact_ref': 'contact-ruby'},
-        'k-4')['error'] == 'missing_act_field'
-    assert api.calls == [], 'a half-written act reached the bench'
+    # 0.57.1: a half-written calendar event goes to the bench too; it answers
+    # in `issues`, the harness keeps no copy of the form.
+    provider.propose_act('d-1', 's-1', {
+        'kind': 'calendar_event', 'summary': 'Practice session 1'}, 'k-3')
+    assert api.calls[0][2] == {
+        'kind': 'calendar_event', 'summary': 'Practice session 1'}
+    api.calls.clear()
+    provider.propose_act('d-1', 's-1', {
+        'kind': 'email', 'contact_ref': 'contact-ruby'}, 'k-4')
+    assert api.calls[0][2] == {'kind': 'email', 'contact_ref': 'contact-ruby'}
 
 
-def test_a_kind_the_door_does_not_have_is_named_not_guessed():
+def test_a_kind_the_harness_does_not_know_is_the_bench_s_to_name():
+    """0.56.4: the kinds are the bench's (list_act_kinds). The harness kept
+    its own three and refused the rest; the bench answers with its list."""
     provider, api = _provider()
-    out = provider.propose_act('d-1', 's-1', {'kind': 'carrier_pigeon'}, 'k-5')
-    assert out['error'] == 'unknown_act_kind'
-    assert out['kinds'] == ['email', 'calendar_event', 'meeting']
-    assert api.calls == []
+    provider.propose_act('d-1', 's-1', {'kind': 'carrier_pigeon'}, 'k-5')
+    assert api.calls[0][2] == {'kind': 'carrier_pigeon'}
 
 
 def test_the_tool_offers_both_kinds():

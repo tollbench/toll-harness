@@ -19,6 +19,7 @@ in `note`.
 """
 from __future__ import annotations
 
+from tests.unit.test_step_ask import OBLIGATION, FakeBench, _model, _payload
 from toll_harness.toll_bench.step import (
     MOVE_INSTRUCTIONS,
     RETURNED_ACT_STATES,
@@ -27,8 +28,6 @@ from toll_harness.toll_bench.step import (
     step_tail,
     the_move,
 )
-
-from tests.unit.test_step_ask import FakeBench, OBLIGATION, _model, _payload
 
 
 # ---------------------------------------------------------------------------
