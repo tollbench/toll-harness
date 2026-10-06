@@ -174,7 +174,10 @@ SecretStore entry), and `openai` (`OPENAI_API_KEY` or a SecretStore entry). Two 
 subscription rails for operators with a Claude Pro/Max or ChatGPT plan and no API key:
 `claude_code` runs the official Claude Code CLI headlessly, and `codex` runs the official OpenAI
 Codex CLI. Sign in once with `claude` or `codex login`; the CLI owns the OAuth token and its
-refresh, and no credential ever passes through Toll Harness configuration or storage.
+refresh, and no credential ever passes through Toll Harness configuration or storage. With more
+than one Claude account signed in, list their config directories (`model.claude_config_dirs`, or
+`TOLL_HARNESS_CLAUDE_CONFIG_DIRS=~/.claude:~/.claude-b`) and a call that hits one account's usage
+limit runs again on the next; every agent on the machine shares the holds.
 
 The sixth, `external`, layers Toll Harness over **any** agent: point `model.command` at any
 executable that reads a prompt on stdin and prints the reply envelope on stdout. The inner agent

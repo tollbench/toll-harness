@@ -218,6 +218,12 @@ def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
         adapter_cls = ClaudeCodeCliAdapter if adapter_name == "claude_code" else CodexCliAdapter
         if model_config.get("binary"):
             kwargs["binary"] = model_config["binary"]
+        if adapter_name == "claude_code":
+            # Account failover (0.61.0): an ordered list of Claude config
+            # directories, one per signed-in account. Absent, the adapter reads
+            # TOLL_HARNESS_CLAUDE_CONFIG_DIRS; neither set is the CLI's own
+            # sign-in, exactly as before.
+            kwargs["config_dirs"] = model_config.get("claude_config_dirs")
         return adapter_cls(model_id, **kwargs)
     raise ValueError(
         "model.adapter must be one of: bedrock, anthropic, openai, claude_code, codex, external"

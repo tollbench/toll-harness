@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,17 @@ from toll_harness.core.types import (
     ToolDefinition,
 )
 from toll_harness.models.base import ModelAdapter, ModelInvocationError
+from toll_harness.models.claude_accounts import (
+    DEFAULT_HOLD_SECONDS,
+    AccountTable,
+    describe_rejections,
+    detect_usage_limit,
+    iso_utc,
+    label_for,
+    resolve_config_dirs,
+)
+
+_LOGGER = logging.getLogger("toll_harness.models.claude_code")
 
 # OAuth-subscription rails. Anthropic and OpenAI subscription sign-ins (Claude
 # Pro/Max, ChatGPT) are OAuth flows owned by the vendors' own CLIs — those
@@ -250,6 +263,7 @@ def _run_in_own_process_group(
     cwd: str,
     capture_output: bool = True,
     text: bool = True,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """subprocess.run, except the CLI gets its OWN process group and a timeout
     kills the whole tree.
@@ -275,6 +289,7 @@ def _run_in_own_process_group(
         stderr=subprocess.PIPE if capture_output else None,
         text=text,
         cwd=cwd,
+        env=dict(env) if env is not None else None,
         start_new_session=True,
     )
     try:
@@ -345,17 +360,23 @@ class _CliRailAdapter(ModelAdapter):
     def model_id(self) -> str:
         return self._model_id
 
-    def _run(self, argv: list[str], prompt: str) -> subprocess.CompletedProcess:
+    def _run(
+        self, argv: list[str], prompt: str, *, env: Mapping[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         runner = self._runner or _run_in_own_process_group
+        options: dict[str, Any] = {
+            "input": prompt,
+            "capture_output": True,
+            "text": True,
+            "timeout": self.timeout_seconds,
+            "cwd": str(self.workdir),
+        }
+        # Only a call that names its account carries an environment; every
+        # other call inherits the harness's own, exactly as before 0.61.
+        if env is not None:
+            options["env"] = env
         try:
-            return runner(
-                argv,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                cwd=str(self.workdir),
-            )
+            return runner(argv, **options)
         except subprocess.TimeoutExpired as error:
             raise ModelInvocationError(
                 self.provider, "timeout", f"CLI call exceeded {self.timeout_seconds}s"
@@ -480,6 +501,16 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
     Sign in once with `claude` (browser OAuth) or set CLAUDE_CODE_OAUTH_TOKEN
     from `claude setup-token` for headless machines. Subscription OAuth tokens
     are refused by the raw Anthropic API, so the CLI is the sanctioned rail.
+
+    ACCOUNT FAILOVER (0.61.0). ``config_dirs`` is an ordered list of Claude
+    config directories, one per signed-in account (agent.yaml
+    ``model.claude_config_dirs``, else ``TOLL_HARNESS_CLAUDE_CONFIG_DIRS``).
+    With two or more, each call runs with ``CLAUDE_CONFIG_DIR`` set to the
+    first account the shared table (``AccountTable``) does not hold at a usage
+    limit; a call that comes back at a limit marks its account until the reset
+    and the SAME prompt runs on the next account. Only when every account is
+    held does the call fail, coded ``usage_limit``, naming each account and its
+    reset. None or one configured: the pre-0.61 call, byte for byte.
     """
 
     provider = "claude_code"
@@ -489,10 +520,106 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         "CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`."
     )
 
-    def __init__(self, model_id: str | None = None, *, binary: str = "claude", **kwargs: Any):
+    def __init__(
+        self,
+        model_id: str | None = None,
+        *,
+        binary: str = "claude",
+        config_dirs: Sequence[str] | str | None = None,
+        accounts_file: str | Path | None = None,
+        clock: Callable[[], float] | None = None,
+        **kwargs: Any,
+    ):
         super().__init__(model_id, binary=binary, **kwargs)
+        self.config_dirs = resolve_config_dirs(config_dirs)
+        self._clock = clock or time.time
+        self._accounts = AccountTable(accounts_file) if len(self.config_dirs) > 1 else None
+        # The account this adapter last ran on; a change is logged once.
+        self._active = self.config_dirs[0] if self.config_dirs else None
+        self._all_held_logged = False
 
     def _invoke_cli(self, prompt: str) -> tuple[str, ModelUsage]:
+        if self._accounts is None:
+            only = self.config_dirs[0] if self.config_dirs else None
+            completed, payload, native_tools = self._run_claude(prompt, only)
+            return self._finish(completed, payload, native_tools)
+        return self._invoke_with_failover(prompt, self._accounts)
+
+    def _invoke_with_failover(
+        self, prompt: str, table: AccountTable
+    ) -> tuple[str, ModelUsage]:
+        held: list[tuple[str, dict[str, Any]]] = []
+        for account in self.config_dirs:
+            entry = table.entry(account, now=self._clock())
+            if entry is not None:
+                held.append((account, entry))
+                continue
+            self._switch_to(account, held[-1] if held else None)
+            completed, payload, native_tools = self._run_claude(prompt, account)
+            limit = detect_usage_limit(
+                stdout=completed.stdout or "",
+                stderr=completed.stderr or "",
+                returncode=completed.returncode,
+                payload=payload,
+                now=self._clock(),
+            )
+            if limit is None:
+                self._all_held_logged = False
+                return self._finish(completed, payload, native_tools)
+            until = limit.resets_at or self._clock() + DEFAULT_HOLD_SECONDS
+            entry = table.reject(account, until, limit=limit, now=self._clock())
+            held.append((account, {**entry, "fresh": True}))
+        detail = describe_rejections(held)
+        soonest = min(float(entry["rejected_until"]) for _, entry in held)
+        if not self._all_held_logged:
+            _LOGGER.warning(
+                "claude_account_all_limited accounts=%d first_reset=%s held=%s",
+                len(held),
+                iso_utc(soonest),
+                json.dumps(detail, ensure_ascii=False),
+            )
+            self._all_held_logged = True
+        raise ModelInvocationError(
+            self.provider,
+            "usage_limit",
+            f"every configured Claude account is at its usage limit: {detail}. "
+            f"The first one resets at {iso_utc(soonest)}.",
+        )
+
+    def _switch_to(self, account: str, left: tuple[str, dict[str, Any]] | None) -> None:
+        """One structured line whenever this adapter changes accounts.
+
+        ``reason`` says why the account before it was left: ``usage_limit``
+        (with the CLI's limit type when it named one) and ``source=this_call``
+        when this call just hit it, ``source=shared_table`` when another agent
+        on the machine already had; ``reset_passed`` when an earlier account's
+        hold ran out and the rail goes back to it.
+        """
+        if account == self._active:
+            return
+        previous = self._active
+        self._active = account
+        if left is None:
+            _LOGGER.warning(
+                "claude_account_switch from=%s to=%s reason=reset_passed",
+                label_for(previous),
+                label_for(account),
+            )
+            return
+        entry = left[1]
+        _LOGGER.warning(
+            "claude_account_switch from=%s to=%s reason=%s resets_at=%s source=%s message=%s",
+            label_for(left[0]),
+            label_for(account),
+            entry.get("reason") or "usage_limit",
+            iso_utc(float(entry["rejected_until"])),
+            "this_call" if entry.get("fresh") else "shared_table",
+            json.dumps(str(entry.get("message") or ""), ensure_ascii=False),
+        )
+
+    def _run_claude(
+        self, prompt: str, config_dir: str | None
+    ) -> tuple[subprocess.CompletedProcess, dict[str, Any] | None, list[str]]:
         # stream-json, not json: the final `result` event is the same object
         # the json format prints, and the stream before it is the only place
         # the CLI names a native tool the model called.
@@ -513,8 +640,19 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         if self._configured_model:
             argv += ["--model", self._configured_model]
         argv += self.extra_args
-        completed = self._run(argv, prompt)
+        env = None
+        if config_dir is not None:
+            env = {**os.environ, "CLAUDE_CONFIG_DIR": config_dir}
+        completed = self._run(argv, prompt, env=env)
         payload, native_tools = _read_claude_output(completed.stdout)
+        return completed, payload, native_tools
+
+    def _finish(
+        self,
+        completed: subprocess.CompletedProcess,
+        payload: dict[str, Any] | None,
+        native_tools: list[str],
+    ) -> tuple[str, ModelUsage]:
         if payload is not None and _ended_on_native_tool(
             payload, native_tools, completed.returncode
         ):

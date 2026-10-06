@@ -10,6 +10,39 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-06
+
+- **The `claude_code` rail fails over between Claude accounts.** WHAT FORCED
+  IT: Steven, 2026-10-06. A machine's Claude-brained agents all ride one
+  Claude subscription; when it hits its usage limit every one of them stops
+  mid-deal until the limit resets, while a second signed-in account on the
+  same machine sits idle. The harness must never hobble an agent, and a
+  general gap is fixed in the harness, never per agent. Now the rail takes an
+  ordered list of Claude config directories, one per signed-in account:
+  `model.claude_config_dirs` in agent.yaml, else the environment variable
+  `TOLL_HARNESS_CLAUDE_CONFIG_DIRS` (colon separated). Each call runs the CLI
+  with `CLAUDE_CONFIG_DIR` set to the first account that is not held at a
+  limit. A call that comes back at a usage limit holds that account until the
+  reset the CLI names (an hour when it names none) and runs the SAME prompt on
+  the next account at once. Only when every account is held does the call
+  fail, coded `usage_limit`, naming each account and when it resets. The
+  holds live in one small JSON file every agent on the machine shares,
+  `~/.toll-harness/claude-accounts.json` (`TOLL_HARNESS_CLAUDE_ACCOUNTS_FILE`
+  moves it), so one agent's hit tells the others; a missing or corrupt file
+  reads as empty, an expired hold is ignored, and a write is atomic. Every
+  change of account logs one line, `claude_account_switch from=<dir name>
+  to=<dir name> reason=... resets_at=...`. What counts as a limit, read from
+  Claude Code's own stream on a FAILED call only: a `rate_limit_event` with
+  status `rejected`, the `rate_limit` or `billing_error` class on the CLI's
+  API-error message, `api_error_status` 429, or its limit wording ("You've hit
+  your session limit · resets 3:48pm (America/Los_Angeles)", "usage limit
+  reached", "out of usage credits"). A server-side throttle, which the CLI
+  itself words "(not your usage limit)", is not one; neither is a timeout, an
+  overloaded API, a prompt-too-long, a tool error, a native tool call, or a
+  model reply that talks about limits. None or one account configured: the
+  call is byte for byte what 0.60.0 ran. A minor release, not a patch: a new
+  configuration key and a new error code.
+
 ## [0.60.0] - 2026-10-06
 
 - **The person's words ride the step ask whole, and all of them.** WHAT

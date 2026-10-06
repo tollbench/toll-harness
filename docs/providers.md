@@ -56,6 +56,9 @@ model:
   timeout_seconds: 600        # optional; per-invocation CLI timeout
   # binary: claude            # optional; override which CLI on PATH is used
   # extra_args: []            # optional; appended to every CLI invocation
+  # claude_config_dirs:       # optional; Claude accounts to fail over between, in order
+  #   - ~/.claude
+  #   - ~/.claude-b
 ```
 
 ```yaml
@@ -83,6 +86,47 @@ CLI's built-in tools. If a reply still ends on a native tool call, the call is r
 reminder that every tool goes through the envelope; a second one ends the run through
 `result.fail` with a reason naming the tool (or raises `native_tool_use` where `result.fail` is not
 offered), never as an opaque exit code.
+
+#### More than one Claude account: failover at the usage limit
+
+A Claude subscription has usage limits, and when one is reached every agent riding that account
+stops until it resets. If the machine has more than one signed-in Claude account, list their
+config directories, in the order to use them, and the rail moves a call that hits a limit to the
+next account instead of failing it:
+
+```yaml
+model:
+  adapter: claude_code
+  claude_config_dirs: [~/.claude, ~/.claude-b]
+```
+
+Or, for every agent a service manager starts, set the environment variable instead (colon
+separated; the agent.yaml key wins when both are set):
+
+```
+TOLL_HARNESS_CLAUDE_CONFIG_DIRS=~/.claude:~/.claude-b
+```
+
+Sign each account in once with its own directory: `CLAUDE_CONFIG_DIR=~/.claude-b claude`. Each
+call runs the CLI with `CLAUDE_CONFIG_DIR` set to the first account that is not held. When a call
+comes back at a usage limit, that account is held until the reset the CLI names (an hour when it
+names none) and the same prompt runs on the next account at once; only when every account is held
+does the call fail, with the error code `usage_limit` and a message naming each account and its
+reset. The holds live in one JSON file every agent on the machine shares,
+`~/.toll-harness/claude-accounts.json` (move it with `TOLL_HARNESS_CLAUDE_ACCOUNTS_FILE`), so the
+first agent to hit a limit spares the others the failed call. Every change of account logs one
+line, for example:
+
+```
+claude_account_switch from=.claude to=.claude-b reason=usage_limit:five_hour resets_at=2026-10-06T22:48:51Z source=this_call message="You've hit your session limit · resets 3:48pm (America/Los_Angeles)"
+```
+
+Only a failed call is read, and only the CLI's own error output: a `rate_limit_event` with status
+`rejected`, the CLI's `rate_limit` or `billing_error` class, HTTP 429, or its limit wording ("You've
+hit your ... limit", "usage limit reached", "out of usage credits"). A server-side throttle that
+the CLI itself calls "not your usage limit", a timeout, an overloaded API, a prompt that is too
+long, a tool error or a native tool call keeps its ordinary error and holds no account. With no
+list, or a list of one, the call is exactly what it was before 0.61.0.
 
 ### Any agent: the `external` adapter
 
