@@ -59,6 +59,68 @@ _CORRECTION = (
 )
 
 
+# 2026-10-06 (Steven, pilot finding): lab agent Sam (claude_code rail, Opus
+# 5.5) handed back a file and the Claude Code CLI exited 1 fourteen times in
+# one night: `--tools ''` turns off the CLI's BUILT-IN tools only, and the
+# account's claude.ai connectors (two MCP servers, ~68k tokens of schema) still
+# rode every request. With a native tools array in front of it the model called
+# the harness tools natively (`files.list`, `toll_bench.post_check_in`), the
+# CLI answered "No such tool available", and the second turn broke
+# `--max-turns 1`: error_max_turns, stop_reason tool_use, exit 1, no reply.
+# The harness read a crash, three times, and the loop guard parked the step.
+# Two parts: the rail now runs the CLI with `--strict-mcp-config` so no
+# ambient MCP server rides along (an explicit --mcp-config in extra_args still
+# loads), and a run that still ends on a native tool call is NOT a crash: it
+# gets ONE retry with the reminder below, and a second one is a failure that
+# names the tool.
+class NativeToolUse(Exception):
+    """The CLI run ended on the model's own native tool call, not on a reply.
+
+    `names` are the native tools the model reached for, as the CLI's stream
+    reported them; `usage` is what that call cost.
+    """
+
+    def __init__(self, names: Sequence[str], usage: ModelUsage):
+        self.names = list(names)
+        self.usage = usage
+        super().__init__(", ".join(self.names) or "a native tool the CLI did not name")
+
+
+def _named(names: Sequence[str]) -> str:
+    if not names:
+        return "the CLI did not name it"
+    return ", ".join(f"'{name}'" for name in names)
+
+
+def _native_tool_reminder(names: Sequence[str], tools: Sequence[ToolDefinition]) -> str:
+    target = f" to {_named(names)}" if names else ""
+    opening = f"Your previous reply ended on a native tool call{target}, so nothing ran."
+    if not tools:
+        return (
+            f"{opening} There are no tools on this call, native or otherwise. "
+            "Reply with EXACTLY the one JSON object the message above asks for, "
+            "as plain text."
+        )
+    reminder = (
+        f"{opening} There are no native tools on this call. Every tool here is "
+        "called by writing the JSON envelope as plain text"
+    )
+    if any(tool.name == "files.write" for tool in tools):
+        reminder += (
+            "; a file goes through files.write (base64 for binary) into the run folder"
+        )
+    return reminder + "."
+
+
+def _add_usage(first: ModelUsage, retry: ModelUsage) -> ModelUsage:
+    return ModelUsage(
+        input_tokens=first.input_tokens + retry.input_tokens,
+        output_tokens=first.output_tokens + retry.output_tokens,
+        total_tokens=first.total_tokens + retry.total_tokens,
+        raw={"first": first.raw, "retry": retry.raw},
+    )
+
+
 def _render_prompt(
     system: str,
     messages: Sequence[ModelMessage],
@@ -303,6 +365,63 @@ class _CliRailAdapter(ModelAdapter):
         """Run one CLI call and return (raw model text, usage)."""
         raise NotImplementedError
 
+    def _call_rail(
+        self, prompt: str, tools: Sequence[ToolDefinition]
+    ) -> tuple[str, ModelUsage]:
+        """One CLI call. A run that ended on a native tool call is not a crash:
+        it gets ONE retry with the envelope reminder appended. A second one
+        raises NativeToolUse carrying both calls' usage."""
+        try:
+            return self._invoke_cli(prompt)
+        except NativeToolUse as first:
+            reminder = _native_tool_reminder(first.names, tools)
+            try:
+                raw, usage = self._invoke_cli(f"{prompt}\n\n{reminder}")
+            except NativeToolUse as second:
+                raise NativeToolUse(
+                    second.names or first.names, _add_usage(first.usage, second.usage)
+                ) from None
+            return raw, _add_usage(first.usage, usage)
+
+    def _native_tool_failure(
+        self, refused: NativeToolUse, tools: Sequence[ToolDefinition]
+    ) -> ModelResponse:
+        """Twice on a native tool call: a failure that names the tool. On a run
+        that offers result.fail the run ends through it with that reason; on a
+        call that does not, the caller gets a ModelInvocationError coded
+        native_tool_use instead of an opaque exit code."""
+        reason = (
+            f"{self.provider} rail: the model twice ended its reply on a native "
+            f"tool call ({_named(refused.names)}) instead of writing the JSON "
+            "envelope. This rail carries no native tools, so nothing ran."
+        )
+        if not any(tool.name == "result.fail" for tool in tools):
+            raise ModelInvocationError(self.provider, "native_tool_use", reason)
+        call = ToolCall(
+            id=f"cli-{uuid.uuid4().hex[:12]}",
+            name="result.fail",
+            arguments={"reason": reason, "blocker": "native_tool_use"},
+        )
+        return ModelResponse(
+            message=ModelMessage(
+                role="assistant",
+                content=[
+                    {"type": "text", "text": reason},
+                    {
+                        "type": "tool_call",
+                        "id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    },
+                ],
+            ),
+            text=reason,
+            tool_calls=[call],
+            usage=refused.usage,
+            stop_reason="native_tool_use",
+            raw_metadata={"model": self.model_id, "native_tools": refused.names},
+        )
+
     def invoke(
         self,
         *,
@@ -311,7 +430,10 @@ class _CliRailAdapter(ModelAdapter):
         tools: Sequence[ToolDefinition],
     ) -> ModelResponse:
         prompt = _render_prompt(system, messages, tools)
-        raw, usage = self._invoke_cli(prompt)
+        try:
+            raw, usage = self._call_rail(prompt, tools)
+        except NativeToolUse as refused:
+            return self._native_tool_failure(refused, tools)
         try:
             commentary, calls, normalized = _parse_envelope(raw, tools_offered=bool(tools))
         except ValueError:
@@ -319,13 +441,13 @@ class _CliRailAdapter(ModelAdapter):
             # runtime's own "continue the goal" nudge keeps the run alive
             # instead of failing it on a chatty reply.
             retry_prompt = f"{prompt}\n\n{_CORRECTION}\n\nYour previous reply was:\n{raw[:2000]}"
-            retry_raw, retry_usage = self._invoke_cli(retry_prompt)
-            usage = ModelUsage(
-                input_tokens=usage.input_tokens + retry_usage.input_tokens,
-                output_tokens=usage.output_tokens + retry_usage.output_tokens,
-                total_tokens=usage.total_tokens + retry_usage.total_tokens,
-                raw={"first": usage.raw, "retry": retry_usage.raw},
-            )
+            try:
+                retry_raw, retry_usage = self._call_rail(retry_prompt, tools)
+            except NativeToolUse as refused:
+                return self._native_tool_failure(
+                    NativeToolUse(refused.names, _add_usage(usage, refused.usage)), tools
+                )
+            usage = _add_usage(usage, retry_usage)
             try:
                 commentary, calls, normalized = _parse_envelope(
                     retry_raw, tools_offered=bool(tools)
@@ -371,37 +493,113 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         super().__init__(model_id, binary=binary, **kwargs)
 
     def _invoke_cli(self, prompt: str) -> tuple[str, ModelUsage]:
-        argv = [self.binary, "-p", "--output-format", "json", "--max-turns", "1"]
+        # stream-json, not json: the final `result` event is the same object
+        # the json format prints, and the stream before it is the only place
+        # the CLI names a native tool the model called.
+        argv = [
+            self.binary,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--max-turns",
+            "1",
+        ]
+        # No ambient MCP server (the account's claude.ai connectors, user or
+        # project .mcp.json) rides along: `--tools ''` turns off only the
+        # built-in tools. An operator's explicit --mcp-config still loads.
+        if "--strict-mcp-config" not in self.extra_args:
+            argv.append("--strict-mcp-config")
         if self._configured_model:
             argv += ["--model", self._configured_model]
         argv += self.extra_args
         completed = self._run(argv, prompt)
+        payload, native_tools = _read_claude_output(completed.stdout)
+        if payload is not None and _ended_on_native_tool(
+            payload, native_tools, completed.returncode
+        ):
+            raise NativeToolUse(native_tools, _claude_usage(payload))
         if completed.returncode != 0:
             raise ModelInvocationError(
                 self.provider,
                 f"exit_{completed.returncode}",
                 (completed.stderr or completed.stdout or "").strip()[-2000:],
             )
-        try:
-            payload = json.loads(completed.stdout)
-        except json.JSONDecodeError as error:
+        if payload is None:
             raise ModelInvocationError(
-                self.provider, "cli_output_invalid", completed.stdout[:2000]
-            ) from error
+                self.provider, "cli_output_invalid", (completed.stdout or "")[:2000]
+            )
         if payload.get("is_error"):
             raise ModelInvocationError(
                 self.provider, str(payload.get("subtype") or "error"), str(payload.get("result"))
             )
-        usage_raw = payload.get("usage") or {}
-        input_tokens = int(usage_raw.get("input_tokens") or 0)
-        output_tokens = int(usage_raw.get("output_tokens") or 0)
-        usage = ModelUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-            raw=dict(usage_raw),
-        )
-        return str(payload.get("result") or ""), usage
+        return str(payload.get("result") or ""), _claude_usage(payload)
+
+
+def _read_claude_output(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
+    """(the CLI's final result object or None, native tool names the model called).
+
+    Reads the stream-json event lines; a single json-format result object is
+    one such line, so both output formats read the same way.
+    """
+    text = (stdout or "").strip()
+    payload: dict[str, Any] | None = None
+    names: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "assistant":
+            content = (event.get("message") or {}).get("content") or []
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    name = str(block.get("name") or "")
+                    if name and name not in names:
+                        names.append(name)
+        elif event.get("type") == "result":
+            payload = event
+    if payload is None and text:
+        try:
+            whole = json.loads(text)
+        except json.JSONDecodeError:
+            whole = None
+        if isinstance(whole, dict) and whole.get("type") in (None, "result"):
+            payload = whole
+    if payload is not None:
+        for denial in payload.get("permission_denials") or []:
+            name = str(denial.get("tool_name") or "") if isinstance(denial, dict) else ""
+            if name and name not in names:
+                names.append(name)
+    return payload, names
+
+
+def _ended_on_native_tool(
+    payload: dict[str, Any], native_tools: Sequence[str], returncode: int
+) -> bool:
+    """The run stopped on the model's own tool call and produced no reply."""
+    failed = returncode != 0 or bool(payload.get("is_error"))
+    on_tool = payload.get("stop_reason") == "tool_use" or (
+        bool(native_tools) and payload.get("subtype") == "error_max_turns"
+    )
+    return failed and on_tool
+
+
+def _claude_usage(payload: dict[str, Any]) -> ModelUsage:
+    usage_raw = payload.get("usage") or {}
+    input_tokens = int(usage_raw.get("input_tokens") or 0)
+    output_tokens = int(usage_raw.get("output_tokens") or 0)
+    return ModelUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        raw=dict(usage_raw),
+    )
 
 
 class ExternalAgentAdapter(_CliRailAdapter):

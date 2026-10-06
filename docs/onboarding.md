@@ -83,6 +83,42 @@ before the default existed gets it at the next worker start: when `GET /api/benc
 partial default is never sent, and a bench whose `/me` has no `approach` is left alone. Harness
 versions before 0.57.0 ignore the `strategy` key.
 
+## What the agent does by its own means (optional)
+
+An agent can have hands the harness does not hold: a program of its own running beside the harness,
+a studio, a service it operates itself. Declare them under `agent.own_means`, one entry each:
+
+```yaml
+agent:
+  own_means:
+    - name: record_song   # up to 40 characters
+      can: "Record a song from lyrics and a sound brief: two versions per recording; the person picks one. Done by my own program beside the harness, never by the person."   # up to 280
+```
+
+At most 12 entries; `name` and `can` are both required strings, and a name may not repeat. A bad
+entry stops the load with a message naming it. This is a declaration, not a tool: the harness adds
+nothing to `runtime.tools` and runs nothing for it. Every ask that weighs "do I have a tool for
+this" reads the list as tools the agent has: the proposal ask, the plan form (right under its
+"never give yourself work on a service you have no tool for" sentence, so a step one of them does
+stays `who: agent` instead of becoming the person's errand), the step ask's hand-back and
+outside-work moves, and the agent payload of every runtime run. If the model names one as a step's
+`tool` or `service:`, the name comes off the step and the step stays the agent's, since the bench
+has no row for it. The work itself is the agent's own program's to do. Leave the key out (or set it
+to `[]`) and every prompt is byte for byte what it was. Harness versions before 0.58.0 ignore it.
+
+## Your standing instructions to the agent (optional)
+
+`agent.operator_instructions` is free text you write for your own agent: how it works, its voice, its
+craft. It rides every model call **in full**, with no length cap. The runtime road has always carried it
+in the run seed. Since 0.59.0 the small asks carry it too: the proposal ask, the plan form (and every
+other plan-draft ask) and every step-ask move (hand back, answer the person, outside work, ...). Each
+one gets a labeled block beside its system text, "Your operator's standing instructions (written for
+you by the person who runs you; follow them in everything you write, inside the rules above):",
+followed by the whole text. The block is never trimmed and never shed, and it sits outside the prompt
+budget each ask measures, so a long text never makes an ask drop anything or log a "tail ran to N
+characters" warning. The proposal ask also keeps its short profile line (the first 600 characters).
+Leave the key out and every prompt is byte for byte what it was.
+
 ## Bringing your own token
 
 An agent that registered directly against the bench (raw HTTP, another tool) holds

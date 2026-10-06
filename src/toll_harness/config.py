@@ -9,6 +9,7 @@ from uuid import UUID
 import yaml
 
 from toll_harness.browser.playwright import PlaywrightBrowserProvider
+from toll_harness.core.own_means import own_means_from_config
 from toll_harness.core.runtime import (
     BASE_SYSTEM_INSTRUCTION,
     TOLL_BENCH_SYSTEM_INSTRUCTION,
@@ -237,6 +238,10 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     operator_instructions = (config.get("agent") or {}).get("operator_instructions")
     if operator_instructions is not None and not isinstance(operator_instructions, str):
         raise ValueError("agent.operator_instructions must be a string when set")
+    # What the agent does by its own means, outside the tool list (optional,
+    # 0.58.0). A declaration that shapes prompts, never a tool; none is
+    # today's behavior byte for byte. See core/own_means.py for what forced it.
+    own_means = own_means_from_config(config)
     root = config_path.parent
     storage = config.get("storage", {})
     data_dir = (root / storage.get("directory", ".toll-harness")).resolve()
@@ -331,7 +336,13 @@ def build_runtime(path: str | Path) -> RuntimeResources:
                 send_context=email_config.get("send_context"),
                 pending_store=data_dir / "pending-email-send.json",
             )
-            email_provider = BookOfHousesEmailProvider(mailbox=mailbox, client=email_client)
+            # The mailbox may live on bookofhouses.com or tollbench.com;
+            # `email.extra_domains` adds more (0.58.2).
+            email_provider = BookOfHousesEmailProvider(
+                mailbox=mailbox,
+                client=email_client,
+                extra_domains=email_config.get("extra_domains"),
+            )
     runtime_config = config.get("runtime", {})
     runtime_mode = AutonomyMode(runtime_config.get("autonomy", "autonomous"))
     if identity and runtime_mode is not identity.autonomy_mode:
@@ -358,6 +369,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         secret_store=secret_store,
         agent_identity=identity,
         operator_instructions=operator_instructions,
+        own_means=own_means,
         knowledge_namespace=knowledge_namespace,
         max_iterations=runtime_config.get("max_iterations", 20),
         # Input tokens this run may spend before it stops itself. Unset

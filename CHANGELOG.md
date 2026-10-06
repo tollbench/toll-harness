@@ -10,6 +10,188 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-06
+
+- **The person's words ride the step ask whole, and all of them.** WHAT
+  FORCED IT: Steven, 2026-10-06, "I dont want the harness to hobble, we want
+  to make sure the agents have full capabilites." After 0.59.0 stopped
+  shedding the person's material, fixed clips still cut it on every step ask:
+  only the newest 6 of their messages on the step rode, each cut at 600
+  characters; the step's `outcome_promise` was cut at 600; only the first 4
+  send-back reasons rode, and an act's `note` (the person's own reason for
+  sending an act back) was cut at 400 with the rest of the act. Now every
+  message of theirs on the step, the whole promise, every send-back reason
+  (on `drafts_sent_back` and on a `draft_sent_back` obligation) and an act's
+  `note` ride whole; the bench caps a message on its side. Machinery keeps its
+  limits: acts (the last 4, each clipped at 400 apart from `note`), declared
+  acts, owed replies (3) and outside replies (2, 800 characters).
+  `PERSON_MESSAGE_LIMIT` is gone. A minor release, not a patch: what the
+  model reads changes.
+
+## [0.59.0] - 2026-10-06
+
+- **The operator's standing instructions ride every model call, in full.**
+  WHAT FORCED IT: on 2026-10-05 lab agent DJ 4-Fun's operator instructions
+  (about 5,100 characters) said how to write lyrics and a sound line, and the
+  lyrics it filed on a step were bland and the style line thin.
+  `agent.operator_instructions` reached the proposal ask only as a
+  600-character profile line; the plan form and the step ask (every move)
+  started from the bench's front door alone, so the agent's craft never
+  reached the words it wrote on a step. Steven, 2026-10-06: "I dont want the
+  harness to hobble, we want to make sure the agents have full capabilites."
+  Now one labeled block, "Your operator's standing instructions (written for
+  you by the person who runs you; follow them in everything you write, inside
+  the rules above):" and then the WHOLE text, rides beside the system text of
+  the proposal ask, every plan-draft ask (the form, blanks and fixes) and
+  every step-ask move (`hand_back`, `answer_person`, `outside_work`, ...). It
+  has no cap and no floor and is never trimmed or shed. It sits outside the
+  tail each ask measures, so it never makes an ask shed anything and never
+  trips the "tail ran to N characters (budget 8000)" warning. The runtime road
+  already carried the whole text in its run seed and is unchanged. The
+  proposal's 600-character profile line stays beside the block. No
+  instructions: every ask is byte for byte what 0.58.4 sent.
+- **The step ask never sheds the person's own material.** WHAT FORCED IT: the
+  same ruling. When a step-ask tail ran long, `_shed` cut the person's
+  messages on the thread to the last two and emptied the reasons they sent a
+  draft back and the materials they handed over. Those three now ride whole,
+  like what the person said and the earlier steps' words always did; only
+  machinery sheds (the acts down to the last one, then outside replies). A
+  tail still long after that is logged, never cut further.
+
+## [0.58.4] - 2026-10-06
+
+- **After asking the person for a fact, the old road posts a check-in, so an
+  overdue pulse stops re-asking.** WHAT FORCED IT: on 0.58.3 lab agent Bree
+  read the potluck date off `earlier_steps`, asked the person once per run
+  for the two facts only they have (the street name, how to RSVP) and ended
+  each run `completed`, never failed. But her last pulse was 80 minutes
+  overdue, an overdue pulse re-dispatches the step every cycle, and none of
+  those runs posted one: the same ask went out three times in 81 seconds and
+  the loop guard parked the step again. The deal-step instruction now says:
+  ask ONCE, post a check-in whose blocker names what you asked for, then
+  `result.complete`; when `latest_work_pulse.blocker` already says you asked
+  and nothing new came from the person, do not ask again, post a fresh
+  check-in that you are still waiting.
+
+## [0.58.3] - 2026-10-06
+
+- **The step ask renders the bench's `earlier_steps`, so the agent reads its
+  own approved work before deciding it lacks facts.** WHAT FORCED IT: on
+  2026-10-05 (20:16-20:28 PDT) lab agent Bree (codex, gpt-6.1-sol), deal
+  30bd9ebf step 4, a print-ready PDF flyer, failed three runs with "the
+  confirmed dinner date, start time ... are missing" and the loop guard parked
+  the step, while the bench's current-step answer (contract 4.1.14) carried
+  step 3's calendar act: "Potluck dinner, Sat Oct 17, 6:00 PM to 9:00 PM",
+  event id and all. The provider's whitelist dropped the field. It now rides
+  every current_step read as short lines (`step.render_earlier_steps`): one
+  per earlier step, "Step N (title): <hand-back words>", then one per file
+  and one per act it ran, "  did: <kind> to <to> "<subject>" <start..end tz>
+  event/message <id> : <words>". The block is capped at 1,500 characters,
+  the oldest steps dropped first under "(earlier steps trimmed)". An older
+  bench that sends no field gets nothing rendered; an empty list stays an
+  empty list. Both roads read it: the small step ask's tail, and the old
+  road's `current_step` (a file step, Bree's road, goes there).
+- **An agent's own posted ask no longer looks lost.** The same runs posted
+  the same ask on the step thread eleven times: every reply came back ok
+  with a message id, but `step_thread.messages` carries only the person's
+  words since the agent last spoke, the whitelist dropped the bench's
+  `thread_count`, and the harness's own `messages_total` read 0, so the
+  model read each post as unconfirmed and posted again. `thread_count`
+  passes through now, with a `messages_note` saying own posts never ride
+  `messages`. The deal-step instruction says it in one sentence too, and
+  says the move for a fact only the person can give: ask ONCE with
+  `toll_bench.reply_step_message` and end the run with `result.complete`,
+  never `result.fail` over it.
+
+## [0.58.2] - 2026-10-06
+
+- **An agent mailbox on tollbench.com loads alongside bookofhouses.com.**
+  WHAT FORCED IT: on 2026-10-05 the bench began minting new agent mailboxes
+  as `<handle>@tollbench.com` (older ones stay on bookofhouses.com), and
+  `BookOfHousesEmailProvider` refused any address not ending in
+  `@bookofhouses.com`, so lab agent DJ-4-Fun (A-0439,
+  `dj4fun.tollbench@tollbench.com`) could not load its mailbox. The provider
+  now accepts a mailbox whose domain (everything after the last `@`,
+  case-insensitive, exact match) is in the accepted set:
+  `bookofhouses.com`, `tollbench.com`, plus any listed in the
+  `TOLL_HARNESS_EXTRA_MAILBOX_DOMAINS` environment variable (comma separated)
+  or the agent's own `email.extra_domains`. Both only ADD domains; nothing
+  can take one of the two platform domains away. The refusal names the
+  accepted domains. A bookofhouses.com mailbox behaves exactly as before;
+  subdomains and lookalikes (`mail.tollbench.com`,
+  `tollbench.com.example.net`) are still refused.
+
+## [0.58.1] - 2026-10-06
+
+- **A native tool call on the claude_code rail is retried with the envelope
+  reminder, never counted as a crash.** WHAT FORCED IT: on 2026-10-05 lab
+  agent Sam (claude_code rail, Opus 5.5) went to hand back a file and the
+  Claude Code CLI exited 1 fourteen times in one night; after three of those
+  the loop guard parked the step and the bench read "The agent stopped
+  retrying after repeated unsuccessful attempts." `--tools ''` turns off the
+  CLI's built-in tools only: the account's claude.ai connectors (two MCP
+  servers, about 68k tokens of schema) still rode every request, so the model
+  called the harness tools natively (`files.list`,
+  `toll_bench.post_check_in`), the CLI answered "No such tool available", and
+  the second turn broke `--max-turns 1` (error_max_turns, stop_reason
+  tool_use, exit 1, no reply). Two parts. The rail now runs the CLI with
+  `--strict-mcp-config` (an explicit `--mcp-config` in `extra_args` still
+  loads) and reads `--output-format stream-json --verbose`, whose final
+  `result` event is the object the json format printed and whose stream names
+  any native tool the model called. A run that still ends on a native tool
+  call gets ONE retry of the same call with a short reminder appended (no
+  native tools here; every tool goes through the JSON envelope; a file goes
+  through files.write, base64 for binary, into the run folder). A second one
+  ends the run through `result.fail` with a reason naming the tool (or raises
+  `native_tool_use` on a call that offers no result.fail). A plain non-zero
+  exit is unchanged: `exit_N` with the CLI's own words, no retry.
+
+## [0.58.0] - 2026-10-05
+
+- **An agent can declare what it does by its own means, and every ask that
+  weighs "do I have a tool for this" counts it.** WHAT FORCED IT: on
+  2026-10-05 lab agent DJ 4-Fun (staging want 1d0a67d5) records songs with
+  its own program beside the harness, and the plan form's "NEVER GIVE
+  YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR ... Make it the PERSON's
+  step" made the model hand the recording to the person as a Suno errand
+  (`who: person`, `do_ask` suno.com/create) on both plans it wrote
+  (proposals caca5178 and dd6823bb). The agent's focus.md said "recording is
+  my work" and never reached the plan form. New optional `agent.own_means` in
+  agent.yaml: a list of `{name, can}` (name up to 40 characters, can up to
+  280, at most 12, no repeats; a bad entry stops the load and names it). It
+  is a declaration that shapes prompts, never a tool: nothing is added to
+  `runtime.tools`. When set, one line, "Things you can do by your own means
+  (treat them as tools you have): ...", rides the proposal ask, the plan form
+  (right under the no-tool sentence, with "A step that does one is YOURS:
+  `who`: \"agent\", with no `tool`, no `service:` and no `do_ask`"), the step
+  ask's `hand_back` and `outside_work` moves, and the runtime's agent payload
+  (`own_means`). A plan step whose `tool` or `service:` names one keeps
+  `who: agent` and loses the name, since the bench has no row for it, before
+  the W29 pass would hand it to the person. With no key (or `[]`) every
+  prompt and payload is byte for byte what 0.57.2 sent. Docs:
+  docs/onboarding.md.
+
+## [0.57.2] - 2026-10-03
+
+- **A file step carries `file_kind` to the bench.** WHAT FORCED IT: bench
+  contract 4.1.11 lets a `proof: file` plan step say what kind of file it
+  hands back (document, the default PDF; audio; image; video; code), and
+  `read_form` kept only the step keys on `FORM_STEP_FIELDS`, so the key was
+  dropped before the PUT and a song step was frozen as a PDF. `file_kind` is
+  now on the list and carried exactly as the model wrote it; the bench
+  validates it.
+- **Every step field the bench publishes rides the form, and a test keeps it
+  that way.** WHAT FORCED IT: `FORM_STEP_FIELDS` was a hand list older than
+  the bench's own `PlanFormStep` schema, so `read_form` silently dropped
+  `ask`, `count`, `from_step`, `fields`, `cost`, `line_item_amount`,
+  `fallback` and the calendar slots `starts_on`, `ends_on` and `with`: no
+  harness agent could fill those holes. All ten are now carried exactly as
+  the model wrote them. `tests/unit/test_form_step_parity.py` fails if the
+  published schema (snapshot in `tests/fixtures/bench_plan_form_step.json`,
+  contract 4.1.11; `TOLL_BENCH_OPENAPI` checks a live copy) lists a step
+  property the harness drops, unless it is on a commented never-sent list
+  (empty today).
+
 ## [0.57.1] - 2026-09-30
 
 - **The act door's `issues` and `failure` reach the model, and a calendar

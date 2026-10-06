@@ -48,3 +48,10 @@ named the path each time and nothing was left in the staging database. The step
 kept every field the form reads and the wait kept its `days` and its
 condition's `source` and `after_step`; only the keys the form has no room for
 came off.
+
+## `bench_plan_form_step.json`
+
+Not a reply: the property names of the bench's published
+`components.schemas.PlanFormStep` (contract 4.1.11), copied from
+`agent-api.openapi.json`. `tests/unit/test_form_step_parity.py` holds
+`FORM_STEP_FIELDS` to it. Refresh it with every contract bump.

@@ -876,6 +876,19 @@ _DEAL_STEP_INSTRUCTION = (
     "toll_bench.deliver_hosted_file with the live URL (and the claim URL for a "
     "here.now page). Only then file the outcome. If you cannot make that kind "
     "of file, say so on the step thread instead of filing words in its place. "
+    "WHAT IS ALREADY SETTLED: current_step.earlier_steps is what your earlier "
+    "steps handed back and what their acts did (a date, a time, a place, a "
+    "link, a file); read it and the_person_said before deciding a fact is "
+    "missing. A fact only the person can give that is in neither: ask them "
+    "ONCE with toll_bench.reply_step_message, post a check-in "
+    "(toll_bench.post_check_in) whose blocker names what you asked them for, "
+    "then end the run with result.complete -- never result.fail over a fact "
+    "the person can supply. When latest_work_pulse.blocker already says you "
+    "asked and nothing new came from the person, do not ask again: post a "
+    "fresh check-in that you are still waiting on them and end the run. "
+    "A reply that answers ok with a message id is posted; step_thread.messages "
+    "carries only the person's words since you last spoke, never your own "
+    "(thread_count counts every message), so never post the same ask again. "
     "AN OUTSIDE ACT IS YOURS TO GO AND DO. When an act of kind `outside` on "
     "current_step reads state approved, the person has tapped Allow and that is "
     "your cue: do the thing you declared -- yourself, in your own name, with your "
@@ -2703,6 +2716,8 @@ def _bid_through_the_draft_loop(
     # lines are drawn from.
     loop.approach_default = getattr(resources, "approach_default", None)
     loop.agent_profile = _agent_profile(resources)
+    loop.own_means = _own_means(resources)
+    _hand_on_the_operator_instructions(resources, loop)
     outcome = loop.run(
         target_id,
         kind="bid",
@@ -2795,6 +2810,8 @@ def _file_the_informed_plan_from_draft(
     brief = _brief_for_the_loop(resources, target_id)
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)
     loop.proposal_odds = _FILED_PROPOSAL_ODDS.get(target_id)
+    loop.own_means = _own_means(resources)
+    _hand_on_the_operator_instructions(resources, loop)
     outcome = loop.run(
         target_id,
         kind="plan",
@@ -3016,6 +3033,8 @@ def _the_step_ask(
     )
     brief = _brief_for_the_loop(resources, target_id) if target_id else {}
     ask = StepAsk(resources.runtime.model, resources.toll_bench)
+    ask.own_means = _own_means(resources)
+    _hand_on_the_operator_instructions(resources, ask)
     outcome = ask.run(
         obligation,
         _permitted_step_state(resources, step_state),
@@ -3104,6 +3123,21 @@ def _agent_profile(resources: Any) -> dict[str, Any]:
     if isinstance(instructions, str) and instructions.strip():
         profile["operator_instructions"] = instructions.strip()[:PROFILE_INSTRUCTIONS_MAX]
     return profile
+
+
+def _hand_on_the_operator_instructions(resources: Any, asker: Any) -> None:
+    """The operator's standing instructions, whole, off the runtime onto a
+    DraftLoop or a StepAsk (0.59.0). Nothing set leaves it empty, and every
+    ask it makes is byte for byte what it was."""
+    instructions = getattr(getattr(resources, "runtime", None), "operator_instructions", None)
+    asker.operator_instructions = instructions if isinstance(instructions, str) else ""
+
+
+def _own_means(resources: Any) -> tuple[Any, ...]:
+    """What this agent does by its own means (agent.yaml `agent.own_means`,
+    0.58.0), off the runtime; () when it declared none. The proposal ask, the
+    plan form and the step ask read it as tools the agent has."""
+    return tuple(getattr(getattr(resources, "runtime", None), "own_means", None) or ())
 
 
 def _lab_lead_direction(resources: Any) -> str:

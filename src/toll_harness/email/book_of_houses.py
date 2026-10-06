@@ -13,6 +13,53 @@ from typing import Any, Protocol
 
 from toll_harness.email.base import EmailProvider
 
+# THE DOMAINS AN AGENT MAILBOX MAY LIVE ON. The bench minted every agent
+# mailbox on bookofhouses.com until 2026-10-05, when new ones began minting as
+# <handle>@tollbench.com; older mailboxes stay where they were, so both are
+# platform mailboxes. WHAT FORCED IT: lab agent DJ-4-Fun (A-0439) was issued
+# dj4fun.tollbench@tollbench.com and its email provider refused to load,
+# "Book of Houses mailboxes must use the bookofhouses.com domain".
+DEFAULT_MAILBOX_DOMAINS: tuple[str, ...] = ("bookofhouses.com", "tollbench.com")
+
+# Fleet-wide lever: more domains, comma separated, accepted IN ADDITION to the
+# two above (a bench run on its own domain). A per-agent `email.extra_domains`
+# list adds to it. Nothing here can take a default away, so a typo in the
+# variable never stops an agent whose mailbox was already accepted.
+EXTRA_MAILBOX_DOMAINS_ENV = "TOLL_HARNESS_EXTRA_MAILBOX_DOMAINS"
+
+
+def _domain_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items: list[Any] = value.split(",")
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+    else:
+        raise ValueError("Extra mailbox domains must be a list of domains")
+    domains: list[str] = []
+    for item in items:
+        domain = str(item).strip().lower().lstrip("@").rstrip(".")
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains
+
+
+def accepted_mailbox_domains(extra: Any = None) -> tuple[str, ...]:
+    """The two platform domains, then any the environment or `extra` adds."""
+    domains = list(DEFAULT_MAILBOX_DOMAINS)
+    for value in (os.environ.get(EXTRA_MAILBOX_DOMAINS_ENV), extra):
+        for domain in _domain_list(value):
+            if domain not in domains:
+                domains.append(domain)
+    return tuple(domains)
+
+
+def mailbox_domain(address: str) -> str:
+    """Everything after the last @, lowercased; "" when there is no @."""
+    _, at, domain = str(address or "").rpartition("@")
+    return domain.lower() if at else ""
+
 
 def _multipart_body(
     fields: dict[str, str],
@@ -1077,9 +1124,19 @@ class BookOfHousesMailClient(Protocol):
 class BookOfHousesEmailProvider(EmailProvider):
     """Mailbox-constrained adapter boundary; it contains no mail-server implementation."""
 
-    def __init__(self, *, mailbox: str, client: BookOfHousesMailClient):
-        if not mailbox.lower().endswith("@bookofhouses.com"):
-            raise ValueError("Book of Houses mailboxes must use the bookofhouses.com domain")
+    def __init__(
+        self,
+        *,
+        mailbox: str,
+        client: BookOfHousesMailClient,
+        extra_domains: Any = None,
+    ):
+        self.accepted_domains = accepted_mailbox_domains(extra_domains)
+        if mailbox_domain(mailbox) not in self.accepted_domains:
+            raise ValueError(
+                "Book of Houses mailboxes must use one of the accepted domains: "
+                + ", ".join(self.accepted_domains)
+            )
         self.mailbox = mailbox
         self.client = client
 

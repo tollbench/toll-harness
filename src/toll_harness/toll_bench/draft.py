@@ -82,6 +82,14 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from toll_harness.core.operator_block import with_operator_block
+from toll_harness.core.own_means import (
+    OWN_MEANS_PLAN_RULE,
+    OwnMeans,
+    own_means_line,
+    own_means_names,
+    with_own_means,
+)
 from toll_harness.core.types import ModelMessage
 from toll_harness.toll_bench import blocks, programs, row_slots
 
@@ -2775,6 +2783,28 @@ FORM_STEP_FIELDS = (
     "room",
     "bid_step",
     "wait",
+    # 0.57.2 (bench contract 4.1.11): on a `proof: file` step, what kind of
+    # file comes back -- document (the default, a PDF), audio, image, video or
+    # code. Carried as written; the bench validates it.
+    "file_kind",
+    # 0.57.2: the rest of the bench's PlanFormStep (contract 4.1.11). These
+    # were on the door for weeks and this list dropped them without a word,
+    # so a harness agent could never send a step's own ask, a who step's
+    # count or from_step, a text step's fields, a paid step's cost or
+    # line_item_amount, an account row's fallback, or a calendar entry's
+    # starts_on / ends_on / with. Carried as written; the bench validates.
+    # tests/unit/test_form_step_parity.py fails if the published schema
+    # lists a step property this tuple does not carry.
+    "ask",
+    "count",
+    "from_step",
+    "fields",
+    "cost",
+    "line_item_amount",
+    "fallback",
+    "starts_on",
+    "ends_on",
+    "with",
 )
 
 # THE PLAN'S OWN FIELDS (contract: blank_form is overview, odds, steps,
@@ -2783,6 +2813,19 @@ FORM_STEP_FIELDS = (
 # for form.odds again and again. They are carried exactly as the model wrote
 # them; the door validates them.
 FORM_PLAN_FIELDS = ("overview", "odds")
+
+# W29, said to the model (2026-09-17). Its own constant so the agent's OWN
+# MEANS (0.58.0) can stand right under it; FORM_INSTRUCTION is byte for byte
+# what it was.
+NO_TOOL_SENTENCE = (
+    "NEVER GIVE YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR. A design "
+    "site, a browser, a phone, a shop: if it is not on this want's tool list "
+    "and you cannot do it with what you have, it is not yours. Make it the "
+    "PERSON's step -- `who`: \"person\", with `do_ask` {\"link\": the page "
+    "where they do it, \"cost_cents\", \"cost_note\"} -- or leave it out of "
+    "the plan. A step you cannot walk is a step that stops on you: the person "
+    "taps Allow and then waits for hands you do not have.\n"
+)
 
 FORM_INSTRUCTION = (
     "The person PICKED you. Now write the plan, and the plan is a FORM you "
@@ -2804,14 +2847,8 @@ FORM_INSTRUCTION = (
     "the next (`forecast_context` is the bench's own rule for the numbers).\n"
     "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
     "this plan does not need; a step that carries none is a normal step.\n"
-    "NEVER GIVE YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR. A design "
-    "site, a browser, a phone, a shop: if it is not on this want's tool list "
-    "and you cannot do it with what you have, it is not yours. Make it the "
-    "PERSON's step -- `who`: \"person\", with `do_ask` {\"link\": the page "
-    "where they do it, \"cost_cents\", \"cost_note\"} -- or leave it out of "
-    "the plan. A step you cannot walk is a step that stops on you: the person "
-    "taps Allow and then waits for hands you do not have.\n"
-    "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
+    + NO_TOOL_SENTENCE
+    + "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
     "-- so add entries to the blank form or drop them freely. You never write "
     "a connect row, a grant request, a block title, a room list, a schedule "
     "row or a pointer: the bench writes every one of those from your picks.\n"
@@ -2821,6 +2858,15 @@ FORM_INSTRUCTION = (
     '"need_line": "", "declared_odds": 0.4, "proof": "text", "who": "agent"}, '
     '...]}.'
 )
+
+
+def form_instruction(own_means: Sequence[OwnMeans] | None = None) -> str:
+    """FORM_INSTRUCTION, with the agent's own means right under the no-tool
+    sentence (0.58.0). Exactly FORM_INSTRUCTION when it declared none."""
+    line = own_means_line(own_means, OWN_MEANS_PLAN_RULE)
+    if not line:
+        return FORM_INSTRUCTION
+    return FORM_INSTRUCTION.replace(NO_TOOL_SENTENCE, NO_TOOL_SENTENCE + line + "\n", 1)
 
 
 def form_of(answer: Any) -> dict[str, Any] | None:
@@ -2971,6 +3017,56 @@ def person_does_what_the_agent_cannot(
     return form, moved
 
 
+def own_means_stay_yours(
+    form: dict[str, Any], own_means: Sequence[OwnMeans] | None
+) -> tuple[dict[str, Any], list[str]]:
+    """A step that names one of the agent's OWN MEANS stays the agent's (0.58.0).
+
+    Runs before `person_does_what_the_agent_cannot`. The bench has no row for
+    a thing the agent does by its own means, so a `tool` (or `service:`) the
+    model wrote with that name would read as a tool-less service: the W29
+    pass would hand the step to the person, or the bench would stamp an
+    outside act on it. The name comes off and `who` reads "agent"; the
+    model's own lines are untouched. No own means, no change.
+    """
+    names = own_means_names(own_means)
+    if not names or not isinstance(form, dict) or not isinstance(form.get("steps"), list):
+        return form, []
+    kept: list[str] = []
+    for index, step in enumerate(form["steps"], start=1):
+        if not isinstance(step, dict):
+            continue
+        who = str(step.get("who") or "").strip()
+        if who.lower() == "person":
+            continue
+        mine: list[str] = []
+        if who.lower().startswith(SERVICE_WHO_PREFIX):
+            named = who[len(SERVICE_WHO_PREFIX):].strip()
+            if named.lower() in names:
+                step["who"] = "agent"
+                mine.append(named)
+        if "tool" in step:
+            entries = step.get("tool")
+            rows = entries if isinstance(entries, list) else [entries]
+            left = []
+            for entry in rows:
+                slug = entry.get("tool") if isinstance(entry, dict) else entry
+                name = str(slug or "").strip()
+                if name and name.lower() in names:
+                    mine.append(name)
+                else:
+                    left.append(entry)
+            if len(left) != len(rows):
+                if not left:
+                    step.pop("tool", None)
+                else:
+                    step["tool"] = left if isinstance(entries, list) else left[0]
+                step["who"] = "agent"
+        if mine:
+            kept.append(f"step {index} ({', '.join(mine)})")
+    return form, kept
+
+
 # THE PLAN THAT COULD NOT BE PRESENTED (rule 245, 2026-09-11)
 # ---------------------------------------------------------------------------
 # The plan door now gives up out loud. Three content tries, or a draft it
@@ -3101,6 +3197,15 @@ class DraftLoop:
         # point, never its answer; it also fills a dial the model left out.
         self.approach_default: dict[str, str] | None = None
         self.agent_profile: dict[str, Any] = {}
+        # What the agent does by its own means (agent.yaml `agent.own_means`,
+        # 0.58.0): one line under the proposal ask and under the plan form's
+        # no-tool sentence when set; empty means both asks are unchanged.
+        self.own_means: tuple[OwnMeans, ...] = ()
+        # The operator's standing instructions (agent.yaml
+        # `agent.operator_instructions`, 0.59.0): one labeled block, the whole
+        # text, beside the system text of every ask of the run. Empty means
+        # every ask is unchanged.
+        self.operator_instructions: str = ""
         self.prompt_chars = 0
         self.cached_tokens = 0
         # This agent's own accepted plans, read ONCE per run (the client's
@@ -3667,8 +3772,11 @@ class DraftLoop:
     ) -> tuple[dict[str, Any], str]:
         """ONE MODEL CALL, and the form goes in. (answer, "" | "form")."""
         payload = self._the_form_ask(answer, want, strategy, brief)
-        # LAW A: what the person said rides this ask too.
-        instruction = with_the_person_said(FORM_INSTRUCTION, payload, answer)
+        # LAW A: what the person said rides this ask too. The agent's own
+        # means (0.58.0) stand under the no-tool sentence when it has any.
+        instruction = with_the_person_said(
+            form_instruction(self.own_means), payload, answer
+        )
         form = read_form(
             self._ask(
                 instruction,
@@ -3686,6 +3794,16 @@ class DraftLoop:
                 target_id,
             )
             return answer, "form"
+        form, kept_yours = own_means_stay_yours(form, self.own_means)
+        if kept_yours:
+            self.log.info(
+                "draft loop %s target=%s: %d step(s) named the agent's own means "
+                "and stay its own, with the name off the step (%s)",
+                kind,
+                target_id,
+                len(kept_yours),
+                ", ".join(kept_yours),
+            )
         form, handed_over = person_does_what_the_agent_cannot(form, brief)
         if handed_over:
             # W29. An outside act on a service with no tool is a step nobody
@@ -3762,7 +3880,12 @@ class DraftLoop:
             payload["the_rules"] = SHORT_FRONT_DOOR
         slot_notes: list[str] = []
         proposal = read_proposal(
-            self._ask(PROPOSAL_INSTRUCTION, payload, "proposal", head=self._head()),
+            self._ask(
+                with_own_means(PROPOSAL_INSTRUCTION, self.own_means),
+                payload,
+                "proposal",
+                head=self._head(),
+            ),
             slot_notes,
         )
         if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
@@ -5246,7 +5369,13 @@ class DraftLoop:
         # a small tail on top of a prefix the provider has already seen.
         self._act_kinds = act_kinds
         caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
-        self.prefix = stable_prefix(brief, act_kinds, with_tools=caches)
+        # 0.59.0: the operator's standing instructions ride beside it, WHOLE,
+        # the same bytes on every ask of the run. They sit outside the tail
+        # each ask measures, so they never make an ask shed or warn.
+        self.prefix = with_operator_block(
+            stable_prefix(brief, act_kinds, with_tools=caches),
+            self.operator_instructions,
+        )
         self._tools_ride_the_outline = not caches
         self.stance = stance_line(brief)
         # TWO STAGES (rule 243, 2026-09-11). A PROPOSAL is the agent's short

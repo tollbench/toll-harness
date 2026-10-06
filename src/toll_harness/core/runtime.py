@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.budget import ContextBudget, measure, resolve_context_budget
+from toll_harness.core.own_means import OwnMeans, own_means_line
 from toll_harness.core.types import (
     AgentIdentity,
     AutonomyMode,
@@ -225,6 +226,7 @@ class HarnessRuntime:
         secret_store: SecretStore | None = None,
         agent_identity: AgentIdentity | None = None,
         operator_instructions: str | None = None,
+        own_means: tuple[OwnMeans, ...] | list[OwnMeans] | None = None,
         knowledge_namespace: str | None = None,
         max_iterations: int = 20,
         context_budget_tokens: int | None = None,
@@ -247,6 +249,10 @@ class HarnessRuntime:
         # model on every run/resume via the agent payload, kept distinct from the
         # model's own saved scratchpad (state.save knowledge).
         self.operator_instructions = operator_instructions
+        # What the agent does by its own means, outside the tool list
+        # (agent.yaml `agent.own_means`, 0.58.0). A declaration, never a tool:
+        # it shapes the prompts that weigh "do I have a tool for this".
+        self.own_means: tuple[OwnMeans, ...] = tuple(own_means or ())
         self.knowledge_namespace = knowledge_namespace
         self.max_iterations = max_iterations
         # INPUT tokens this run may spend before it stops itself. Measured
@@ -349,6 +355,9 @@ class HarnessRuntime:
         # field produce a byte-identical payload to before (no empty-string noise).
         if self.operator_instructions:
             payload["operator_instructions"] = self.operator_instructions
+        # Same law: omitted when the agent declared none.
+        if self.own_means:
+            payload["own_means"] = own_means_line(self.own_means)
         return payload
 
     def _inject_live_inputs(

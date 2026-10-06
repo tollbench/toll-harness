@@ -9,6 +9,9 @@ whitelist was also older than the door's (no work_line, words, room, wait).
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import _model
 from tests.unit.test_two_stages_r243_r245 import FILLED_STEP, FormBench
@@ -20,9 +23,21 @@ from toll_harness.toll_bench.draft import (
     read_patches,
 )
 
-SERVER_STEP_FIELDS = ('verb', 'do_line', 'work_line', 'hand_over_line', 'need_line',
-                      'declared_odds', 'proof', 'who', 'only_if', 'do_ask',
-                      'tool', 'repeats', 'words', 'room', 'bid_step', 'wait')
+# The door's published list: the PlanFormStep snapshot the parity test
+# (test_form_step_parity.py) keeps in line with the bench's openapi.
+SERVER_STEP_FIELDS = tuple(json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "bench_plan_form_step.json")
+    .read_text())["properties"])
+
+
+def test_file_kind_rides_a_file_step_to_the_bench():
+    """0.57.2: bench contract 4.1.11 lets a `proof: file` step say what kind
+    of file it hands back; read_form used to drop the key, so a song step was
+    frozen as a PDF and its mp3 could never close it."""
+    step = dict(FILLED_STEP, proof="file", file_kind="audio")
+    read = read_form({"overview": "A song.", "odds": 0.5, "span_days": 7,
+                      "steps": [step]})
+    assert read["steps"][0]["file_kind"] == "audio"
 
 
 class PlanFieldBench(FormBench):

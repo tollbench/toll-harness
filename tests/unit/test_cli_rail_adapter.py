@@ -72,7 +72,11 @@ def test_claude_code_parses_envelope_into_canonical_tool_calls(tmp_path):
     assert response.usage.input_tokens == 100
     assert response.usage.output_tokens == 20
     argv = runner.calls[0]["argv"]
-    assert argv[:5] == ["claude", "-p", "--output-format", "json", "--max-turns"]
+    assert argv[:7] == [
+        "claude", "-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1"
+    ]
+    # No ambient MCP server rides along (0.58.1).
+    assert "--strict-mcp-config" in argv
     assert "--model" in argv and "claude-opus-4-8" in argv
     prompt = runner.calls[0]["prompt"]
     assert "Be exact." in prompt

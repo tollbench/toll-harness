@@ -51,6 +51,8 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from toll_harness.core.budget import ContextBudget
+from toll_harness.core.operator_block import with_operator_block
+from toll_harness.core.own_means import OwnMeans, with_own_means
 from toll_harness.core.types import ModelMessage, ToolDefinition
 from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
@@ -99,9 +101,11 @@ ROAD_STEP_ASK = "step_ask"
 ROAD_AGENTIC = "agentic"
 NEED_TOOLS = "need_tools"
 
-# How much of a thread rides the tail. The person's newest words are the
-# input; older ones were already answered or the bench would say so.
-PERSON_MESSAGE_LIMIT = 6
+# 0.60.0: the person's words ride WHOLE and ALL of them -- every message of
+# theirs on the step, every reason they sent a draft back, the step's own
+# promise -- with no count limit and no clip (the bench caps a message on its
+# side). Steven, 2026-10-06: "I dont want the harness to hobble, we want to
+# make sure the agents have full capabilites." Only machinery is limited.
 ACT_LIMIT = 4
 MATERIAL_LIMIT = 8
 
@@ -381,18 +385,27 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
     ),
     "hand_back": (
         "Hand this step back: write the thing the step promised, from what is "
-        "in front of you, and file it with file_outcome. If "
+        "in front of you, and file it with file_outcome. Read `earlier_steps` "
+        "first: what your earlier steps handed back and what their acts did -- "
+        "a date, a place, a link, a file -- is already yours. If "
         "`deliverable.fields` is named, the document carries a `cards` block: "
         "items are objects keyed by exactly those field names, at least "
         "min_count of them, every value filled. If an act on this step reads "
         "sent or executed, quote its receipt in the document and send nothing "
         "yourself. If you asked someone outside and nothing can move until "
-        "they answer, use wait_outside. If you must ask the person one thing "
-        "first, use reply_step_message. If this step cannot be done without a "
+        "they answer, use wait_outside. If a fact only the person can give is "
+        "in neither what they said nor earlier_steps, ask them for it with "
+        "reply_step_message rather than guess or give up. If this step cannot be done without a "
         "live search, a browser, a file or a tool, use need_tools and nothing "
         "else."
     ),
 }
+
+# The two moves that weigh "do I have a tool for this": handing the step back
+# (or asking for tools), and an approved outside act (or parking it). The
+# agent's own means (agent.yaml `agent.own_means`, 0.58.0) ride these two,
+# under the move's own words, and no other.
+OWN_MEANS_MOVES = frozenset({"hand_back", "outside_work"})
 
 PULSE_DUE_INSTRUCTION = (
     "A progress pulse is due (rule 100). If you are filing the outcome now, "
@@ -574,12 +587,12 @@ def _clip(value: Any, limit: int) -> Any:
     return value
 
 
-def _person_messages(thread: dict[str, Any], limit: int = PERSON_MESSAGE_LIMIT) -> list[Any]:
-    messages = [
+def _person_messages(thread: dict[str, Any]) -> list[Any]:
+    """Every message of the person's on the step, whole (0.60.0)."""
+    return [
         item for item in thread.get("messages") or []
         if isinstance(item, dict) and item.get("who") != "agent"
     ]
-    return [_clip(_fit(item, 600), 600) for item in messages[-limit:]]
 
 
 def _act_row(act: dict[str, Any]) -> dict[str, Any]:
@@ -601,7 +614,12 @@ def _act_row(act: dict[str, Any]) -> dict[str, Any]:
     for key in ("to", "subject", "with", "summary", "receipt", "sent_at", "executed_at"):
         if act.get(key) is not None:
             row[key] = _fit(act.get(key), 200)
-    return _clip(row, 400)
+    row = _clip(row, 400)
+    # 0.60.0: the act is machinery and stays clipped, but `note` is the
+    # PERSON's own reason for sending it back or saying no: it rides whole.
+    if act.get("note") is not None:
+        row["note"] = act.get("note")
+    return row
 
 
 def _material_row(item: Any) -> Any:
@@ -612,6 +630,142 @@ def _material_row(item: Any) -> Any:
         for key in ("file_id", "id", "filename", "name", "title", "kind", "size_bytes")
         if item.get(key) is not None
     }
+
+
+# ---------------------------------------------------------------------------
+# 3a. WHAT THE EARLIER STEPS SETTLED (0.58.3)
+# ---------------------------------------------------------------------------
+# WHAT FORCED IT: 2026-10-05, 20:16-20:28 local, lab agent Bree, deal 30bd9ebf
+# step 4 ("make a print-ready PDF flyer"). Three runs failed with "the
+# confirmed dinner date, start time ... are missing" while the bench's
+# `earlier_steps` (contract 4.1.14) carried step 3's calendar act: "Potluck
+# dinner, Sat Oct 17, 6:00 PM to 9:00 PM", with its event id. The provider's
+# whitelist dropped the field, so it never reached the model. It now rides
+# every current_step read, rendered here: one line per earlier step and one
+# per act it ran, the whole block capped, the OLDEST steps dropped first.
+EARLIER_STEPS_KEY = "earlier_steps"
+EARLIER_STEPS_CHAR_CAP = 1_500
+EARLIER_STEPS_TRIMMED = "(earlier steps trimmed)"
+_EARLIER_TITLE_CHARS = 80
+_EARLIER_HAND_BACK_CHARS = 300
+_EARLIER_ACT_CHARS = 300
+_EARLIER_FIELD_CHARS = 80
+
+
+def _one_line(value: Any, limit: int) -> str:
+    """The words on one line, newlines folded, clipped with an ellipsis."""
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
+
+
+def _when(act: dict[str, Any]) -> str:
+    starts, ends = act.get("starts_at"), act.get("ends_at")
+    if not starts and not ends:
+        return ""
+    span = f"{starts or '?'}..{ends}" if ends else str(starts)
+    zone = act.get("time_zone")
+    return f"{span} {zone}" if zone else span
+
+
+def _earlier_act_line(act: dict[str, Any]) -> str:
+    """'  did: <kind> to <to> "<subject>" <when | ids> : <words>'."""
+    parts = [str(act.get("kind") or "act")]
+    if act.get("state") and str(act.get("state")) != "executed":
+        parts.append(f"[{act.get('state')}]")
+    if act.get("to"):
+        parts.append("to " + _one_line(act.get("to"), _EARLIER_FIELD_CHARS))
+    if act.get("subject"):
+        parts.append('"' + _one_line(act.get("subject"), _EARLIER_FIELD_CHARS) + '"')
+    when = _when(act)
+    if when:
+        parts.append(when)
+    elif act.get("scheduled_for"):
+        parts.append(f"scheduled for {act.get('scheduled_for')}")
+    for key, label in (("event_id", "event"), ("message_id", "message"),
+                       ("meet_link", "meet")):
+        if act.get(key):
+            parts.append(f"{label} {act.get(key)}")
+    line = "did: " + " ".join(parts)
+    if act.get("words"):
+        line += " : " + _one_line(act.get("words"), _EARLIER_ACT_CHARS)
+    # Indented under its step; the indent is also how a rendered act line is
+    # told from a step line when the block is rendered again.
+    return "  " + _one_line(line, _EARLIER_ACT_CHARS + 2 * _EARLIER_FIELD_CHARS + 60)
+
+
+def _earlier_step_lines(row: dict[str, Any]) -> list[str]:
+    """One earlier step: its hand-back line, then a line per file and per act."""
+    title = _one_line(row.get("title"), _EARLIER_TITLE_CHARS) or "untitled"
+    head = f"Step {row.get('number', '?')} ({title})"
+    if str(row.get("state") or "") == "ended":
+        head += " [ended]"
+    back = row.get("hand_back") if isinstance(row.get("hand_back"), dict) else None
+    if back:
+        words = back.get("text") or back.get("summary") or back.get("filename") or ""
+        said = _one_line(words, _EARLIER_HAND_BACK_CHARS)
+        if back.get("link"):
+            said = (said + " " if said else "") + f"link {back.get('link')}"
+        head += ": " + (said or f"handed back a {back.get('kind') or 'receipt'}")
+    else:
+        head += ": nothing handed back"
+    lines = [head]
+    for item in row.get("files") or []:
+        if isinstance(item, dict) and (item.get("filename") or item.get("file_receipt_id")):
+            kind = f" {item.get('sniffed_type')}" if item.get("sniffed_type") else ""
+            lines.append(
+                f"  file: {item.get('filename') or 'unnamed'}{kind} "
+                f"receipt {item.get('file_receipt_id')}"
+            )
+    for act in row.get("act_results") or []:
+        if isinstance(act, dict):
+            lines.append(_earlier_act_line(act))
+    return lines
+
+
+def render_earlier_steps(
+    rows: Any, cap: int = EARLIER_STEPS_CHAR_CAP
+) -> list[str] | None:
+    """The bench's `earlier_steps` as short lines the model reads, or None.
+
+    None when the bench sent no list (an older bench): nothing is rendered.
+    [] when it sent an empty one: nothing before this step is approved yet,
+    which is not the same as not knowing. Lines already rendered (a string
+    per line) pass through, so rendering twice changes nothing. Over `cap`
+    characters the OLDEST steps go first and the block opens with
+    EARLIER_STEPS_TRIMMED; one step bigger than the cap on its own is cut
+    to fit.
+    """
+    if not isinstance(rows, list):
+        return None
+    groups: list[list[str]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            groups.append(_earlier_step_lines(row))
+        elif isinstance(row, str) and row and row != EARLIER_STEPS_TRIMMED:
+            if row.startswith("  ") and groups:
+                groups[-1].append(row)
+            else:
+                groups.append([row])
+    def size(kept: list[list[str]]) -> int:
+        return sum(len(line) + 1 for group in kept for line in group)
+    trimmed = any(row == EARLIER_STEPS_TRIMMED for row in rows)
+    marker = len(EARLIER_STEPS_TRIMMED) + 1
+    if trimmed or size(groups) > cap:
+        trimmed = True
+        while len(groups) > 1 and size(groups) + marker > cap:
+            groups.pop(0)
+    lines = [line for group in groups for line in group]
+    if trimmed:
+        budget = cap - len(EARLIER_STEPS_TRIMMED) - 1
+        kept: list[str] = []
+        for line in lines:
+            if budget <= 1:
+                break
+            line = line if len(line) + 1 <= budget else line[: budget - 2] + "\u2026"
+            kept.append(line)
+            budget -= len(line) + 1
+        return [EARLIER_STEPS_TRIMMED, *kept]
+    return lines
 
 
 def step_tail(
@@ -638,7 +792,7 @@ def step_tail(
             "number": step.get("number"),
             "title": step.get("title"),
             "ask": step.get("ask"),
-            "outcome_promise": _clip(step.get("outcome_promise"), 600),
+            "outcome_promise": step.get("outcome_promise"),
             "state": step.get("state"),
             "deliverable": step.get("deliverable"),
         },
@@ -657,9 +811,9 @@ def step_tail(
         "drafts_sent_back": [
             {
                 "approval_id": item.get("approval_id") or item.get("id"),
-                "sent_back_reason": _fit(item.get("sent_back_reason"), 400),
+                "sent_back_reason": item.get("sent_back_reason"),
             }
-            for item in (payload.get("drafts_sent_back") or [])[:ACT_LIMIT]
+            for item in (payload.get("drafts_sent_back") or [])
             if isinstance(item, dict)
         ],
         "released_materials": [
@@ -677,7 +831,7 @@ def step_tail(
     if isinstance(payload.get("submission"), dict):
         tail["submission"] = payload["submission"]
     if obligation.get("kind") == "draft_sent_back" and obligation.get("sent_back_reason"):
-        tail["sent_back_reason"] = _fit(obligation.get("sent_back_reason"), 400)
+        tail["sent_back_reason"] = obligation.get("sent_back_reason")
     # LAW A (Steven, 2026-09-09): what the person said and picked rides the
     # tail of the step ask, verbatim, when the bench sent it. It is the one
     # thing a shed never drops: without it a stateless agent on step 3 of
@@ -685,6 +839,12 @@ def step_tail(
     said = payload.get(PERSON_SAID_KEY)
     if isinstance(said, list):
         tail[PERSON_SAID_KEY] = list(said)
+    # 0.58.3: what this deal's earlier steps handed back and what their acts
+    # did (contract 4.1.14), beside what the person said. Absent on an older
+    # bench, and then absent here too. Capped where it is rendered, never shed.
+    earlier = render_earlier_steps(payload.get(EARLIER_STEPS_KEY))
+    if earlier is not None:
+        tail[EARLIER_STEPS_KEY] = earlier
     if pulse_due:
         tail["pulse_due"] = True
     if refused:
@@ -693,16 +853,25 @@ def step_tail(
 
 
 def _shed(tail: dict[str, Any]) -> bool:
-    """One step of trimming, for a tail that runs long. True when it did something."""
-    for key, floor in (("from_the_person", 2), ("acts", 1), ("declared_acts", 1)):
+    """One step of trimming, for a tail that runs long. True when it did something.
+
+    0.59.0: THE PERSON'S OWN MATERIAL IS NEVER SHED. Their messages on the
+    thread (`from_the_person`), the reasons they sent a draft back
+    (`drafts_sent_back`) and the materials they handed over
+    (`released_materials`) ride whole, beside what they said and the earlier
+    steps' words, which were never on this list. Only the machinery sheds.
+    Steven, 2026-10-06: "I dont want the harness to hobble, we want to make
+    sure the agents have full capabilites." A tail still long after this is
+    logged, never cut further.
+    """
+    for key, floor in (("acts", 1), ("declared_acts", 1)):
         rows = tail.get(key)
         if isinstance(rows, list) and len(rows) > floor:
             tail[key] = rows[-floor:]
             return True
-    for key in ("released_materials", "inbound_replies", "drafts_sent_back"):
-        if tail.get(key):
-            tail[key] = []
-            return True
+    if tail.get("inbound_replies"):
+        tail["inbound_replies"] = []
+        return True
     return False
 
 
@@ -832,6 +1001,12 @@ class StepAsk:
         # The same line the runtime writes, so a step reads off the log the
         # same way a run does: "model call N: prompt X input tokens ...".
         self.budget = ContextBudget(limit=0)
+        # What the agent does by its own means (0.58.0); empty changes nothing.
+        self.own_means: tuple[OwnMeans, ...] = ()
+        # The operator's standing instructions (0.59.0): one labeled block,
+        # the whole text, beside the system text of every move's ask. Empty
+        # changes nothing.
+        self.operator_instructions: str = ""
 
     # -- the model ---------------------------------------------------------
     def _ask(
@@ -1106,8 +1281,16 @@ class StepAsk:
                     "trail": [],
                 }
         caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
-        self.prefix = stable_prefix(brief, act_kinds, with_tools=caches)
+        # 0.59.0: the operator's standing instructions ride beside the system
+        # text on every move, WHOLE, the same bytes on both tries. They sit
+        # outside the tail measured below, so they never make it shed or warn.
+        self.prefix = with_operator_block(
+            stable_prefix(brief, act_kinds, with_tools=caches),
+            self.operator_instructions,
+        )
         instruction = MOVE_INSTRUCTIONS[move["move"]]
+        if move["move"] in OWN_MEANS_MOVES:
+            instruction = with_own_means(instruction, self.own_means)
         if pulse_due and move["move"] == "hand_back":
             instruction = instruction + " " + PULSE_DUE_INSTRUCTION
         if isinstance(payload.get(PERSON_SAID_KEY), list):

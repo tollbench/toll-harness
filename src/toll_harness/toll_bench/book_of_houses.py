@@ -10,6 +10,7 @@ from toll_harness.core.budget import measure
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, draft, programs, row_slots
+from toll_harness.toll_bench.step import EARLIER_STEPS_KEY, render_earlier_steps
 from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
@@ -3255,6 +3256,20 @@ class BookOfHousesTollBenchProvider:
         person_said = result.get("the_person_said")
         if isinstance(person_said, list):
             payload["the_person_said"] = list(person_said)
+        # Contract 4.1.14 (0.58.3): what this deal's earlier approved steps
+        # handed back and what their acts did, rendered as short lines and
+        # capped. This whitelist dropped it, so lab agent Bree failed a flyer
+        # three times for want of a date step 3's calendar act carried
+        # (2026-10-05). Absent on an older bench, and then absent here.
+        earlier = render_earlier_steps(result.get(EARLIER_STEPS_KEY))
+        if earlier is not None:
+            payload[EARLIER_STEPS_KEY] = earlier
+        # Contract 3.13: every message the step holds, whatever `messages`
+        # carries. `messages` is only the person's words since the agent last
+        # spoke, so without this count an agent's own posted ask looked lost
+        # and was posted again (Bree, eleven times on one step, 2026-10-05).
+        if "thread_count" in thread:
+            payload["step_thread"]["thread_count"] = thread.get("thread_count")
         # RULE 230, always present including zero. The file receipts ride the
         # step where the server puts them; read both places rather than making
         # the model poll a route for the one payload it must act on.
@@ -3300,6 +3315,12 @@ class BookOfHousesTollBenchProvider:
                         f"step; {thread['messages_omitted']} older ones are not "
                         "shown. Nothing is owed an answer that is not in "
                         "`unread_from_person` or `unanswered_elsewhere`."
+                    )
+                elif (thread.get("thread_count") or 0) > len(messages):
+                    thread["messages_note"] = (
+                        "`messages` carries only the person's words since you "
+                        "last spoke, never your own posts; `thread_count` counts "
+                        "every message on this step."
                     )
         for key, cap in (
             ("acts", STEP_ACT_LIMIT),

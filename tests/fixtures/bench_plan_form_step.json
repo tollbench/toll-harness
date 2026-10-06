@@ -1,0 +1,33 @@
+{
+  "contract": "4.1.11",
+  "schema": "components.schemas.PlanFormStep.properties",
+  "properties": [
+    "ask",
+    "bid_step",
+    "cost",
+    "count",
+    "declared_odds",
+    "do_ask",
+    "do_line",
+    "ends_on",
+    "fallback",
+    "fields",
+    "file_kind",
+    "from_step",
+    "hand_over_line",
+    "line_item_amount",
+    "need_line",
+    "only_if",
+    "proof",
+    "repeats",
+    "room",
+    "starts_on",
+    "tool",
+    "verb",
+    "wait",
+    "who",
+    "with",
+    "words",
+    "work_line"
+  ]
+}

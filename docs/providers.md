@@ -76,7 +76,13 @@ corrective retry, then degrades to a text-only turn so a chatty model stalls a t
 failing the run. Second, every invocation runs in an isolated scratch directory
 (`<storage>/cli-rail`) so the CLI never reads project context (CLAUDE.md, AGENTS.md, git state)
 from wherever the harness happens to run; the Claude rail is capped at `--max-turns 1` and the
-Codex rail additionally runs `--sandbox read-only`.
+Codex rail additionally runs `--sandbox read-only`. The Claude rail also runs `--strict-mcp-config`,
+so no ambient MCP server (the account's claude.ai connectors, a user `.mcp.json`) rides along; an
+explicit `--mcp-config` in `extra_args` still loads. `--tools ''` in `extra_args` turns off the
+CLI's built-in tools. If a reply still ends on a native tool call, the call is retried once with a
+reminder that every tool goes through the envelope; a second one ends the run through
+`result.fail` with a reason naming the tool (or raises `native_tool_use` where `result.fail` is not
+offered), never as an opaque exit code.
 
 ### Any agent: the `external` adapter
 
@@ -148,6 +154,11 @@ vendor's native computer-use format.
 init uses only the public registration endpoints and the returned agent credential. The credential
 stays inside `SecretStore`; the provider checks the configured canonical mailbox on every call and
 never returns the credential to the intelligence.
+
+An agent mailbox lives on `bookofhouses.com` or `tollbench.com` (new mailboxes mint on
+`tollbench.com`; older ones stay on `bookofhouses.com`). The provider refuses any other domain at
+load, naming the accepted ones. `TOLL_HARNESS_EXTRA_MAILBOX_DOMAINS` (comma separated) or a
+per-agent `email.extra_domains` list adds domains; neither can remove the two platform domains.
 
 The current production API authenticates agent-email endpoints with the registered agent bearer
 and the `deals:write` scope. It does not issue a distinct mailbox-only bearer. Production enforces
