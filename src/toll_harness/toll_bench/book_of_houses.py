@@ -10,7 +10,11 @@ from toll_harness.core.budget import measure
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, draft, programs, row_slots
-from toll_harness.toll_bench.step import EARLIER_STEPS_KEY, render_earlier_steps
+from toll_harness.toll_bench.step import (
+    EARLIER_STEPS_KEY,
+    bench_trimmed,
+    render_earlier_steps,
+)
 from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
@@ -223,6 +227,11 @@ MAX_VALIDATE_ATTEMPTS = 3
 # The newest N of an unbounded list. A step thread, a step's acts and the
 # materials released to a deal all grow for the life of the deal.
 STEP_THREAD_MESSAGE_LIMIT = 20
+# 0.62.0: an earlier step's whole hand-back, read off history_url once per
+# receipt. A read that did not carry it is tried again after this long, and
+# at most this many whole hand-backs are remembered per process.
+WHOLE_HAND_BACK_RETRY_SECONDS = 600.0
+WHOLE_HAND_BACK_MEMORY = 512
 STEP_ACT_LIMIT = 12
 RELEASED_MATERIAL_LIMIT = 20
 # A door answer names every problem at once; past this many the plan is not
@@ -451,6 +460,22 @@ def _withdraw_key(proposal_id: Any, body: dict[str, Any]) -> str:
     return f"withdraw-{str(proposal_id or 'none')[:64]}-{digest}"
 
 
+def _history_receipt_words(history: Any) -> list[tuple[str, str]]:
+    """(receipt_id, words) for every receipt on a history read's steps[].outcome
+    that carries words. The bench's history_url answer (contract 3.13 ?full=1)."""
+    found: list[tuple[str, str]] = []
+    steps = history.get("steps") if isinstance(history, dict) else None
+    for step in steps if isinstance(steps, list) else []:
+        outcome = step.get("outcome") if isinstance(step, dict) else None
+        for receipt in outcome if isinstance(outcome, list) else []:
+            if not isinstance(receipt, dict):
+                continue
+            rid, words = str(receipt.get("receipt_id") or ""), receipt.get("words")
+            if rid and isinstance(words, str) and words:
+                found.append((rid, words))
+    return found
+
+
 class BookOfHousesTollBenchProvider:
     """Maps the public, agent-scoped Book of Houses API to Toll Harness tools."""
 
@@ -513,6 +538,14 @@ class BookOfHousesTollBenchProvider:
         self._plan_example_cache: dict[str, dict[str, Any]] = {}
         self._validate_attempts: dict[str, int] = {}
         self._last_door_problems: dict[str, dict[str, Any]] = {}
+        # 0.62.0. An earlier step's approved hand-back, whole, by receipt id:
+        # the bench trims one at 600 characters on current-step and keeps it
+        # whole on history_url. A receipt never changes, so it is read once.
+        # A read that found nothing is not repeated for a while.
+        self._whole_hand_backs: dict[str, str] = {}
+        self._whole_misses: dict[str, float] = {}
+        # The last earlier_steps rows per deal, whole, for a whole re-render.
+        self._earlier_rows: dict[str, list[Any]] = {}
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -3132,7 +3165,10 @@ class BookOfHousesTollBenchProvider:
                 return self._block_refusal(target_id, error)
             raise
 
-    def current_step(self, deal_id: str) -> dict[str, Any]:
+    def current_step(self, deal_id: str, whole: bool = False) -> dict[str, Any]:
+        """The current step, whitelisted. `whole=True` renders every earlier
+        step whole, nothing trimmed for size (0.62.0): the read a step ask
+        that answered need_tools gets on the old road."""
         result = self.api.current_step(deal_id)
         step = result.get("current_step") or {}
         deal = result.get("deal") or {}
@@ -3257,11 +3293,20 @@ class BookOfHousesTollBenchProvider:
         if isinstance(person_said, list):
             payload["the_person_said"] = list(person_said)
         # Contract 4.1.14 (0.58.3): what this deal's earlier approved steps
-        # handed back and what their acts did, rendered as short lines and
-        # capped. This whitelist dropped it, so lab agent Bree failed a flyer
-        # three times for want of a date step 3's calendar act carried
-        # (2026-10-05). Absent on an older bench, and then absent here.
-        earlier = render_earlier_steps(result.get(EARLIER_STEPS_KEY))
+        # handed back and what their acts did. This whitelist dropped it, so
+        # lab agent Bree failed a flyer three times for want of a date step
+        # 3's calendar act carried (2026-10-05). Absent on an older bench, and
+        # then absent here. 0.62.0: a hand-back the bench trimmed is read
+        # whole first (SF Founder House never saw its match card's lobby
+        # time, 2026-10-06), and every hand-back renders field by field.
+        rows = result.get(EARLIER_STEPS_KEY)
+        if isinstance(rows, list):
+            rows = self._whole_earlier_rows(deal_id, rows)
+            self._earlier_rows.pop(str(deal_id), None)
+            self._earlier_rows[str(deal_id)] = rows
+            while len(self._earlier_rows) > WHOLE_HAND_BACK_MEMORY:
+                self._earlier_rows.pop(next(iter(self._earlier_rows)))
+        earlier = render_earlier_steps(rows, cap=None) if whole else render_earlier_steps(rows)
         if earlier is not None:
             payload[EARLIER_STEPS_KEY] = earlier
         # Contract 3.13: every message the step holds, whatever `messages`
@@ -3288,6 +3333,74 @@ class BookOfHousesTollBenchProvider:
             str(step.get("id") or ""), thread.get("unanswered_messages") or [])
         self._fit_the_step(payload)
         return payload
+
+    def earlier_steps_whole(self, deal_id: str) -> list[str] | None:
+        """The last earlier_steps read for this deal, rendered with nothing
+        trimmed for size; None when this process has not read the deal."""
+        rows = self._earlier_rows.get(str(deal_id))
+        return render_earlier_steps(rows, cap=None) if rows is not None else None
+
+    def _whole_earlier_rows(self, deal_id: str, rows: list[Any]) -> list[Any]:
+        """The rows with every hand-back the bench trimmed filled in whole.
+
+        The bench trims a hand-back's words at 600 characters on current-step
+        and says so in `trimmed`; the whole receipt is steps[].outcome on
+        history_url (`?full=1`). One history read fills every trimmed receipt
+        it carries, and each is remembered by receipt id, so a deal costs one
+        extra read per new trimmed hand-back, not one per cycle. When the read
+        fails or does not carry the receipt, the row keeps the bench's words
+        and its `trimmed` note, which the render shows where the cut is.
+        """
+        wanted = [
+            str(row["hand_back"].get("receipt_id"))
+            for row in rows
+            if isinstance(row, dict)
+            and bench_trimmed(row.get("hand_back"))
+            and row["hand_back"].get("receipt_id")
+        ]
+        now = time.monotonic()
+        missing = [
+            rid for rid in wanted
+            if rid not in self._whole_hand_backs
+            and now - self._whole_misses.get(rid, -WHOLE_HAND_BACK_RETRY_SECONDS)
+            >= WHOLE_HAND_BACK_RETRY_SECONDS
+        ]
+        if missing:
+            history: Any = None
+            try:
+                history = self.api.current_step(deal_id, full=True)
+            except Exception as error:  # noqa: BLE001 - a read never costs the step
+                # A client with no history read (TypeError) lands here too.
+                _LOGGER.warning(
+                    "earlier_steps: history read for deal %s failed (%s); "
+                    "trimmed hand-backs stay as the bench cut them", deal_id, error,
+                )
+            for rid, words in _history_receipt_words(history):
+                if rid in missing:
+                    self._whole_hand_backs[rid] = words
+            for rid in missing:
+                if rid in self._whole_hand_backs:
+                    self._whole_misses.pop(rid, None)
+                else:
+                    self._whole_misses[rid] = now
+            while len(self._whole_hand_backs) > WHOLE_HAND_BACK_MEMORY:
+                self._whole_hand_backs.pop(next(iter(self._whole_hand_backs)))
+            filled = [rid for rid in missing if rid in self._whole_hand_backs]
+            if filled:
+                _LOGGER.info(
+                    "earlier_steps: %d trimmed hand-back(s) on deal %s read whole "
+                    "from history", len(filled), deal_id,
+                )
+        out: list[Any] = []
+        for row in rows:
+            back = row.get("hand_back") if isinstance(row, dict) else None
+            rid = str(back.get("receipt_id") or "") if isinstance(back, dict) else ""
+            whole = self._whole_hand_backs.get(rid) if bench_trimmed(back) else None
+            if whole is not None:
+                row = {**row, "hand_back": {**back, "text": whole,
+                                            "text_chars": len(whole), "trimmed": None}}
+            out.append(row)
+        return out
 
     def _fit_the_step(self, payload: dict[str, Any]) -> None:
         """Cap the lists on a step that grow for the life of the deal.

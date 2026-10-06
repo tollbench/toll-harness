@@ -1332,12 +1332,19 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.current_step",
             (
                 "Read the signed deal's current step, required action controls, person replies, "
-                "released materials, access, and work-pulse duty."
+                "released materials, access, and work-pulse duty. `earlier_steps` is what the "
+                "deal's earlier steps handed back, each card field on its own line, whole. Pass "
+                "whole true when it opens with \"(earlier steps trimmed\": every earlier step "
+                "comes back whole, nothing left out for size."
             ),
-            _object_schema({"deal_id": {"type": "string"}}, ["deal_id"]),
+            _object_schema(
+                {"deal_id": {"type": "string"}, "whole": {"type": "boolean"}}, ["deal_id"]
+            ),
         ),
-        lambda context, arguments: require_toll_bench(context).current_step(
-            arguments["deal_id"]
+        lambda context, arguments: (
+            require_toll_bench(context).current_step(arguments["deal_id"], whole=True)
+            if arguments.get("whole") is True
+            else require_toll_bench(context).current_step(arguments["deal_id"])
         ),
     )
     registry.register(

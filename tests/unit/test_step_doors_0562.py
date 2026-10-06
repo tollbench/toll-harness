@@ -28,7 +28,7 @@ from toll_harness.config import STEP_DOOR_TOOLS, with_step_doors
 from toll_harness.loop_guard import LoopGuard
 from toll_harness.onboarding import TOLL_BENCH_TOOLS
 from toll_harness.toll_bench.draft import DraftLoop
-from toll_harness.toll_bench.step import FORMS_TURNED_OFF, StepAsk, step_tools
+from toll_harness.toll_bench.step import FORMS_TURNED_OFF, NEED_TOOLS, StepAsk, step_tools
 
 ITEM = "11111111-2222-4333-8444-555555555555"
 
@@ -104,7 +104,8 @@ def test_the_loop_act_form_reaches_the_model_as_a_tool():
     permitted = cli._permitted_step_state(
         _resources(with_step_doors(OLD_ONBOARDED)), _loop_payload())
     tools = step_tools(move, permitted)
-    assert list(tools) == ["propose_act", "reply_step_message"]
+    # 0.62.0: a move that writes from earlier material may fetch it.
+    assert list(tools) == ["propose_act", "reply_step_message", NEED_TOOLS]
     assert tools["propose_act"]["schema"]["properties"]["repeat_item"] == {"const": ITEM}
 
 

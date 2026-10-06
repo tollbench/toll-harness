@@ -325,6 +325,20 @@ def the_move(payload: dict[str, Any], obligation: dict[str, Any] | None = None) 
 # The tail's opening, and what each move is asked for. Short by design: the
 # rules of the game are the prefix's job, and the bench's own refusal comes
 # back verbatim when a call is refused.
+#
+# 0.62.0: every move that writes words from earlier material (an act, a
+# re-filed act, a reply outside, the hand-back) is told the same thing: what
+# the earlier steps handed back is in `earlier_steps`, whole and field by
+# field, and is already the agent's; a fact the block says was trimmed is
+# fetched with need_tools, never asked of the person.
+EARLIER_MATERIAL_INSTRUCTION = (
+    "Read `earlier_steps` first: what your earlier steps handed back, each "
+    "card field on its own line and whole, and what their acts did. A name, "
+    "an address, a time or a place in it is already yours: use it and never "
+    "ask the person for it. If the block opens with \"(earlier steps "
+    "trimmed\" and what you need was left out, answer need_tools to read it "
+    "whole rather than ask anyone."
+)
 STEP_DOOR = (
     "THIS IS NOT A PLAN ROUND. The plan is signed and you are walking ONE step "
     "of it. Below: the step, what changed since you last looked, and the one "
@@ -341,7 +355,7 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "their thread with the propose_act tool for that reply -- the bench "
         "fills to and subject from the thread. If it is not a question (spam, "
         "a bounce, an out-of-office) use the dismiss_reply tool for that reply "
-        "and say why in one plain sentence."
+        "and say why in one plain sentence. " + EARLIER_MATERIAL_INSTRUCTION
     ),
     "answer_person": (
         "The person wrote on this step and nothing has gone back. Answer them, "
@@ -355,7 +369,7 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "`error` (and `words` for what the act itself said) for why. File "
         "ONE changed act that answers that reason with a propose_act tool. "
         "If it is not something you can act on, say so on the thread with "
-        "reply_step_message instead."
+        "reply_step_message instead. " + EARLIER_MATERIAL_INSTRUCTION
     ),
     "file_act": (
         "Your signed plan declared an act on this step and it is not filed "
@@ -364,7 +378,7 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "recipient by `contact_ref` from the_person_said.people. The person "
         "approves it word for word and Book of Houses sends it; you never send "
         "it and never ask them to. If you do not know the recipient, ask the "
-        "person with reply_step_message."
+        "person with reply_step_message. " + EARLIER_MATERIAL_INSTRUCTION
     ),
     "outside_work": (
         "The person tapped Allow on an outside act: this piece of the work is "
@@ -386,8 +400,9 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
     "hand_back": (
         "Hand this step back: write the thing the step promised, from what is "
         "in front of you, and file it with file_outcome. Read `earlier_steps` "
-        "first: what your earlier steps handed back and what their acts did -- "
-        "a date, a place, a link, a file -- is already yours. If "
+        "first: what your earlier steps handed back, each card field on its "
+        "own line and whole, and what their acts did -- a date, a place, a "
+        "link, a file -- is already yours. If "
         "`deliverable.fields` is named, the document carries a `cards` block: "
         "items are objects keyed by exactly those field names, at least "
         "min_count of them, every value filled. If an act on this step reads "
@@ -396,8 +411,8 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "they answer, use wait_outside. If a fact only the person can give is "
         "in neither what they said nor earlier_steps, ask them for it with "
         "reply_step_message rather than guess or give up. If this step cannot be done without a "
-        "live search, a browser, a file or a tool, use need_tools and nothing "
-        "else."
+        "live search, a browser, a file or a tool, or without an earlier step "
+        "the block says was trimmed, use need_tools and nothing else."
     ),
 }
 
@@ -429,6 +444,17 @@ BENCH_ACTIONS: dict[str, str] = {
     "file_outcome": "submit_step_outcome",
     "file_outside_evidence": OUTSIDE_EVIDENCE_ACTION,
 }
+# The moves that may answer need_tools and take the old road on purpose
+# (0.62.0 added the three that write words out of earlier material: an act,
+# a re-filed act and a reply outside). WHAT FORCED IT: SF Founder House,
+# 2026-10-06, step 5. Its copy of the match card was cut, file_act and
+# refile_act offered no way to fetch the rest, so it asked the persons on the
+# thread; one refile_act answer was refused as malformed (market.log 14:00:01
+# PDT), which the walk worker read as a need_tools the move did not offer. A
+# move that writes from earlier material can always fetch it instead.
+NEED_TOOLS_MOVES = frozenset(
+    {"hand_back", "outside_work", "file_act", "refile_act", "answer_reply"}
+)
 NEED_TOOLS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"why": {"type": "string", "minLength": 1}},
@@ -487,7 +513,7 @@ def step_tools(move: dict[str, Any], payload: dict[str, Any]) -> dict[str, dict[
                 "schema": parked_schema(form["schema"]),
                 "action": form,
             }
-    if tools and move.get("move") in ("hand_back", "outside_work"):
+    if tools and move.get("move") in NEED_TOOLS_MOVES:
         tools[NEED_TOOLS] = {"call": NEED_TOOLS, "schema": NEED_TOOLS_SCHEMA, "action": {}}
     return tools
 
@@ -500,7 +526,9 @@ def _definition(name: str, tool: dict[str, Any]) -> ToolDefinition:
     if action.get("field_notes"):
         words.append("Fields: " + json.dumps(action["field_notes"], default=str))
     if tool["call"] == NEED_TOOLS:
-        words = ["This step needs a live search, a browser, a file or a tool."]
+        words = ["This step needs a live search, a browser, a file or a tool, "
+                 "or the whole record of an earlier step that `earlier_steps` "
+                 "says was trimmed. Say which in `why`."]
     return ToolDefinition(name, " ".join(word for word in words if word), tool["schema"])
 
 
@@ -633,7 +661,7 @@ def _material_row(item: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# 3a. WHAT THE EARLIER STEPS SETTLED (0.58.3)
+# 3a. WHAT THE EARLIER STEPS SETTLED (0.58.3; whole, field by field, 0.62.0)
 # ---------------------------------------------------------------------------
 # WHAT FORCED IT: 2026-10-05, 20:16-20:28 local, lab agent Bree, deal 30bd9ebf
 # step 4 ("make a print-ready PDF flyer"). Three runs failed with "the
@@ -641,15 +669,49 @@ def _material_row(item: Any) -> Any:
 # `earlier_steps` (contract 4.1.14) carried step 3's calendar act: "Potluck
 # dinner, Sat Oct 17, 6:00 PM to 9:00 PM", with its event id. The provider's
 # whitelist dropped the field, so it never reached the model. It now rides
-# every current_step read, rendered here: one line per earlier step and one
-# per act it ran, the whole block capped, the OLDEST steps dropped first.
+# every current_step read, rendered here: one block per earlier step, its
+# hand-back and a line per file and per act it ran.
+#
+# 0.62.0, WHAT FORCED IT: 2026-10-06, lab agent SF Founder House, deal
+# fa84c12c and its twin, step 5 ("Email your match an introduction with the
+# lobby meeting time"). Step 4's approved match card was 982 characters and
+# its `meet` field sat near the end. The bench kept the first 592 (honest:
+# `trimmed` said so and named history_url); this renderer then folded the
+# card onto one line and clipped it at 300, and the file_act move offered no
+# need_tools. So the brain never saw the lobby time, asked the persons for it
+# on the thread (five messages across the two deals) and filed both emails
+# without it. Now:
+#   * the provider fills a hand-back the bench trimmed from the whole receipt
+#     (steps[].outcome on history_url), read once per receipt;
+#   * a hand-back renders line by line under its step, each card field on its
+#     own line, never folded and never clipped;
+#   * over the cap the OLDEST steps go first, whole; a step still too big on
+#     its own has its free text shortened, never a field; the block then opens
+#     with one line naming what was left out and how to read it all whole.
 EARLIER_STEPS_KEY = "earlier_steps"
-EARLIER_STEPS_CHAR_CAP = 1_500
-EARLIER_STEPS_TRIMMED = "(earlier steps trimmed)"
+# About 1,500 tokens: the realistic six-step deal (four earlier steps, two
+# cards) renders at about 2,000 characters, so a long deal fits whole too.
+EARLIER_STEPS_CHAR_CAP = 6_000
+# The trim line opens with this, so a rendered block is read back the same.
+EARLIER_STEPS_TRIMMED = "(earlier steps trimmed"
+EARLIER_STEPS_WHOLE_HOW = (
+    "Nothing is lost: answer need_tools, and on that road read "
+    "toll_bench.current_step with whole true for every earlier step whole."
+)
+# A hand-back's own lines sit under their step at this indent; files and acts
+# sit at two spaces. Both mark a line as belonging to the step above it.
+HAND_BACK_INDENT = "    "
 _EARLIER_TITLE_CHARS = 80
-_EARLIER_HAND_BACK_CHARS = 300
+_EARLIER_SUMMARY_CHARS = 200
 _EARLIER_ACT_CHARS = 300
 _EARLIER_FIELD_CHARS = 80
+# What a line of free text keeps when its step has to be shortened to fit.
+_FREE_TEXT_SUMMARY_CHARS = 160
+# The bench flattens a card to `field: value` lines (har_document): a short
+# name, a colon, a space and the value. A line that reads that way is a field
+# and is never cut; anything else on a hand-back is free text.
+_CARD_FIELD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _'/&.-]{0,39}: \S")
+_STEP_HEAD = re.compile(r"^Step (\S+) \(")
 
 
 def _one_line(value: Any, limit: int) -> str:
@@ -693,22 +755,52 @@ def _earlier_act_line(act: dict[str, Any]) -> str:
     return "  " + _one_line(line, _EARLIER_ACT_CHARS + 2 * _EARLIER_FIELD_CHARS + 60)
 
 
+def bench_trimmed(back: Any) -> bool:
+    """True when the bench says it cut this hand-back's words: `trimmed` is
+    the sentence naming how much it kept, null when the words are whole (the
+    whole receipt is steps[].outcome on history_url)."""
+    return isinstance(back, dict) and bool(back.get("trimmed"))
+
+
+def _hand_back_lines(back: dict[str, Any]) -> list[str]:
+    """A hand-back's words one line per line they were written in: the bench
+    writes a card as one `field: value` line per field, and each stays its own
+    line, whole. Spaces inside a line are folded; nothing is clipped."""
+    lines = [" ".join(part.split()) for part in str(back.get("text") or "").splitlines()]
+    lines = [line for line in lines if line]
+    if back.get("link"):
+        lines.append(f"link {back.get('link')}")
+    if lines and bench_trimmed(back):
+        # The provider fills a trimmed hand-back from the whole receipt; this
+        # is what is left when it could not, said where the cut is.
+        cut = _one_line(back.get("trimmed") or "the bench cut these words", 200)
+        lines.append(f"(cut here: {cut}. {EARLIER_STEPS_WHOLE_HOW})")
+    return lines
+
+
 def _earlier_step_lines(row: dict[str, Any]) -> list[str]:
-    """One earlier step: its hand-back line, then a line per file and per act."""
+    """One earlier step: its head line, its hand-back's own lines under it,
+    then a line per file and per act."""
     title = _one_line(row.get("title"), _EARLIER_TITLE_CHARS) or "untitled"
     head = f"Step {row.get('number', '?')} ({title})"
     if str(row.get("state") or "") == "ended":
         head += " [ended]"
     back = row.get("hand_back") if isinstance(row.get("hand_back"), dict) else None
+    lines: list[str] = []
     if back:
-        words = back.get("text") or back.get("summary") or back.get("filename") or ""
-        said = _one_line(words, _EARLIER_HAND_BACK_CHARS)
-        if back.get("link"):
-            said = (said + " " if said else "") + f"link {back.get('link')}"
-        head += ": " + (said or f"handed back a {back.get('kind') or 'receipt'}")
+        below = _hand_back_lines(back)
+        if below:
+            head += ", handed back:"
+            lines = [HAND_BACK_INDENT + line for line in below]
+        else:
+            said = back.get("summary") or back.get("filename") or ""
+            head += ": " + (
+                _one_line(said, _EARLIER_SUMMARY_CHARS)
+                or f"handed back a {back.get('kind') or 'receipt'}"
+            )
     else:
         head += ": nothing handed back"
-    lines = [head]
+    lines.insert(0, head)
     for item in row.get("files") or []:
         if isinstance(item, dict) and (item.get("filename") or item.get("file_receipt_id")):
             kind = f" {item.get('sniffed_type')}" if item.get("sniffed_type") else ""
@@ -722,49 +814,97 @@ def _earlier_step_lines(row: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _step_number(group: list[str]) -> str:
+    found = _STEP_HEAD.match(group[0]) if group else None
+    return found.group(1) if found else "?"
+
+
+def _marker_steps(marker: str, label: str) -> list[str]:
+    """The step numbers a trim line names after `label`."""
+    found = re.search(re.escape(label) + r" ((?:step [^,;.\s]+(?:, )?)+)", marker)
+    return re.findall(r"step ([^,;.\s]+)", found.group(1)) if found else []
+
+
+def _trim_line(dropped: list[str], shortened: list[str]) -> str:
+    parts = []
+    if dropped:
+        parts.append("left out " + ", ".join(f"step {n}" for n in dropped))
+    if shortened:
+        parts.append("free text shortened on " + ", ".join(f"step {n}" for n in shortened))
+    return (f"{EARLIER_STEPS_TRIMMED} to fit: {'; '.join(parts)}. Every card "
+            f"field shown is whole. {EARLIER_STEPS_WHOLE_HOW})")
+
+
+def _free_text_shortened(group: list[str]) -> list[str]:
+    """The step with each line of its hand-back's free text cut to a short
+    head. A card field is never touched, nor the head, a file or an act."""
+    out = group[:1]
+    for line in group[1:]:
+        words = line[len(HAND_BACK_INDENT):] if line.startswith(HAND_BACK_INDENT) else None
+        if (words is None or _CARD_FIELD.match(words) or words.startswith("(cut here:")
+                or len(words) <= _FREE_TEXT_SUMMARY_CHARS):
+            out.append(line)
+        else:
+            out.append(HAND_BACK_INDENT + _one_line(words, _FREE_TEXT_SUMMARY_CHARS))
+    return out
+
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
 def render_earlier_steps(
-    rows: Any, cap: int = EARLIER_STEPS_CHAR_CAP
+    rows: Any, cap: int | None = EARLIER_STEPS_CHAR_CAP
 ) -> list[str] | None:
-    """The bench's `earlier_steps` as short lines the model reads, or None.
+    """The bench's `earlier_steps` as lines the model reads, or None.
 
     None when the bench sent no list (an older bench): nothing is rendered.
     [] when it sent an empty one: nothing before this step is approved yet,
     which is not the same as not knowing. Lines already rendered (a string
-    per line) pass through, so rendering twice changes nothing. Over `cap`
-    characters the OLDEST steps go first and the block opens with
-    EARLIER_STEPS_TRIMMED; one step bigger than the cap on its own is cut
-    to fit.
+    per line) pass through, so rendering twice changes nothing.
+
+    Every earlier step's hand-back renders WHOLE, field by field (0.62.0).
+    Over `cap` characters the OLDEST steps go first, whole steps only; a step
+    still bigger than the cap on its own has its free text shortened, never a
+    card field, and may stay over the cap rather than lose one. Either way the
+    block opens with a line starting EARLIER_STEPS_TRIMMED that names the
+    steps left out and shortened and how to read them whole. `cap=None` is
+    everything, whole: what toll_bench.current_step answers with whole true.
     """
     if not isinstance(rows, list):
         return None
     groups: list[list[str]] = []
+    dropped: list[str] = []
+    shortened: list[str] = []
     for row in rows:
         if isinstance(row, dict):
             groups.append(_earlier_step_lines(row))
-        elif isinstance(row, str) and row and row != EARLIER_STEPS_TRIMMED:
-            if row.startswith("  ") and groups:
+        elif isinstance(row, str) and row:
+            if row.startswith(EARLIER_STEPS_TRIMMED):
+                dropped += _marker_steps(row, "left out")
+                shortened += _marker_steps(row, "free text shortened on")
+            elif row.startswith("  ") and groups:
                 groups[-1].append(row)
             else:
                 groups.append([row])
-    def size(kept: list[list[str]]) -> int:
-        return sum(len(line) + 1 for group in kept for line in group)
-    trimmed = any(row == EARLIER_STEPS_TRIMMED for row in rows)
-    marker = len(EARLIER_STEPS_TRIMMED) + 1
-    if trimmed or size(groups) > cap:
-        trimmed = True
-        while len(groups) > 1 and size(groups) + marker > cap:
-            groups.pop(0)
+
+    def size() -> int:
+        body = sum(len(line) + 1 for group in groups for line in group)
+        if dropped or shortened:
+            body += len(_trim_line(_unique(dropped), _unique(shortened))) + 1
+        return body
+
+    if cap is not None:
+        while len(groups) > 1 and size() > cap:
+            dropped.append(_step_number(groups.pop(0)))
+        if groups and size() > cap:
+            shorter = _free_text_shortened(groups[-1])
+            if shorter != groups[-1]:
+                groups[-1] = shorter
+                shortened.append(_step_number(shorter))
     lines = [line for group in groups for line in group]
-    if trimmed:
-        budget = cap - len(EARLIER_STEPS_TRIMMED) - 1
-        kept: list[str] = []
-        for line in lines:
-            if budget <= 1:
-                break
-            line = line if len(line) + 1 <= budget else line[: budget - 2] + "\u2026"
-            kept.append(line)
-            budget -= len(line) + 1
-        return [EARLIER_STEPS_TRIMMED, *kept]
+    if dropped or shortened:
+        return [_trim_line(_unique(dropped), _unique(shortened)), *lines]
     return lines
 
 

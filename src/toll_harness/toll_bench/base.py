@@ -55,7 +55,9 @@ class TollBenchProvider(Protocol):
         idempotency_key: str,
     ) -> dict[str, Any]: ...
 
-    def current_step(self, deal_id: str) -> dict[str, Any]: ...
+    # `whole=True` (0.62.0): every earlier step rendered whole, nothing left
+    # out for size. A provider without it is only ever called with deal_id.
+    def current_step(self, deal_id: str, whole: bool = False) -> dict[str, Any]: ...
 
     def reply_step_message(
         self,

@@ -10,6 +10,53 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-10-06
+
+- **An earlier step's approved hand-back reaches every later step whole,
+  field by field.** WHAT FORCED IT: 2026-10-06, lab agent SF Founder House,
+  two deals at step 5, "Email your match an introduction with the lobby
+  meeting time". Step 4's approved match card was 982 characters and its
+  last field, `meet` (the lobby time), sat near the end. The bench's
+  current-step answer kept the first 592 characters of the hand-back and said
+  so in `trimmed`; the harness then folded the card onto one line and clipped
+  it at 300 (`_EARLIER_HAND_BACK_CHARS`), inside a 1,500-character block; and
+  the email step's moves (`file_act`, `refile_act`) offered no `need_tools`.
+  So the brain never saw the time, asked the persons on the thread for it
+  (five messages across the two deals) and filed both emails without it. The
+  agent's lane had to carry a workaround (`meet` moved up to the second field,
+  the time re-posted as a check-in). Steven's law: a general gap is fixed in
+  the harness, and the harness never hobbles an agent. Now:
+  - The provider reads a hand-back the bench trimmed WHOLE from the bench's
+    own history (`current-step?full=1`, `steps[].outcome[].words`), once per
+    receipt, remembered by receipt id; a deal costs one extra read per new
+    trimmed hand-back, not one per cycle. A read that fails keeps the bench's
+    words and says on its own line where the cut is and how to fetch the rest.
+  - `earlier_steps` renders a hand-back line by line under its step: each
+    card field (`field: value`, as the bench flattens a card) on its own line,
+    never folded and never clipped.
+  - The block's cap goes from 1,500 to 6,000 characters. Over it, the OLDEST
+    steps go first, whole; a step still too big on its own has its free text
+    shortened to 160 characters a line, never a card field, and may stay over
+    the cap rather than lose one. The block then opens with one line naming
+    the steps left out and shortened and how to read them whole: answer
+    `need_tools`, and on that road `toll_bench.current_step` with the new
+    `whole: true` returns every earlier step whole. The old road's goal
+    carries the whole set itself whenever the ask's block was trimmed.
+  - `need_tools` is offered on `file_act`, `refile_act` and `answer_reply`
+    (the moves that write words out of earlier material), beside `hand_back`
+    and `outside_work`. Those moves are told the card is already theirs and
+    never to ask the person for a name, address, time or place it carries.
+  - Measured on the real deal (six steps, step 5, two cards before it): the
+    step ask's tail went from 9,113 to 10,534 characters (about 2,280 to
+    2,630 tokens by the harness's own four-characters-a-token estimate), the
+    block from 1,005 to 2,051, and the lobby time, the place and the
+    profile's "how to spot you" are now all in it. On a fuller six-step deal
+    (five earlier hand-backs, one a three-card list): 9,589 to 11,977
+    characters, the block 1,481 to 3,494, nothing trimmed. The cacheable
+    prefix is unchanged. Adapter-independent: every model reads the same
+    tail. A minor release, not a patch: what the model reads changes, and
+    `toll_bench.current_step` takes a new argument.
+
 ## [0.61.0] - 2026-10-06
 
 - **The `claude_code` rail fails over between Claude accounts.** WHAT FORCED

@@ -95,13 +95,15 @@ def _size(lines):
 # ---------------------------------------------------------------------------
 # 1. The renderer: present, absent, empty, act lines, trimmed
 # ---------------------------------------------------------------------------
-def test_present_rows_become_one_line_per_step_with_the_hand_back_words():
+def test_present_rows_become_a_head_per_step_with_the_hand_back_words_under_it():
+    # 0.62.0: the hand-back's own lines sit under its step, whole.
     lines = render_earlier_steps([SIGNED, CALENDAR])
     assert lines[0] == "Step 1 (Deal signed): nothing handed back"
-    assert lines[1].startswith(
-        "Step 3 (Add the chosen potluck dinner to your Google Calendar.): - Create events"
+    assert lines[1] == (
+        "Step 3 (Add the chosen potluck dinner to your Google Calendar.), handed back:"
     )
-    assert "Sat Oct 17, 6:00 PM to 9:00 PM" in lines[1]
+    assert lines[2].startswith("    - Create events")
+    assert "Sat Oct 17, 6:00 PM to 9:00 PM" in lines[2]
 
 
 def test_absent_field_renders_nothing_and_an_empty_list_stays_an_empty_list():
@@ -115,7 +117,7 @@ def test_absent_field_renders_nothing_and_an_empty_list_stays_an_empty_list():
 
 def test_an_act_result_is_its_own_did_line_with_the_time_and_the_ids():
     lines = render_earlier_steps([CALENDAR])
-    did = lines[1]
+    did = lines[2]
     assert did.startswith("  did: calendar_event to Google Calendar \"Potluck dinner\" ")
     assert "2026-10-17T18:00:00..2026-10-17T21:00:00 America/Los_Angeles" in did
     assert "event 0dfljrmht0t13s9s10nbkeok2s" in did
@@ -138,24 +140,31 @@ def test_over_the_cap_the_oldest_steps_go_first_and_the_block_says_so():
     rows = [
         {**CALENDAR, "number": n, "step_id": f"st-{n}", "title": f"Step title {n}",
          "hand_back": {**CALENDAR["hand_back"], "text": f"step {n} {long_words}"}}
-        for n in range(1, 11)
+        for n in range(1, 21)
     ]
     lines = render_earlier_steps(rows)
-    assert lines[0] == EARLIER_STEPS_TRIMMED
+    assert lines[0].startswith(EARLIER_STEPS_TRIMMED)
+    assert "left out step 1, step 2" in lines[0]
     assert _size(lines) <= EARLIER_STEPS_CHAR_CAP
     kept = [line for line in lines if line.startswith("Step ")]
     # The newest step is always kept; the oldest is the first to go.
-    assert kept[-1].startswith("Step 10 (Step title 10)")
+    assert kept[-1].startswith("Step 20 (Step title 20)")
     assert not any(line.startswith("Step 1 (") for line in kept)
-    # Whole steps go, never a step's head without its acts.
+    # Whole steps go, never a step's head without its words and acts.
     assert lines[-1].startswith("  did: calendar_event")
+    assert lines[-2] == f"    step 20 {long_words}"
 
 
-def test_one_step_bigger_than_the_cap_is_cut_to_fit():
-    lines = render_earlier_steps([CALENDAR], cap=200)
-    assert lines[0] == EARLIER_STEPS_TRIMMED
-    assert _size(lines) <= 200
+def test_one_step_bigger_than_the_cap_shortens_its_free_text_and_says_so():
+    # 0.62.0: a step too big on its own loses free text, never a field; the
+    # whole of this one is free text.
+    long_row = {**CALENDAR, "hand_back": {**CALENDAR["hand_back"], "text": "y" * 900}}
+    lines = render_earlier_steps([long_row], cap=800)
+    assert lines[0].startswith(EARLIER_STEPS_TRIMMED)
+    assert "free text shortened on step 3" in lines[0]
+    assert _size(lines) <= 800
     assert lines[1].startswith("Step 3 (")
+    assert lines[2].startswith("    yyy") and lines[2].endswith("\u2026")
 
 
 def test_under_the_cap_nothing_is_trimmed_and_rendering_twice_changes_nothing():
@@ -163,9 +172,10 @@ def test_under_the_cap_nothing_is_trimmed_and_rendering_twice_changes_nothing():
     assert EARLIER_STEPS_TRIMMED not in lines
     assert render_earlier_steps(lines) == lines
     # A rendered, trimmed block re-trims from its own lines.
-    small = render_earlier_steps(lines, cap=400)
-    assert small[0] == EARLIER_STEPS_TRIMMED and _size(small) <= 400
-    assert render_earlier_steps(small, cap=400) == small
+    small = render_earlier_steps(lines, cap=500)
+    assert small[0].startswith(EARLIER_STEPS_TRIMMED) and _size(small) <= 500
+    assert "left out step 1, step 3" in small[0]
+    assert render_earlier_steps(small, cap=500) == small
 
 
 # ---------------------------------------------------------------------------

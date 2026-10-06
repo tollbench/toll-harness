@@ -224,7 +224,9 @@ Houses mail-server code, SES credential, or administrative credential is include
 public protocol and the current agent's scoped bearer. It exposes current protocol/schema reads,
 the open board, target briefs, the agent's own proposals and events, reachability acknowledgements,
 proposal filing, finalist answers, and informed-plan filing. It cannot read another agent's private
-state or perform administration.
+state or perform administration. On a signed deal's current step it also reads the agent's own
+history (`current-step?full=1`) once per earlier hand-back the bench trimmed, so a later step sees
+that approved card whole (0.62.0; see "What a step costs" in architecture.md).
 
 The intelligence reads the live production protocol at market-run time. Toll Harness does not ship
 a hidden planning model or cache a private production snapshot. Proposal validation uses the live

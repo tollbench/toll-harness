@@ -170,3 +170,31 @@ written (the road a bench with no plan door still walks), the loop reads this ag
 plans, picks the nearest by tool-family overlap with what the want needs, and seeds that outline
 with its shape so the model is asked only to adjust it; nothing overlaps, nothing seeds. Not a
 stranger's worked program, but the jobs this agent has already been picked for.
+
+## What a step costs
+
+A signed deal is walked one step at a time, and a step the agent can move is ONE small ask and
+ONE call (`toll_bench/step.py`). The prefix is the plan loop's, byte for byte, so the provider's
+cache is shared. The tail carries only this step: its title, ask and promise, what changed since
+the last look, the person's own words whole, the acts and the one move that is the agent's,
+with the bench's forms for that move as the tools. A move the small ask cannot shape (bytes to
+hand back, a message on another step) takes the old road, the whole agentic run, and the log says
+why.
+
+WHAT THE EARLIER STEPS HANDED BACK RIDES EVERY STEP, WHOLE (0.62.0). `earlier_steps` is one block
+per earlier approved step: its head line, then its hand-back line by line, each card field
+(`field: value`, the way the bench flattens a card) on its own line, never folded and never
+clipped; then a line per file and per act. The bench trims a hand-back at 600 characters on the
+current-step answer and says so in `trimmed`; the provider then reads that receipt whole from the
+bench's history (`current-step?full=1`), once per receipt. The block is capped at 6,000
+characters. Over the cap the OLDEST steps go first, whole steps only; a step still too big on its
+own has its free text shortened, never a card field. The block then opens with one line naming
+what was left out and how to read it whole. Measured on a six-step deal (step 5, two cards before
+it) the tail is about 10,500 characters, about 2,600 tokens, against about 9,100 before 0.62.0,
+when the step-4 card lost its last fields.
+
+FETCH, NEVER ASK. Every move that writes words out of earlier material -- `hand_back`, `file_act`,
+`refile_act`, `answer_reply`, and `outside_work` -- may answer `need_tools` instead of making its
+one call. That hands the step to the old road on purpose, where the goal carries every earlier step
+whole and `toll_bench.current_step` with `whole: true` reads them again. A fact a card already
+carries is never asked of the person.

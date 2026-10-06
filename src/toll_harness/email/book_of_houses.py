@@ -505,10 +505,14 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
-    def current_step(self, deal_id: str) -> dict[str, Any]:
+    def current_step(self, deal_id: str, full: bool = False) -> dict[str, Any]:
+        """The deal's current step. `full=True` is the bench's history_url
+        (`?full=1`): every step as walked, each receipt's words whole on
+        steps[].outcome, which is where a trimmed hand-back is read whole."""
         deal = urllib.parse.quote(deal_id, safe="")
+        query = "?full=1" if full else ""
         return self._request(
-            "GET", f"/api/bench/deals/{deal}/current-step", authenticated=True
+            "GET", f"/api/bench/deals/{deal}/current-step{query}", authenticated=True
         )
 
     def post_step_message(

@@ -70,6 +70,8 @@ from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft, row_slots
 from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.toll_bench.step import (
+    EARLIER_STEPS_KEY,
+    EARLIER_STEPS_TRIMMED,
     FORMS_TURNED_OFF,
     ROAD_AGENTIC,
     StepAsk,
@@ -877,9 +879,11 @@ _DEAL_STEP_INSTRUCTION = (
     "here.now page). Only then file the outcome. If you cannot make that kind "
     "of file, say so on the step thread instead of filing words in its place. "
     "WHAT IS ALREADY SETTLED: current_step.earlier_steps is what your earlier "
-    "steps handed back and what their acts did (a date, a time, a place, a "
-    "link, a file); read it and the_person_said before deciding a fact is "
-    "missing. A fact only the person can give that is in neither: ask them "
+    "steps handed back, each card field on its own line and whole, and what "
+    "their acts did (a date, a time, a place, a link, a file); read it and "
+    "the_person_said before deciding a fact is missing, and when it opens with "
+    "\"(earlier steps trimmed\" read toll_bench.current_step with whole true "
+    "before asking anyone. A fact only the person can give that is in neither: ask them "
     "ONCE with toll_bench.reply_step_message, post a check-in "
     "(toll_bench.post_check_in) whose blocker names what you asked them for, "
     "then end the run with result.complete -- never result.fail over a fact "
@@ -1135,6 +1139,30 @@ _IDLE_STEP_MEMO: dict[str, str] = {}
 # Re-dispatch this long before a due progress pulse rather than after it, so
 # the pulse never goes overdue waiting on the poll interval.
 _IDLE_PULSE_MARGIN_SECONDS = 90.0
+
+
+def _with_whole_earlier_steps(
+    resources: Any, obligation: dict[str, Any], step_state: Any
+) -> Any:
+    """The step state for the old road's goal, every earlier step whole.
+
+    0.62.0. The step ask trims `earlier_steps` to fit one small call, oldest
+    steps first, and says so on the block's first line. The old road is where
+    a step that needed more lands (need_tools among them) and it has the
+    room, so when the block was trimmed its goal carries the whole set. A copy:
+    what the dispatch remembers of the step is untouched."""
+    if not isinstance(step_state, dict):
+        return step_state
+    lines = step_state.get(EARLIER_STEPS_KEY)
+    if not (isinstance(lines, list) and lines and isinstance(lines[0], str)
+            and lines[0].startswith(EARLIER_STEPS_TRIMMED)):
+        return step_state
+    whole_for = getattr(getattr(resources, "toll_bench", None), "earlier_steps_whole", None)
+    deal_id = str(obligation.get("deal_id") or (step_state.get("deal") or {}).get("id") or "")
+    whole = whole_for(deal_id) if callable(whole_for) and deal_id else None
+    if not isinstance(whole, list):
+        return step_state
+    return {**step_state, EARLIER_STEPS_KEY: whole}
 
 
 def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
@@ -2466,7 +2494,7 @@ def _process_market_attention(
         + json.dumps(
             {
                 "obligation": obligation,
-                "current_step": step_state,
+                "current_step": _with_whole_earlier_steps(resources, obligation, step_state),
                 "confirmed_email_send_receipt": resumed_email,
                 "previous_attempt_failure": previous_failure,
                 "the_bench_refused": refused_before,
