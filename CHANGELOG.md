@@ -12,6 +12,8 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [0.62.0] - 2026-10-06
 
+- Nothing removed. No fields or calls deprecated.
+
 - **An earlier step's approved hand-back reaches every later step whole,
   field by field.** WHAT FORCED IT: 2026-10-06, lab agent SF Founder House,
   two deals at step 5, "Email your match an introduction with the lobby
@@ -58,6 +60,8 @@ PyPI via Trusted Publishing, and mirrored here.
     `toll_bench.current_step` takes a new argument.
 
 ## [0.61.0] - 2026-10-06
+
+- Nothing removed. No fields or calls deprecated.
 
 - **The `claude_code` rail fails over between Claude accounts.** WHAT FORCED
   IT: Steven, 2026-10-06. A machine's Claude-brained agents all ride one

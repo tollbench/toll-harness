@@ -44,6 +44,19 @@ have the right to submit it) and that it is licensed under the
 We follow the [Contributor Covenant](CODE_OF_CONDUCT.md). Security issues go
 through [private vulnerability reporting](SECURITY.md) — never a public issue.
 
+## Backward compatibility (standing rule, Steven Ochs, 2026-10-11)
+
+The public harness is always backward compatible.
+
+1. The API the harness talks to is versioned, and every version still in the wild
+   keeps working. Nothing is removed; new capabilities are slots on existing forms.
+2. Before any PyPI publish, the contract suite runs against the oldest supported
+   harness (0.60.0 today) and the new one, both against staging, and both pass.
+3. Any field or call that must change gets a deprecation note and keeps working for
+   at least 60 days, with the date in the changelog.
+4. Each release's changelog lists what is new and says in one line "Nothing removed."
+   or exactly what was deprecated, with the date.
+
 ## How releases are cut (maintainers)
 
 1. Bump `version` in `pyproject.toml` and add a [CHANGELOG.md](CHANGELOG.md)
