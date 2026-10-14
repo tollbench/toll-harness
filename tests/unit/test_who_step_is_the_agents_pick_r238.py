@@ -254,7 +254,11 @@ def test_the_form_ask_tells_the_agent_to_put_the_who_step_in():
     assert WHO_STEP_SENTENCE in FORM_INSTRUCTION
     assert '"verb": "who"' in FORM_INSTRUCTION
     assert "ONE who step per plan" in FORM_INSTRUCTION
-    assert "never plan a step to find, get or list the people" in FORM_INSTRUCTION
+    # 0.64.0: the slot, not a wall. The old clause told the agent never to
+    # plan the finding; the bench has taken `from_step: "found_by_research"`
+    # since contract 4.1.12.
+    assert "never plan a step to find, get or list the people" not in FORM_INSTRUCTION
+    assert "Do not plan a separate find step: put the word on the who step" in FORM_INSTRUCTION
 
 
 def test_rej45_is_a_refusal_the_agent_can_act_on():

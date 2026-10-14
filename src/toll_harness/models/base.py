@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from typing import Any
 
 from toll_harness.core.types import ModelMessage, ModelResponse, ToolDefinition
 
@@ -18,6 +19,40 @@ class ModelInvocationError(RuntimeError):
 
 class ModelAdapter(ABC):
     """Provider-neutral intelligence boundary."""
+
+    # 0.63.0. What the agent spent on a deal, for the optional `agent_cost`
+    # hand-back slot. `cost_ledger` is set by whoever builds the runtime (None
+    # counts nothing). `cost_basis` is how the adapter's dollars are to be read:
+    # "metered" when the call is billed to an API key, "subscription_estimate"
+    # when it runs on a plan and the dollars are a share priced from a table.
+    cost_ledger: Any = None
+    cost_basis: str = "metered"
+
+    def count_spend(
+        self,
+        *,
+        fresh_in: int = 0,
+        cache_read: int = 0,
+        cache_write: int = 0,
+        out: int = 0,
+        model: object = None,
+    ) -> None:
+        """Put one billed call on the current deal's tab. No ledger, no deal, or
+        no tokens counts nothing, and counting never fails a model call."""
+        ledger = self.cost_ledger
+        if ledger is None:
+            return
+        try:
+            ledger.add(
+                model or self.model_id,
+                basis=self.cost_basis,
+                fresh_in=fresh_in,
+                cache_read=cache_read,
+                cache_write=cache_write,
+                out=out,
+            )
+        except Exception:  # noqa: BLE001 - the bill is never worth the call
+            pass
 
     @property
     @abstractmethod

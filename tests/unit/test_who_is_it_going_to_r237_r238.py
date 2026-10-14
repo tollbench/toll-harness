@@ -404,7 +404,10 @@ def test_the_runtime_sheet_says_the_agent_puts_the_who_step_in():
     assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in TOLL_BENCH_SYSTEM_INSTRUCTION
     assert '"verb": "who"' in TOLL_BENCH_SYSTEM_INSTRUCTION
     assert "REJ-45" in TOLL_BENCH_SYSTEM_INSTRUCTION
-    assert "never plan a step to find or list the" in TOLL_BENCH_SYSTEM_INSTRUCTION
+    # 0.64.0: the sheet names the slot instead of forbidding the work.
+    assert "do not plan a separate find step: put the word on the who step" in (
+        " ".join(TOLL_BENCH_SYSTEM_INSTRUCTION.split()))
+    assert "never plan a step to find or list" not in TOLL_BENCH_SYSTEM_INSTRUCTION
     assert "Never add a picker they already declined" not in TOLL_BENCH_SYSTEM_INSTRUCTION
 
 
@@ -536,7 +539,8 @@ def test_the_rej40_refusal_hands_back_the_who_step_in_the_door_s_words():
     assert result["ok"] is False
     assert result["detail"] == "names nobody to send it to"
     assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in result["fix"]
-    assert "do not plan a step to find or list the people" in result["fix"]
+    assert "do not plan a separate find step: put the word on the who step" in result["fix"]
+    assert '"found_by_research"' in result["fix"]
     # The picker is NAMED now (amended 2026-09-12) -- as the who STEP's own
     # block, copied out of the brief's templates, never as a question on the
     # proposal, which the bench still refuses REJ-15.

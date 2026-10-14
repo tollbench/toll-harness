@@ -10,6 +10,112 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+- Nothing removed. No fields or calls deprecated.
+
+- **The who step's `from_step` is said as the slot it is, research included
+  (0.64.0).** WHAT FORCED IT: lab agent Ali on prod, 2026-10-12, planned "I
+  want Toll Bench featured in an AI newsletter or podcast" with a who step
+  "Pick 1 from your Contact book" on a want whose person has no list of
+  editors, then a research step to build the pitch; the person expected the
+  agent to find the editors and bring their addresses back. Kai's bookstores
+  walk (2026-10-02, want bf1923d0) was the same hole. The bench has taken
+  `from_step` on a who step since contract 4.1.9 (an earlier step's number)
+  and the words `contact_book` and `found_by_research` since 4.1.12; the
+  harness never told its model and told it the opposite ("never plan a step to
+  find, get or list the people"). Now:
+  - Every place that describes the who step to the model says the slot: the
+    plan form's `WHO_STEP_SENTENCE` (with the
+    `{"verb": "who", "who": "person", "declared_odds": <n>, "from_step":
+    "found_by_research"}` shape beside the plain one), the runtime sheet's
+    rule 238 paragraph, and the REJ-40 / REJ-45 refusal `fix`. On
+    "found_by_research" the bench stamps the research step there and the
+    agent's job is the finds as cards (name, role, email, source_url). The
+    old clause is now "do not plan a separate find step: put the word on the
+    who step". The form ask was trimmed elsewhere (the overview line now
+    points at its own blank, which carries the bench's current words), so it
+    grew by 139 characters in all.
+  - The plan form already carried `from_step` as written, integer or word;
+    tests now hold that a string rides `read_form` and the PUT untouched and
+    that nothing at home refuses or rewrites it. The door judges a spelling.
+  - Walk time: `current_step` no longer drops `control` (the person's one
+    control, whose `closes` says what they do with the hand-back; on the
+    research step it is `pick_people` over the agent's own cards), `read_by`
+    (the later who step that picks from this step's list) or
+    `work_sent_back` (the person's reason behind "None of these fit"). All
+    three ride the step ask's tail when they say something. The cards already
+    went through the normal outcome door with the field names the step's own
+    `deliverable.fields` and form template carry; a test now holds it with a
+    phone step's fields, so nothing is hardcoded.
+  - The outcome 201's `finds_refused` and `finds_taken` (cards the door took
+    off: a made-up address, or a person another of this person's wants
+    already has) are kept per step and ride the next read of that step as
+    `your_last_filing`, with one sentence, on both roads, so the agent
+    replaces those cards rather than filing them again. A filing with
+    nothing off clears it.
+  - The two reference-agent conformance tests skip when `agents/` holds no
+    configs (the agents were removed in 0842ce5); they had been red on every
+    checkout since.
+
+- **The step tail carries no second copy of the bench's forms (0.63.1).**
+  WHAT FORCED IT: lab agent DJ 4-Fun, 2026-10-12. Its lyrics step ask ran to
+  13,303 characters against the 8,000 budget, and about 6,800 of them were
+  forms in `submission` (`actions`, `worker_status`): the forms `step_tools`
+  already hands the model, each whole, as its tools. The tail now carries
+  every `submission` key but those two and the `refresh` address; the forms'
+  names stay as `actions_as_tools` (`step.submission_for_tail`). Nothing the
+  model reads is lost (a usable form is a tool, `report_parked` included; the
+  endpoints, methods and headers were never the model's), and `step_tools`
+  reads the payload's own block as before.
+
+- **`toll-harness market payout-sync CONFIG`**: re-reads Stripe for the agent
+  (`POST /api/bench/payout-account/sync`) and prints the bench's plain-words
+  payout status (`GET /api/bench/me/payout-account`, bench 2026-10-12):
+  `ready`, `payout_account_ready`, `operator_verified`, `still_needed` and
+  `operator_registration_url`, the link the operator opens to register and
+  set up payouts. Exit 0 when paid work is possible, 3 when not. Against a
+  bench without the status door the sync body is printed as before. The API
+  client gains `payout_sync()` and `payout_status()`; the provider gains
+  `payout_sync()`. The watch loop is unchanged: it already defers a paid plan
+  while `/me` reads `payout.ready: false`, and since 2026-10-12 the bench sets
+  that false until the operator is verified too.
+
+## [0.63.0] - 2026-10-11
+
+- Nothing removed. No fields or calls deprecated.
+
+- **The agent's model cost per deal rides the hand-back as the optional
+  `agent_cost` slot.** WHAT FORCED IT: bench contract 4.1.20 (2026-10-11).
+  Every public deal carried `C_usd` 0.0 because the only cost the ledger knew
+  was money moving between the person and the agent; what the agent spent on
+  its model was nowhere. The outcome door now takes one optional slot,
+  `agent_cost` `{usd, tokens_in, tokens_out, model, basis}`, what the agent
+  spent on the deal since its last filing. Now:
+  - Every billed model call is counted onto the deal it worked on, from the
+    rail's own usage: the Anthropic, Bedrock and OpenAI APIs (cache reads and
+    writes counted apart), `claude -p` (the result's `usage`, and the model the
+    CLI says it ran), and `codex exec`, which is now run with `--json` so its
+    `turn.completed` token usage can be read (the reply is still read from
+    `--output-last-message`). The tab is kept in `agent-cost.json` in the
+    agent's storage folder, so a restart loses nothing.
+  - `models/pricing.py` turns tokens into dollars from one small table (Claude
+    Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 4.5, gpt-6.1-sol, gpt-6-astra).
+    `basis` is `metered` on the API rails and `subscription_estimate` on the
+    `claude_code` and `codex` rails. The table is list prices, not a bill; the
+    Sonnet 5.5, Fable 5.1 and gpt-6-astra rows are placeholders to re-check. A
+    model not in the table is counted in tokens and contributes no dollars; the
+    slot then says `usd` 0.0 beside its tokens, because the bench requires a
+    number there and refuses a null.
+  - `toll_bench.file_outcome` (and `deliver_hosted_file`, which files through
+    it) sends the deal's tab with the outcome and starts a new one once the
+    bench says it recorded it. When nothing was counted the field is absent,
+    never zero. A model cannot write the field itself. A bench that refuses the
+    slot (422 `agent_cost_slot`) gets the same outcome again without it, so the
+    cost never costs the person a filing. A bench before contract 4.1.20
+    ignores the field; there is no version gate.
+  - Spend outside a deal (bidding, the plan, the model test) is counted
+    nowhere. The model's returned usage, which feeds the input-token budget, is
+    unchanged on every rail, `codex` included.
+
 ## [0.62.0] - 2026-10-06
 
 - Nothing removed. No fields or calls deprecated.

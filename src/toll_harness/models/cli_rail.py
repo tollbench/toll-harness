@@ -520,6 +520,8 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         "CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`."
     )
 
+    cost_basis = "subscription_estimate"
+
     def __init__(
         self,
         model_id: str | None = None,
@@ -647,12 +649,38 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
         payload, native_tools = _read_claude_output(completed.stdout)
         return completed, payload, native_tools
 
+    def _count_claude(self, payload: dict[str, Any]) -> None:
+        """What this call used, from the result's own usage (0.63.0). Cache
+        reads and writes are separate counts here and priced separately; the
+        model is the one the CLI says it ran, else the configured one."""
+        used = payload.get("usage")
+        if not isinstance(used, dict):
+            return
+        ran = payload.get("modelUsage")
+        model = None
+        if isinstance(ran, dict) and ran:
+            model = max(
+                ran,
+                key=lambda name: (
+                    int(ran[name].get("outputTokens") or 0) if isinstance(ran[name], dict) else 0
+                ),
+            )
+        self.count_spend(
+            fresh_in=used.get("input_tokens") or 0,
+            cache_read=used.get("cache_read_input_tokens") or 0,
+            cache_write=used.get("cache_creation_input_tokens") or 0,
+            out=used.get("output_tokens") or 0,
+            model=model,
+        )
+
     def _finish(
         self,
         completed: subprocess.CompletedProcess,
         payload: dict[str, Any] | None,
         native_tools: list[str],
     ) -> tuple[str, ModelUsage]:
+        if payload is not None:
+            self._count_claude(payload)
         if payload is not None and _ended_on_native_tool(
             payload, native_tools, completed.returncode
         ):
@@ -791,6 +819,7 @@ class CodexCliAdapter(_CliRailAdapter):
     """
 
     provider = "codex"
+    cost_basis = "subscription_estimate"
     install_hint = (
         "Install the Codex CLI (https://github.com/openai/codex) and sign in "
         "with your ChatGPT subscription: run `codex login`."
@@ -801,7 +830,9 @@ class CodexCliAdapter(_CliRailAdapter):
 
     def _invoke_cli(self, prompt: str) -> tuple[str, ModelUsage]:
         # --output-last-message is the stable contract across codex versions;
-        # the --json event stream has changed shape release to release.
+        # the --json event stream has changed shape release to release, so the
+        # reply is never read from it. It is read only for token usage (0.63.0),
+        # tolerantly: an event it cannot read counts nothing.
         last_message = self.workdir / f"last-message-{uuid.uuid4().hex}.txt"
         argv = [
             self.binary,
@@ -814,6 +845,10 @@ class CodexCliAdapter(_CliRailAdapter):
             "--output-last-message",
             str(last_message),
         ]
+        # 0.63.0: --json puts the turn's token usage on stdout. The reply is
+        # still read from --output-last-message, never from the event stream.
+        if "--json" not in self.extra_args:
+            argv.append("--json")
         if self._configured_model:
             argv += ["--model", self._configured_model]
         argv += self.extra_args
@@ -826,6 +861,7 @@ class CodexCliAdapter(_CliRailAdapter):
                     f"exit_{completed.returncode}",
                     (completed.stderr or completed.stdout or "").strip()[-2000:],
                 )
+            self._count_codex(completed.stdout)
             try:
                 raw = last_message.read_text()
             except FileNotFoundError as error:
@@ -837,5 +873,47 @@ class CodexCliAdapter(_CliRailAdapter):
                 ) from error
         finally:
             last_message.unlink(missing_ok=True)
-        # codex exec does not report token usage on this contract.
+        # The returned usage stays empty, as before 0.63.0: it feeds the run's
+        # input-token budget, and a rail that never reported must not start
+        # tripping it. The spend is counted for the deal's cost slot instead.
         return raw, ModelUsage()
+
+    def _count_codex(self, stdout: str | None) -> None:
+        """Count the tokens a `codex exec --json` run reported: the sum of its
+        turn.completed usage (input includes the cached share), else the last
+        cumulative total an older build printed. Nothing reported counts
+        nothing."""
+        total = [0, 0, 0]  # input (incl. cached), cached input, output
+        cumulative: tuple[int, int, int] | None = None
+        for line in str(stdout or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            used = event.get("usage") if event.get("type") == "turn.completed" else None
+            if isinstance(used, dict):
+                total[0] += int(used.get("input_tokens") or 0)
+                total[1] += int(used.get("cached_input_tokens") or 0)
+                total[2] += int(used.get("output_tokens") or 0)
+            msg = event.get("msg") if isinstance(event.get("msg"), dict) else {}
+            info = msg.get("info") if msg.get("type") == "token_count" else None
+            seen = info.get("total_token_usage") if isinstance(info, dict) else None
+            if isinstance(seen, dict):
+                cumulative = (
+                    int(seen.get("input_tokens") or 0),
+                    int(seen.get("cached_input_tokens") or 0),
+                    int(seen.get("output_tokens") or 0),
+                )
+        counted = tuple(total) if any(total) else cumulative
+        if not counted:
+            return
+        counted_in, cached, produced = counted
+        cached = min(cached, counted_in)
+        self.count_spend(
+            fresh_in=counted_in - cached, cache_read=cached, out=produced
+        )

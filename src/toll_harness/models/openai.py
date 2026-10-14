@@ -195,6 +195,15 @@ class OpenAIModelAdapter(ModelAdapter):
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         total_tokens = getattr(usage, "total_tokens", 0) or (input_tokens + output_tokens)
+        cached_tokens = int(
+            getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+        )
+        # prompt_tokens includes the cached share; the cached share is priced lower.
+        self.count_spend(
+            fresh_in=max(0, input_tokens - cached_tokens),
+            cache_read=min(cached_tokens, input_tokens),
+            out=output_tokens,
+        )
         return ModelResponse(
             message=ModelMessage(role="assistant", content=normalized),
             text=text,

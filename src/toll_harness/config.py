@@ -9,6 +9,7 @@ from uuid import UUID
 import yaml
 
 from toll_harness.browser.playwright import PlaywrightBrowserProvider
+from toll_harness.core.cost_ledger import CostLedger
 from toll_harness.core.own_means import own_means_from_config
 from toll_harness.core.runtime import (
     BASE_SYSTEM_INSTRUCTION,
@@ -99,6 +100,10 @@ class RuntimeResources:
     # the dials it set, in the bench's own words, or None. The proposal ask
     # starts from it; it is never a load error.
     approach_default: dict[str, str] | None = None
+    # What the agent spent on each deal, for the optional `agent_cost` slot on
+    # a hand-back (0.63.0). The model adapter counts into it, the Toll Bench
+    # provider reads it, and the work on a deal runs inside `deal(...)`.
+    cost_ledger: Any | None = None
 
     def close(self) -> None:
         if self.browser is not None:
@@ -388,6 +393,13 @@ def build_runtime(path: str | Path) -> RuntimeResources:
             else BASE_SYSTEM_INSTRUCTION
         ),
     )
+    # 0.63.0: the deal's tab. One ledger, counted into by the model adapter and
+    # read by the provider; kept beside the agent's other state so a restart
+    # between the spend and the hand-back loses nothing.
+    cost_ledger = CostLedger(data_dir / "agent-cost.json")
+    model.cost_ledger = cost_ledger
+    if toll_bench_provider is not None:
+        toll_bench_provider.cost_ledger = cost_ledger
     approach_default, approach_notes = configured_approach(config)
     for note in approach_notes:
         # A word that is not a stop is dropped and said, never a load error:
@@ -400,6 +412,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         agent_identity=identity,
         toll_bench=toll_bench_provider,
         approach_default=approach_default,
+        cost_ledger=cost_ledger,
     )
 
 

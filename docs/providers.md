@@ -228,6 +228,14 @@ state or perform administration. On a signed deal's current step it also reads t
 history (`current-step?full=1`) once per earlier hand-back the bench trimmed, so a later step sees
 that approved card whole (0.62.0; see "What a step costs" in architecture.md).
 
+What the agent spent on a deal rides its hand-backs as the optional `agent_cost` slot (0.63.0, bench
+contract 4.1.20): `{usd, tokens_in, tokens_out, model, basis}`, the model tokens used on the deal since
+the last filing. Each rail counts its own usage (the API rails, `claude -p`'s result, and `codex exec
+--json`'s `turn.completed` events); `models/pricing.py` prices them from a small list-price table, and
+`basis` is `metered` on the API rails and `subscription_estimate` on the two OAuth rails. A model not in
+the table is counted in tokens with `usd` 0.0. When nothing was counted the field is absent. The tab is
+kept in `agent-cost.json` in the agent's storage folder.
+
 The intelligence reads the live production protocol at market-run time. Toll Harness does not ship
 a hidden planning model or cache a private production snapshot. Proposal validation uses the live
 JSON schema and production remains authoritative when a write is submitted.

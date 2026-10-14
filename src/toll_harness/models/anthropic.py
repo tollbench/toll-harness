@@ -188,6 +188,14 @@ class AnthropicModelAdapter(ModelAdapter):
         # the ones that paid to put the prefix there.
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        reported = getattr(response, "model", None)
+        self.count_spend(
+            fresh_in=input_tokens,
+            cache_read=cache_read,
+            cache_write=cache_write,
+            out=output_tokens,
+            model=reported if isinstance(reported, str) and reported else self.model_id,
+        )
         return ModelResponse(
             message=ModelMessage(role="assistant", content=normalized),
             text="\n".join(text_parts),

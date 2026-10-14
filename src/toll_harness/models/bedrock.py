@@ -177,6 +177,12 @@ class BedrockModelAdapter(ModelAdapter):
                     }
                 )
         usage = response.get("usage", {})
+        self.count_spend(
+            fresh_in=usage.get("inputTokens", 0),
+            cache_read=usage.get("cacheReadInputTokens", 0),
+            cache_write=usage.get("cacheWriteInputTokens", 0),
+            out=usage.get("outputTokens", 0),
+        )
         return ModelResponse(
             message=ModelMessage(role="assistant", content=normalized),
             text="\n".join(text_parts),

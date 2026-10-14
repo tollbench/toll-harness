@@ -108,6 +108,12 @@ NEED_TOOLS = "need_tools"
 # make sure the agents have full capabilites." Only machinery is limited.
 ACT_LIMIT = 4
 MATERIAL_LIMIT = 8
+# 0.64.0: what a sent-back hand-back carries into the tail (contract 2.43):
+# the person's own words in `reason` and what a legal revision has to be.
+WORK_SENT_BACK_KEYS = ("receipt_id", "title", "reason", "expected")
+# The cards the outcome door took off the last filing on this step
+# (`finds_refused`, `finds_taken`), kept by the provider, named here.
+LAST_FILING_KEY = "your_last_filing"
 
 
 def _kind(act: Any) -> str:
@@ -405,7 +411,9 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "link, a file -- is already yours. If "
         "`deliverable.fields` is named, the document carries a `cards` block: "
         "items are objects keyed by exactly those field names, at least "
-        "min_count of them, every value filled. If an act on this step reads "
+        "min_count of them, every value filled. `step.control.closes` says "
+        "what the person does with them, and `your_last_filing`, when there, "
+        "names the cards the door took off: replace them. If an act on this step reads "
         "sent or executed, quote its receipt in the document and send nothing "
         "yourself. If you asked someone outside and nothing can move until "
         "they answer, use wait_outside. If a fact only the person can give is "
@@ -935,6 +943,9 @@ def step_tail(
             "outcome_promise": step.get("outcome_promise"),
             "state": step.get("state"),
             "deliverable": step.get("deliverable"),
+            # 0.64.0: what the person does with the hand-back (contract
+            # 4.1.1), in the bench's own words on `closes`.
+            "control": step.get("control"),
         },
         "person_sees_control": payload.get("person_sees_control"),
         "open_ask_move": _fit(payload.get("open_ask_move"), 300),
@@ -968,8 +979,24 @@ def step_tail(
         "your_move": move.get("move"),
         "calls_you_may_make": list(move.get("calls") or []),
     }
+    # 0.64.0: who reads this step's list (a later who step whose `from_step`
+    # is this step, contract 4.1.9), what the person sent back here and why
+    # (the note behind "None of these fit"), and the cards the door took off
+    # the last filing on this step. Each rides only when it says something.
+    read_by = payload.get("read_by")
+    if isinstance(read_by, list) and read_by:
+        tail["read_by"] = [_fit(row, 600) for row in read_by[:3]]
+    sent_back = payload.get("work_sent_back")
+    if isinstance(sent_back, list) and sent_back:
+        tail["work_sent_back"] = [
+            {key: item.get(key) for key in WORK_SENT_BACK_KEYS if key in item}
+            for item in sent_back[-ACT_LIMIT:]
+            if isinstance(item, dict)
+        ]
+    if isinstance(payload.get(LAST_FILING_KEY), dict) and payload[LAST_FILING_KEY]:
+        tail[LAST_FILING_KEY] = payload[LAST_FILING_KEY]
     if isinstance(payload.get("submission"), dict):
-        tail["submission"] = payload["submission"]
+        tail["submission"] = submission_for_tail(payload["submission"])
     if obligation.get("kind") == "draft_sent_back" and obligation.get("sent_back_reason"):
         tail["sent_back_reason"] = obligation.get("sent_back_reason")
     # LAW A (Steven, 2026-09-09): what the person said and picked rides the
@@ -990,6 +1017,42 @@ def step_tail(
     if refused:
         tail["the_bench_refused"] = _fit(refused, 1500)
     return tail
+
+
+# What a form carries that is the harness's business, never the model's: where
+# it goes and how. A tail never carries these (0.63.1).
+_FORM_KEYS = ("actions", "worker_status")
+_HARNESS_KEYS = ("refresh",)
+
+
+def submission_for_tail(submission: dict[str, Any]) -> dict[str, Any]:
+    """The bench's `submission` block as the tail carries it (0.63.1): every
+    key but the forms (`actions`, `worker_status`) and the refresh address;
+    the forms' names stay, as `actions_as_tools`.
+
+    WHAT FORCED IT: lab agent DJ 4-Fun, 2026-10-12. Its lyrics step ask ran
+    to 13,303 characters against the 8,000 budget, and about 6,800 of them
+    were those forms: the very ones `step_tools` hands the model as its tools,
+    each whole (schema, result, template, field notes). The tail sent every
+    form a second time. Nothing the model reads is lost: a form this move may
+    use is a tool (`report_parked` is the worker-status form), a form it may
+    not use is no call it can make, and endpoints, methods and headers are the
+    harness's business. `step_tools` still reads the payload's own block,
+    untouched.
+    """
+    out = {key: value for key, value in submission.items()
+           if key not in _FORM_KEYS and key not in _HARNESS_KEYS}
+    names: list[str] = []
+    actions = submission.get("actions")
+    for action in actions if isinstance(actions, list) else []:
+        if isinstance(action, dict) and action.get("action"):
+            names.append(str(action["action"]))
+    status = submission.get("worker_status")
+    if isinstance(status, dict) and status.get("action"):
+        names.append(str(status["action"]))
+    if isinstance(actions, list) or names:
+        out["actions_as_tools"] = names
+    return out
 
 
 def _shed(tail: dict[str, Any]) -> bool:
@@ -1359,7 +1422,17 @@ class StepAsk:
             )
             if not (pulsed or {}).get("ok", True):
                 return pulsed
-        return self.provider.file_outcome(str(ids.get("target_id") or ""), outcome, key)
+        result = self.provider.file_outcome(str(ids.get("target_id") or ""), outcome, key)
+        if isinstance(result, dict):
+            for name in ("finds_refused", "finds_taken"):
+                rows = result.get(name)
+                if isinstance(rows, list) and rows:
+                    self.log.warning(
+                        "step %s: the outcome landed and the door took %d card(s) "
+                        "off as %s; the next ask on this step names them",
+                        ids.get("step_id"), len(rows), name,
+                    )
+        return result
 
     def _note(self, call: Any, result: dict[str, Any]) -> None:
         self.trail.append({

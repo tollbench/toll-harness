@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import hashlib
 import json
@@ -756,6 +757,22 @@ def command_run(arguments: argparse.Namespace) -> int:
             result = resources.runtime.start(arguments.goal, mode)
         _print(_result_payload(result))
         return 0 if result.status.value in {"completed", "waiting"} else 2
+    finally:
+        resources.close()
+
+
+def command_market_payout_sync(arguments: argparse.Namespace) -> int:
+    """`toll-harness market payout-sync CONFIG`: re-read Stripe for this agent
+    and print its payout status in plain words. Exit 0 when paid work is
+    possible, 3 when something is still needed (what, and the operator link,
+    are in the printed answer)."""
+    resources = build_runtime(arguments.config)
+    try:
+        if resources.toll_bench is None:
+            raise ValueError("This agent is not connected to Toll Bench")
+        result = resources.toll_bench.payout_sync()
+        _print(result)
+        return 0 if result.get("ready") else 3
     finally:
         resources.close()
 
@@ -2508,7 +2525,7 @@ def _process_market_attention(
     meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
     watch = _RefusalWatch(getattr(resources, "toll_bench", None))
     try:
-        with watch:
+        with watch, _cost_scope(resources, obligation, step_state):
             result = resources.runtime.start(goal, mode)
     finally:
         resources.runtime.enabled_tools = original_tools
@@ -3020,6 +3037,22 @@ def _step_ask_available(resources: Any) -> bool:
     )
 
 
+def _cost_scope(
+    resources: Any, obligation: dict[str, Any], step_state: Any = None
+) -> contextlib.AbstractContextManager[Any]:
+    """Model spend inside this block is the deal's (0.63.0), so the next
+    hand-back on it can say what the agent spent. An obligation with no deal
+    (a bid, a plan) and a harness with no ledger count nothing."""
+    ledger = getattr(resources, "cost_ledger", None)
+    if ledger is None:
+        return contextlib.nullcontext()
+    deal = (step_state.get("deal") if isinstance(step_state, dict) else None) or {}
+    return ledger.deal(
+        obligation.get("deal_id") or deal.get("id"),
+        obligation.get("target_id") or deal.get("target_goal_id"),
+    )
+
+
 def _the_step_ask(
     resources: Any,
     obligation: dict[str, Any],
@@ -3063,15 +3096,16 @@ def _the_step_ask(
     ask = StepAsk(resources.runtime.model, resources.toll_bench)
     ask.own_means = _own_means(resources)
     _hand_on_the_operator_instructions(resources, ask)
-    outcome = ask.run(
-        obligation,
-        _permitted_step_state(resources, step_state),
-        brief=brief,
-        act_kinds=_act_kinds_for_the_loop(resources),
-        changed=changed,
-        pulse_due=_deal_step_pulse_due(step_state),
-        refused=_standing_refusal(step_id, fingerprint),
-    )
+    with _cost_scope(resources, obligation, step_state):
+        outcome = ask.run(
+            obligation,
+            _permitted_step_state(resources, step_state),
+            brief=brief,
+            act_kinds=_act_kinds_for_the_loop(resources),
+            changed=changed,
+            pulse_due=_deal_step_pulse_due(step_state),
+            refused=_standing_refusal(step_id, fingerprint),
+        )
     if outcome.get("road") == ROAD_AGENTIC:
         _LOGGER.info("step %s: %s; the old road", number, outcome.get("why"))
         return None
@@ -4116,6 +4150,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connect.add_argument("config")
     connect.set_defaults(handler=command_market_connect)
+    payout_sync = market_subcommands.add_parser(
+        "payout-sync",
+        help="Re-read Stripe and print payout status in plain words (exit 3 if not ready)",
+    )
+    payout_sync.add_argument("config")
+    payout_sync.set_defaults(handler=command_market_payout_sync)
     watch = market_subcommands.add_parser(
         "watch", help="Process obligations and scan bounded sets of open Toll Bench wants"
     )

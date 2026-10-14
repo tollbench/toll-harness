@@ -278,24 +278,43 @@ BLANKS_INSTRUCTION = (
 # `before` out of range). Logged with its reason and never retried blindly.
 INSERT_NOT_POSSIBLE = "insert_not_possible"
 
-# The who step, as the agent writes it: three fields and no more. Everything
-# else on it -- the title, the person's own contact book, the minutes, the
+# The who step, as the agent writes it: three fields, and the slot that names
+# its filler. Everything else on it -- the title, the book, the minutes, the
 # cost -- is the bench's, and a do_line or a proof written here is ignored.
+#
+# THE WHO HOLE NAMES ITS FILLER (0.64.0, bench contract 4.1.9 / 4.1.12).
+# `from_step` on the who step says where the people come from: an earlier
+# step's number (its hand-back), "contact_book" (the person's own list, the
+# default) or "found_by_research" (the bench stamps the research step in the
+# who step's place, the agent hands back the finds as cards, the person picks).
+# WHAT FORCED SAYING IT: this sentence said the opposite ("never plan a step
+# to find, get or list the people") for a month after the bench opened the
+# slot. Ali (prod, 2026-10-12) planned "Pick 1 from your Contact book" on "I
+# want Toll Bench featured in an AI newsletter or podcast", a want whose
+# person has no list of editors; Kai's bookstores walk (2026-10-02) was the
+# same hole. The form carries the word as written; the door judges it.
 WHO_VERB = "who"
 DEFAULT_WHO_ODDS = 0.5
+# The three fillers, spelled the bench's way. Said to the model, never checked.
+WHO_FROM_CONTACT_BOOK = "contact_book"
+WHO_FROM_RESEARCH = "found_by_research"
 
 WHO_STEP_SENTENCE = (
-    "WHO IT GOES TO IS A STEP, AND THE STEP IS YOURS TO PUT IN (rule 238, "
-    "amended 2026-09-12). In front of the FIRST step that reaches a person -- "
-    "emails, meeting, calls, or any send whose recipient is the person's to "
-    "choose -- write one step of its own: "
-    '{"verb": "who", "who": "person", "declared_odds": <your number>}. '
-    "The bench writes everything else on it: its title, the person's own "
-    "contact book, its minutes and its cost. ONE who step per plan -- every "
-    "send below it reads the same picks -- and never plan a step to find, get "
-    "or list the people: say what you DO with the ones they pick. A plan that "
-    "reaches somebody with no who step above it is refused, and the step that "
-    "puts one in is yours to send.\n"
+    "WHO IT GOES TO IS A STEP, AND THE STEP IS YOURS TO PUT IN (rule 238). In "
+    "front of the FIRST step that reaches a person (an email, a meeting, a "
+    "call, any send whose recipient the person chooses) write one step of its "
+    'own: {"verb": "who", "who": "person", "declared_odds": <your number>}. '
+    "Its `from_step` names where the people come from: an earlier step's "
+    'number, "contact_book" (the person\'s own list, the default), or '
+    '"found_by_research" when they are people the person does not have yet '
+    "(reporters, editors, buyers, hosts, anyone the want asks you to find): "
+    '{"verb": "who", "who": "person", "declared_odds": <your number>, '
+    '"from_step": "found_by_research"}. The bench then stamps the research '
+    "step there; your job on it is the finds, as cards (name, role, email, "
+    "source_url), and the person picks from them. The bench writes every "
+    "other word. ONE who step per plan; every send below it reads the same "
+    "picks. Do not plan a separate find step: put the word on the who step. "
+    "A plan that reaches somebody with no who step above it is refused.\n"
 )
 
 WHOLE_STEP_FIX_INSTRUCTION = (
@@ -2836,22 +2855,20 @@ FORM_INSTRUCTION = (
     "asked of every step you write -- and `and_for_the_plan` is what the plan "
     "itself asks. A question that lists `choices` is a PICK: answer with one "
     "of those words exactly as it is written. A question that names a number "
-    "of characters is a CAP: stay within it, and write short rather than "
-    "padding to fill it.\n"
-    "The plan itself needs `overview` (the scope of work in complete "
-    "sentences: the work, the deliverables, the boundaries, what you need "
-    "from the person) and `odds` (YOUR chance of achieving the whole goal "
+    "of characters is a CAP: stay within it.\n"
+    "The plan itself needs `overview` (its blank in `and_for_the_plan` says "
+    "what it is) and `odds` (YOUR chance of achieving the whole goal "
     "within `span_days`, a number greater than 0 and less than 1). Each "
     "step's `declared_odds` is that same chance judged once the step is done, "
     "so the line starts at or above `odds` and never falls from one step to "
     "the next (`forecast_context` is the bench's own rule for the numbers).\n"
-    "`you_may_also_use` are the extra picks a step MAY carry. Leave out what "
-    "this plan does not need; a step that carries none is a normal step.\n"
+    "`you_may_also_use` are extra picks a step MAY carry; leave out what "
+    "this plan does not need.\n"
     + NO_TOOL_SENTENCE
     + "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
     "-- so add entries to the blank form or drop them freely. You never write "
-    "a connect row, a grant request, a block title, a room list, a schedule "
-    "row or a pointer: the bench writes every one of those from your picks.\n"
+    "a connect row, a grant request, a title, a schedule or a pointer: the "
+    "bench writes those from your picks.\n"
     + WHO_STEP_SENTENCE
     + 'Answer: {"overview": "...", "odds": 0.35, "span_days": 14, "steps": '
     '[{"verb": "finds", "do_line": "...", "hand_over_line": "...", '

@@ -290,6 +290,21 @@ class BookOfHousesApiClient:
     def ack_reachability_ping(self) -> dict[str, Any]:
         return self._request("POST", "/api/bench/me/pings/ack", payload={}, authenticated=True)
 
+    def payout_sync(self, idempotency_key: str) -> dict[str, Any]:
+        # Re-read Stripe for this agent's payout account (bench, since 2.13).
+        return self._request(
+            "POST",
+            "/api/bench/payout-account/sync",
+            payload={},
+            authenticated=True,
+            idempotency_key=idempotency_key,
+        )
+
+    def payout_status(self) -> dict[str, Any]:
+        # Payout status in plain words (bench, 2026-10-12): {ready,
+        # payout_account_ready, operator_verified, still_needed, ...}.
+        return self._request("GET", "/api/bench/me/payout-account", authenticated=True)
+
     def attention(self, *, wait: int = 0) -> dict[str, Any]:
         return self._request(
             "GET",

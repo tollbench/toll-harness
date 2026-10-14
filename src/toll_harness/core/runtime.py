@@ -76,17 +76,20 @@ heads and no fifth -- {"$from": "person.<question id>"}, {"$from": "<a run ABOVE
 "item[.field]"} inside a run that declares `each`. `$from` is the whole argument or none of it. An
 argument from anywhere else, a run reading a run below it, or a tool whose row is not on its step
 is refused REJ-41, and a recipient is never a typed address.
-WHO IT GOES TO IS A STEP, AND YOU PUT IT IN (rule 238, corrected 2026-09-11, amended
-2026-09-12). The contact book is not one of your questions and never goes on a proposal. It is a
-STEP OF YOUR OWN -- "Who should this go to?", the person's own contact book on it -- in front of
-your first step that reaches somebody: on the plan form a step {"verb": "who", "who": "person",
-"declared_odds": <your number>}, on a whole plan filed here a PROVIDE step holding one
-contact_picker block, copied WHOLE out of block_templates["who"]. The bench writes that step's
-title and mechanics, never the step itself, and each pick arrives as a reference for
-acts[].contact_ref. ONE who step per plan: every send below it reads the same picks. Leave
-contact_ref empty, never put an address in the plan, and never plan a step to find or list the
-people they pick: say what you DO with them. A plan that reaches somebody with no who step above
-it is refused REJ-45 who_step_missing, and the refusal names the step to add.
+WHO IT GOES TO IS A STEP, AND YOU PUT IT IN (rule 238). The contact book is not one of your
+questions and never goes on a proposal. It is a STEP OF YOUR OWN in front of your first step that
+reaches somebody: on the plan form a step {"verb": "who", "who": "person", "declared_odds": <your
+number>}, on a whole plan filed here a PROVIDE step holding one contact_picker block, copied WHOLE
+out of block_templates["who"]. On the plan form its `from_step` names where the people come
+from: an earlier step's number, "contact_book" (the person's own list, the default), or
+"found_by_research" when they are people the person does not have yet (reporters, editors,
+buyers, hosts, anyone the want asks you to find). On that word the bench stamps the research
+step there, and you hand back the finds as cards (name, role, email, source_url) for the person
+to pick from. The bench writes the who step's title and mechanics, and each pick arrives as a
+reference for acts[].contact_ref. ONE who step per plan: every send below it reads the same
+picks. Leave contact_ref empty, never put an address in the plan, and do not plan a separate
+find step: put the word on the who step. A plan that reaches somebody with no who step above it
+is refused REJ-45 who_step_missing, and the refusal names the step to add.
 WHEN THE PERSON HANDS THE QUESTION BACK (rule 240): they may answer that step with
 {"research": true, "brief": "..."} instead of picking anybody, and the brief carries it as
 `contact_research` {question_id, brief} -- always present, null when they picked or said nothing.

@@ -12,6 +12,7 @@ from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, draft, programs, row_slots
 from toll_harness.toll_bench.step import (
     EARLIER_STEPS_KEY,
+    LAST_FILING_KEY,
     bench_trimmed,
     render_earlier_steps,
 )
@@ -233,6 +234,20 @@ STEP_THREAD_MESSAGE_LIMIT = 20
 WHOLE_HAND_BACK_RETRY_SECONDS = 600.0
 WHOLE_HAND_BACK_MEMORY = 512
 STEP_ACT_LIMIT = 12
+# 0.64.0: the two lists the outcome 201 carries about the cards it took off a
+# list a who step reads (contract 4.1.12; `finds_taken` 2026-10-10). Always
+# present on the bench's answer, `[]` when nothing came off.
+FINDS_KEYS: tuple[str, ...] = ("finds_refused", "finds_taken")
+# They ride the next current-step read of that step under LAST_FILING_KEY
+# (step.py's name, so the tail and the payload say the same word), with one
+# sentence, so the old road reads them the way the step ask does.
+FINDS_MEMORY = 256
+LAST_FILING_NOTE = (
+    "The outcome door took these cards off your last filing on this step "
+    "(finds_refused: a made-up or reserved address; finds_taken: a person "
+    "another of this person's wants already has). The rest stood. Replace "
+    "them with real finds; never file them again."
+)
 RELEASED_MATERIAL_LIMIT = 20
 # A door answer names every problem at once; past this many the plan is not
 # nearly right and the rest is noise. The count is always the true count.
@@ -297,7 +312,9 @@ HAR_FORMAT_SLUGS = frozenset(
         # RULE 238 CORRECTED (2026-09-11), AMENDED (2026-09-12). A STEP
         # format, and never a question: who it goes to is a step of the plan,
         # the AGENT puts it in, the bench writes the person's own contact book
-        # onto it, and each pick arrives as a reference for
+        # onto it (or the list its `from_step` names: an earlier step's, or
+        # the finds of the research step "found_by_research" stamps, 0.64.0),
+        # and each pick arrives as a reference for
         # `acts[].contact_ref`. It stays a legal HAR slug here
         # because the step carries it; `finalist_question_problems` refuses
         # it on a PROPOSAL in the door's own words.
@@ -546,6 +563,14 @@ class BookOfHousesTollBenchProvider:
         self._whole_misses: dict[str, float] = {}
         # The last earlier_steps rows per deal, whole, for a whole re-render.
         self._earlier_rows: dict[str, list[Any]] = {}
+        # 0.64.0. The cards the outcome door took off a filing on a step whose
+        # list a who step's book reads (`finds_refused`, `finds_taken` on the
+        # 201, contract 4.1.12), by step id, so the next ask on that step can
+        # replace them rather than file them again.
+        self._last_filing_finds: dict[str, dict[str, list[Any]]] = {}
+        # 0.63.0. What the agent spent on the current deal, set by whoever
+        # builds the runtime. None sends no `agent_cost`, today's behavior.
+        self.cost_ledger: Any | None = None
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
@@ -585,6 +610,31 @@ class BookOfHousesTollBenchProvider:
 
     def status(self) -> dict[str, Any]:
         return self.api.me()
+
+    def payout_sync(self) -> dict[str, Any]:
+        """Re-read Stripe, then the plain-words payout status (0.64.0).
+
+        `ready` is true when paid work is possible (a verified operator and a
+        ready payout account); `still_needed` says what is missing in plain
+        words; `operator_registration_url` is the link for the operator. A
+        bench without the status door (before 2026-10-12) answers 404 there,
+        and the sync body is returned as it is, so nothing older breaks.
+        """
+        synced = self.api.payout_sync(f"toll-harness-payout-sync-{int(time.time())}")
+        try:
+            return self.api.payout_status()
+        except BookOfHousesApiError as error:
+            if error.status != 404:
+                raise
+        payout = synced.get("payout") if isinstance(synced, dict) else None
+        payout = payout if isinstance(payout, dict) else {}
+        return {
+            "ok": True,
+            "ready": payout.get("readiness") == "ready",
+            "readiness": payout.get("readiness"),
+            "requirements": payout.get("requirements") or [],
+            "still_needed": payout.get("requirements") or [],
+        }
 
     REACHABLE_CACHE_SECONDS = 120.0
 
@@ -1248,7 +1298,8 @@ class BookOfHousesTollBenchProvider:
                 "names the step. Put the person's who step in front of it -- a "
                 "PROVIDE step holding one `contact_picker` block, copied whole "
                 "out of the brief's `block_templates[\"who\"]` -- and file "
-                "once more. Do not plan a step to find or list the people."
+                "once more. Do not plan a separate find step: `fix` says where "
+                "the people come from."
             ),
         }
 
@@ -3327,6 +3378,37 @@ class BookOfHousesTollBenchProvider:
             payload["current_step"]["file_receipts"] = list(known)
         if payload["current_step"].get("deliverable") is None:
             payload["current_step"]["deliverable"] = result.get("deliverable")
+        # 0.64.0: the hand-back's readers, beside the step. `control` is the
+        # person's ONE control on this step (contract 4.1.1), {kind, shape,
+        # count, binds, own_list, quiet_door, closes}, on current_step and the
+        # root alike; `closes` is the bench's sentence for what the person
+        # does with the hand-back, and on the research step a
+        # found_by_research who step stamps it is pick_people over the
+        # agent's own cards. This whitelist dropped it, so the model never
+        # read who picks from its list. `read_by` is the later step whose
+        # control is built from this step's list (a who step whose
+        # `from_step` is this step, contract 4.1.9); `work_sent_back` is what
+        # the person sent back on this step and why, with `expected`
+        # (contract 2.43) -- the note behind "None of these fit". Absent on an
+        # older bench, and then absent here.
+        control = step.get("control")
+        if not isinstance(control, dict):
+            control = result.get("control")
+        if isinstance(control, dict):
+            payload["current_step"]["control"] = control
+        if isinstance(result.get("read_by"), list):
+            payload["read_by"] = list(result["read_by"])
+        if isinstance(result.get("work_sent_back"), list):
+            payload["work_sent_back"] = list(result["work_sent_back"])
+            payload["work_sent_back_count"] = result.get(
+                "work_sent_back_count", len(result["work_sent_back"])
+            )
+        finds = self._last_filing_finds.get(str(step.get("id") or ""))
+        if finds:
+            payload[LAST_FILING_KEY] = {
+                **{key: list(rows) for key, rows in finds.items()},
+                "note": LAST_FILING_NOTE,
+            }
         self._remember_platform_blocks(step.get("id"), payload)
         self._remember_deliverable(step.get("id"), payload)
         self._remember_unanswered(
@@ -3439,6 +3521,7 @@ class BookOfHousesTollBenchProvider:
             ("acts", STEP_ACT_LIMIT),
             ("declared_acts", STEP_ACT_LIMIT),
             ("drafts_sent_back", STEP_ACT_LIMIT),
+            ("work_sent_back", STEP_ACT_LIMIT),
             ("released_materials", RELEASED_MATERIAL_LIMIT),
         ):
             rows = payload.get(key)
@@ -3926,7 +4009,9 @@ class BookOfHousesTollBenchProvider:
         if blocked:
             return blocked
         try:
-            return self.api.file_outcome(target_id, outcome, idempotency_key)
+            result = self._post_the_outcome(target_id, outcome, idempotency_key)
+            self._remember_finds(step_ref, result)
+            return result
         except BookOfHousesApiError as error:
             if error.code not in FILE_DOOR_REFUSALS:
                 raise
@@ -3947,6 +4032,75 @@ class BookOfHousesTollBenchProvider:
                     refusal[key] = body[key]
             refusal.setdefault("detail", error.body)
             return refusal
+
+    def _post_the_outcome(
+        self, target_id: str, outcome: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """The outcome door, carrying what the agent spent on this deal since
+        its last filing as the optional `agent_cost` slot (contract 4.1.20,
+        0.63.0). No ledger, nothing counted, or a ledger on another want sends
+        the outcome exactly as before: the field is absent, never zero.
+
+        The slot is a SLOT, so it never costs the person a filing: a 422
+        `agent_cost_slot` files again without it and keeps the tab for the next
+        hand-back. A tab is cleared only when the bench recorded it (the 201
+        echoes `agent_cost`; null means this bench could not record it yet).
+        """
+        ledger = self.cost_ledger
+        slot = ledger.slot(target_id) if ledger is not None else None
+        if slot is None:
+            return self.api.file_outcome(target_id, outcome, idempotency_key)
+        try:
+            result = self.api.file_outcome(
+                target_id, {**outcome, "agent_cost": slot}, idempotency_key
+            )
+        except BookOfHousesApiError as error:
+            if error.code != "agent_cost_slot":
+                raise
+            _LOGGER.warning(
+                "the bench refused agent_cost (%s); filing without it", error.message
+            )
+            return self.api.file_outcome(target_id, outcome, idempotency_key)
+        recorded = not (
+            isinstance(result, dict) and "agent_cost" in result and result["agent_cost"] is None
+        )
+        if recorded:
+            ledger.paid()
+        else:
+            _LOGGER.info("the bench filed the outcome but did not record agent_cost yet")
+        return result
+
+    def _remember_finds(self, step_ref: str | None, result: Any) -> None:
+        """Keep what the outcome 201 says came off this step's list (0.64.0).
+
+        On a step whose list a who step's book reads -- the research step a
+        `found_by_research` who step stamps, or a step a `from_step: N` reads
+        -- the door takes a made-up address off the list (`finds_refused`)
+        and marks a person another of this person's wants already has
+        (`finds_taken`), and the real finds stand (contract 4.1.12). The
+        filing landed, so nothing is refused; the next read of the same step
+        carries both lists under `your_last_filing` so a card can be
+        replaced rather than filed again. A filing with nothing off clears it.
+        """
+        step_id = str(step_ref or "").strip()
+        if not step_id or not isinstance(result, dict):
+            return
+        finds = {
+            key: list(result[key])
+            for key in FINDS_KEYS
+            if isinstance(result.get(key), list) and result[key]
+        }
+        self._last_filing_finds.pop(step_id, None)
+        if not finds:
+            return
+        self._last_filing_finds[step_id] = finds
+        while len(self._last_filing_finds) > FINDS_MEMORY:
+            self._last_filing_finds.pop(next(iter(self._last_filing_finds)))
+        _LOGGER.info(
+            "outcome on step %s filed; the door took off %s",
+            step_id,
+            ", ".join(f"{len(rows)} {key}" for key, rows in finds.items()),
+        )
 
     def _file_step_owes_a_file(
         self, step_ref: str | None, outcome: dict[str, Any]

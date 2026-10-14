@@ -1183,6 +1183,14 @@ def _align_grant_steps(
 # copied whole. A plan that reaches somebody without one is refused REJ-45.
 # The agent still never sees a picker on the PROPOSAL form (REJ-15).
 #
+# 0.64.0 (bench contracts 4.1.9 and 4.1.12): the who step's `from_step` names
+# where the people come from -- an earlier step's number, "contact_book" (the
+# default) or "found_by_research", on which the bench stamps the research step
+# in the who step's place and the agent hands the finds back as cards. The
+# sentence below said "do not plan a step to find or list the people" and
+# stopped there, so an agent on a want whose person had nobody to pick
+# (Ali's AI-newsletter plan on prod, 2026-10-12) planned a Contact book pick.
+#
 # WHAT FORCED THE CORRECTION. One fleet unit filed a plan whose step 2 was
 # "finds two friends from the contact list provided by the person" -- a step
 # whose whole work was to hand back the person's own pick. Every filing of it
@@ -1217,17 +1225,20 @@ PERSON_LANE = "person"
 # The door's own words when it refuses a plan for not saying who (REJ-40), and
 # the words the mirror says about a picker on a proposal (REJ-15).
 CONTACT_STEP_SENTENCE = (
-    "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN (amended 2026-09-12). In "
-    "front of your first step that reaches somebody goes a step of its own -- "
-    "\"Who should this go to?\", the person's own contact book on it: on the "
-    "plan form a step {\"verb\": \"who\", \"who\": \"person\", "
+    "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN (rule 238). In front of your "
+    "first step that reaches somebody goes a step of its own: on the plan "
+    "form a step {\"verb\": \"who\", \"who\": \"person\", "
     "\"declared_odds\": <your number>}, on a whole plan filed here a PROVIDE "
     "step holding one `contact_picker` block, copied whole out of "
-    "block_templates[\"who\"]. The bench writes its title and its mechanics, "
-    "never the step itself, and each pick arrives as a reference for "
-    "acts[].contact_ref. ONE who step per plan. Leave `contact_ref` empty, "
-    "never put an address in the plan, and do not plan a step to find or list "
-    "the people: say what you DO with the people they pick."
+    "block_templates[\"who\"]. On the plan form its `from_step` names where "
+    "the people come from: an earlier step's number, \"contact_book\" (the "
+    "person's own list, the default) or \"found_by_research\" for people the "
+    "person does not have yet, where the bench stamps the research step and "
+    "you hand back the finds as cards (name, role, email, source_url). The "
+    "bench writes the step's title and mechanics, and each pick arrives as a "
+    "reference for acts[].contact_ref. ONE who step per plan. Leave "
+    "`contact_ref` empty, never put an address in the plan, and do not plan a "
+    "separate find step: put the word on the who step."
 )
 CONTACT_QUESTION_REFUSED = (
     "the contact book is not one of your questions: the person picks who this "

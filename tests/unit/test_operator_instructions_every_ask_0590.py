@@ -190,9 +190,11 @@ def test_the_persons_messages_reasons_and_materials_are_never_shed(caplog):
         drafts_sent_back=[{"approval_id": "ap-1",
                            "sent_back_reason": "Warmer, and say her name in the chorus."}],
         released_materials=[{"name": "photo-of-us.jpg", "url": "https://example.org/p.jpg"}],
+        # 0.63.1 took the forms out of the tail, so the machinery here is
+        # larger to keep the tail over the budget and the shed in play.
         acts=[{"act_id": f"a{i}", "kind": "email", "state": "sent", "subject": f"S{i}",
-               "words": "machine words " * 50} for i in range(4)],
-        inbound_replies=[{"id": f"r{i}", "body": "out of office " * 50} for i in range(2)],
+               "words": "machine words " * 57} for i in range(4)],
+        inbound_replies=[{"id": f"r{i}", "body": "out of office " * 57} for i in range(2)],
     )
 
     with caplog.at_level(logging.WARNING, logger="toll_harness.step"):

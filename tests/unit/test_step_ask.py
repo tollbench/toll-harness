@@ -780,4 +780,8 @@ def test_provider_preserves_server_contract_and_review_round():
     assert result["submission"] == packet["submission"]
     assert result["current_step"]["rounds_used"] == 2
     tail = step_tail(result, OBLIGATION, the_move(result, OBLIGATION), [])
-    assert tail["submission"] == packet["submission"]
+    # 0.63.1: the forms ride as tools, so the tail keeps their names only.
+    kept = {k: v for k, v in packet["submission"].items()
+            if k not in ("actions", "worker_status")}
+    assert tail["submission"] == dict(kept, actions_as_tools=["propose_act",
+                                                              "report_worker_status"])
