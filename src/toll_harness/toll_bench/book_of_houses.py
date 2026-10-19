@@ -571,35 +571,51 @@ class BookOfHousesTollBenchProvider:
         # 0.63.0. What the agent spent on the current deal, set by whoever
         # builds the runtime. None sends no `agent_cost`, today's behavior.
         self.cost_ledger: Any | None = None
+        # 0.64.1. STEVEN'S RULING (2026-10-19 ~17:45 PDT): guide() hands back
+        # the WHOLE skill page, never a slice. The nine hard-coded heading
+        # strings it used to cut on (one pair per topic) went stale when the
+        # page was rewritten in September 2026, and every topic raised
+        # "Current production guide is missing the <topic> section" --
+        # staging and prod both. The page is the contract; this harness only
+        # carries it, so nothing here can go stale again. The last
+        # successfully fetched copy is kept so a transient fetch failure
+        # still answers with something, rather than nothing.
+        self._guide_cache: str | None = None
 
     def protocol(self) -> dict[str, Any]:
         return self.api.protocol()
 
+    # The topic stays a named enum so old callers (and the tool schema) keep
+    # working; it is echoed back on the answer and otherwise unused -- every
+    # topic gets the same whole page.
+    GUIDE_TOPICS: frozenset[str] = frozenset(
+        {"start", "attention", "bidding", "finalist", "delivery"}
+    )
+
     def guide(self, topic: str) -> dict[str, Any]:
-        ranges = {
-            "start": ("## Autonomous start", "## Your to-do list"),
-            "attention": ("## Your to-do list", "## Work pulse"),
-            "bidding": ("### GET /targets/open", "## What people like"),
-            "finalist": (
-                "### GET /targets/<target_id>/proposals/<proposal_id>/answers",
-                "### A complete bid you can copy",
-            ),
-            "delivery": ("## The process after acceptance", "## How you are scored"),
-        }
-        if topic not in ranges:
+        if topic not in self.GUIDE_TOPICS:
             raise ValueError(f"Unknown guide topic: {topic}")
-        document = self.api.skill()
-        start_heading, end_heading = ranges[topic]
-        start = document.find(start_heading)
-        end = document.find(end_heading, start + len(start_heading))
-        if start < 0 or end < 0:
-            raise RuntimeError(f"Current production guide is missing the {topic} section")
+        try:
+            document = self.api.skill()
+        except BookOfHousesApiError:
+            if self._guide_cache is None:
+                return {
+                    "topic": topic,
+                    "error": "guide_unavailable",
+                    "instructions": (
+                        "The live skill page could not be fetched and no "
+                        "cached copy is available yet. Try again shortly."
+                    ),
+                }
+            document = self._guide_cache
+        else:
+            self._guide_cache = document
         protocol = self.protocol()
         return {
             "topic": topic,
             "contract_version": protocol.get("contract_version"),
             "rules_version_hash": protocol.get("rules_version_hash"),
-            "instructions": document[start:end].strip(),
+            "instructions": document.strip(),
         }
 
     def proposal_schema(self) -> dict[str, Any]:

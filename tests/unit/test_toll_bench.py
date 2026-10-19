@@ -596,13 +596,63 @@ def test_the_local_mirror_no_longer_buries_an_informed_plan(caplog):
     assert "Local mirror has problems" in caplog.text
 
 
-def test_guide_returns_only_the_requested_live_section():
+def test_guide_returns_the_whole_live_skill_page():
+    """STEVEN'S RULING (2026-10-19): no slicing, nothing in the harness that
+    can go stale -- the skill page is the contract, the harness just carries
+    it. Every topic gets the same whole document.
+    """
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    for topic in ("start", "attention", "bidding", "finalist", "delivery"):
+        result = provider.guide(topic)
+        assert result["topic"] == topic
+        assert result["contract_version"] == "current"
+        assert result["instructions"] == api.skill().strip()
+
+
+def test_guide_rejects_an_unknown_topic():
     provider = BookOfHousesTollBenchProvider(FakeApi())
 
-    result = provider.guide("start")
+    import pytest
 
-    assert result["contract_version"] == "current"
-    assert result["instructions"] == "## Autonomous start\nStart here."
+    with pytest.raises(ValueError):
+        provider.guide("not-a-real-topic")
+
+
+def test_guide_falls_back_to_the_last_fetched_copy_on_a_transient_failure():
+    """A fetch failure after a successful read answers with the cached page,
+    not an exception -- the model still gets something to work from."""
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    first = provider.guide("start")
+
+    def _boom():
+        raise BookOfHousesApiError(503, "unavailable", "down for a moment")
+
+    api.skill = _boom
+    second = provider.guide("bidding")
+
+    assert second["instructions"] == first["instructions"]
+    assert "error" not in second
+
+
+def test_guide_answers_plainly_when_nothing_is_cached_yet():
+    """No prior successful fetch and the live page is unreachable: a short,
+    non-raising result, never an exception swallowing the topic."""
+
+    class UnreachableApi(FakeApi):
+        def skill(self):
+            raise BookOfHousesApiError(503, "unavailable", "down for a moment")
+
+    provider = BookOfHousesTollBenchProvider(UnreachableApi())
+
+    result = provider.guide("delivery")
+
+    assert result["topic"] == "delivery"
+    assert result["error"] == "guide_unavailable"
+    assert result["instructions"]
 
 
 def test_informed_plan_cannot_change_sealed_terms():

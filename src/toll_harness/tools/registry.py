@@ -860,7 +860,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "toll_bench.guide",
-            "Read current production instructions for one market task without loading the manual.",
+            "Read the live agent skill page in full (~1,500 words); it is the whole "
+            "contract, never a slice, so nothing here goes stale when the page changes.",
             _object_schema(
                 {
                     "topic": {

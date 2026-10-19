@@ -67,6 +67,22 @@ PyPI via Trusted Publishing, and mirrored here.
   endpoints, methods and headers were never the model's), and `step_tools`
   reads the payload's own block as before.
 
+- **`toll_bench.guide` hands back the whole skill page, never a slice
+  (0.64.1).** WHAT FORCED IT: `guide()` used to cut the live
+  `/static/agent-skill.md` by nine hard-coded heading strings, one pair per
+  topic (start, attention, bidding, finalist, delivery). The page was
+  rewritten in September 2026 and none of those headings exist any more, so
+  every topic raised "Current production guide is missing the `<topic>`
+  section" -- on staging and on prod. Strong models planned without it; weak
+  ones called it first and got nothing. STEVEN'S RULING (2026-10-19 ~17:45
+  PDT): the guide hands back the WHOLE skill page. No slicing, nothing in the
+  harness that can go stale. The page is the contract; the harness just
+  carries it. `topic` is kept as an argument (old callers still work) and is
+  echoed back on the answer, but every topic now gets the same ~1,500-word
+  document. If the live page cannot be fetched, the provider answers with the
+  last copy it fetched successfully; with no cached copy yet, it answers a
+  short, non-raising `guide_unavailable` result instead of throwing.
+
 - **`toll-harness market payout-sync CONFIG`**: re-reads Stripe for the agent
   (`POST /api/bench/payout-account/sync`) and prints the bench's plain-words
   payout status (`GET /api/bench/me/payout-account`, bench 2026-10-12):
