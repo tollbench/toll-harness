@@ -97,6 +97,31 @@ LIVE_ACT_STATES: frozenset[str] = frozenset(
 # be read. Today the registry publishes a `declaration` for exactly one.
 BLOCK_KINDS_FALLBACK: frozenset[str] = frozenset({"meeting"})
 
+# 0.64.2: a block act in one of these states has RUN. What is left on the step
+# is the step's question, not the act's, and the bench answers it on
+# `submission` (contract 4.1.26, "the piece follows").
+DONE_BLOCK_ACT_STATES: frozenset[str] = frozenset({"executed", "sent"})
+# The forms that hand the step back. When the bench offers one on the agent's
+# own turn, the outcome is the agent's to file, whatever block ran before it.
+HAND_BACK_ACTIONS: frozenset[str] = frozenset({"submit_step_outcome", "deliver_file"})
+
+
+def bench_hands_back_to_agent(payload: Any) -> bool:
+    """True when the bench's own `submission` on this current_step read says
+    the step is the AGENT'S to hand back: its turn is `agent` and it offers
+    the outcome door (`submit_step_outcome`, or `deliver_file` first on a
+    file step). An older bench with no `submission` answers False, and rule
+    229 reads as it always did."""
+    submission = payload.get("submission") if isinstance(payload, dict) else None
+    if not isinstance(submission, dict):
+        return False
+    if str(submission.get("turn") or "").strip().lower() != "agent":
+        return False
+    return any(
+        isinstance(action, dict) and action.get("action") in HAND_BACK_ACTIONS
+        for action in submission.get("actions") or []
+    )
+
 # THE OUTSIDE ACT (Steven, 2026-09-05) -- WHAT THE PLATFORM HAS NO HANDS FOR.
 # The bounds of the evidence door, checked here so a refusal the harness can
 # see costs no call. The summary is the whole receipt the person reads.
@@ -3590,7 +3615,9 @@ class BookOfHousesTollBenchProvider:
         outcome in words that are not its own. A declared kind is the
         platform's while an act of that kind is standing or already executed;
         a failed or denied one is the work coming back (rule 225) and the step
-        is the agent's again.
+        is the agent's again. An executed one is the agent's again too when
+        the bench's `submission` hands the outcome to the agent on its turn
+        (0.64.2, contract 4.1.26: the piece the block promised is still owed).
         """
         step_id = str(step_id or "")
         if not step_id:
@@ -3610,10 +3637,28 @@ class BookOfHousesTollBenchProvider:
             if isinstance(entry, dict)
         }
         block_kinds = self._block_kinds()
+        # 0.64.2: THE PIECE FOLLOWS (bench contract 4.1.26, corrected
+        # 2026-10-18). WHAT FORCED IT: prod heat 2026-10-20 02:15Z, lab agents
+        # Opus (deal a90bd449) and Fable (deal 3dc988f9). Step 3 of each was a
+        # `calls` block (platform.draft) on an APPROVE step promising cards
+        # (subject, body). The platform ran the draft at 02:27Z and the act
+        # read `executed`, but the cards were still owed, so the bench kept
+        # the step the agent's: turn `agent`, "Hand in the work", submission
+        # recommending submit_step_outcome with "The step stays yours until
+        # it lands". This memo still read the executed block as the
+        # platform's (rule 229), so every cycle logged "the platform's move
+        # (calls block executed (rule 229)); no model call" and the draft
+        # never came. A block act that has RUN no longer holds the step when
+        # the bench itself hands the outcome to the agent on its turn; a
+        # STANDING block act (pending, held, approved) is still the
+        # platform's, so a second copy of it is still never filed.
+        hands_back = bench_hands_back_to_agent(payload)
         owned = {
             kind: state
             for kind, state in live.items()
-            if kind in block_kinds and (not declared or kind in declared)
+            if kind in block_kinds
+            and (not declared or kind in declared)
+            and not (hands_back and state in DONE_BLOCK_ACT_STATES)
         }
         if owned:
             self._platform_blocks[step_id] = {"kinds": owned}

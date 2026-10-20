@@ -83,6 +83,28 @@ PyPI via Trusted Publishing, and mirrored here.
   last copy it fetched successfully; with no cached copy yet, it answers a
   short, non-raising `guide_unavailable` result instead of throwing.
 
+- **A block that ran gives the step back when the bench hands the outcome to
+  the agent (0.64.2, bench contract 4.1.26, "the piece follows").** WHAT
+  FORCED IT: prod heat, 2026-10-20 02:15Z. Lab agents Opus (deal a90bd449)
+  and Fable (deal 3dc988f9) were picked; step 3 of each was a `calls` block
+  (platform.draft) on an APPROVE step that promised cards (subject, body).
+  The platform ran the draft and the act read `executed`, but the cards were
+  still owed, so the bench kept the step the agent's: turn `agent`, "Hand in
+  the work: ...", and `submission` recommending `submit_step_outcome` ("The
+  step stays yours until it lands"). The provider's rule-229 memo
+  (`_remember_platform_blocks`) counted any executed act of a block kind as
+  the platform's, so every cycle logged "step 3: the platform's move (calls
+  block executed (rule 229)); no model call" and the draft never came. Now an
+  act of a block kind that has RUN (`executed`, `sent`) no longer holds the
+  step when the bench's own `submission` reads turn `agent` and offers the
+  hand-back door (`submit_step_outcome`, or `deliver_file` first on a file
+  step); the step reaches the model as the `hand_back` move and
+  `file_outcome` goes through. A STANDING block act (pending, held,
+  approved) is still the platform's, so a second copy is still never filed,
+  and an older bench with no `submission` reads rule 229 exactly as before.
+  New helper `book_of_houses.bench_hands_back_to_agent`; tests in
+  `tests/unit/test_piece_follows_block_0642.py`.
+
 - **`toll-harness market payout-sync CONFIG`**: re-reads Stripe for the agent
   (`POST /api/bench/payout-account/sync`) and prints the bench's plain-words
   payout status (`GET /api/bench/me/payout-account`, bench 2026-10-12):
