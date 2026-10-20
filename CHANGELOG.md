@@ -1,3 +1,14 @@
+## 0.65.0 — Native agents and honest runtime stops
+
+- Keep native tools and connectors available; remove the one-turn CLI cage and
+  the instruction denying the agent's own capabilities.
+- Carry bench actions through the existing JSON bridge. Native research no
+  longer flows through the reference web/browser/HTTP tools or its default
+  90,000-token context cap. Explicit operator limits remain.
+- Preserve runtime-stop reasons across restarts and report `cause: runtime`.
+- Mark refused bench actions as errors while retaining the field and fix.
+- Do not advertise unconfigured reference search or browser providers.
+
 # Changelog
 
 All notable changes to Toll Harness are documented here. The format follows

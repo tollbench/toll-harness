@@ -60,9 +60,9 @@ result.complete or result.fail tools."""
 # envelope, only this line.
 _NO_TOOLS_INSTRUCTION = """\
 # How to reply
-There are no tools on this call. Reply with EXACTLY the one JSON object the
-message above asks for and nothing else - no prose, no markdown fence, no
-tool calls."""
+No Toll Bench actions are requested on this call. Use your own runtime's
+normal tools as needed. Reply with EXACTLY the one JSON object the message
+above asks for and nothing else - no prose, no markdown fence, no tool calls."""
 
 _CORRECTION = (
     "Your previous reply could not be parsed as the required JSON envelope. "
@@ -70,59 +70,6 @@ _CORRECTION = (
     '{"text": "...", "tool_calls": [{"name": "...", "arguments": {}}]} '
     "and nothing else."
 )
-
-
-# 2026-10-06 (Steven, pilot finding): lab agent Sam (claude_code rail, Opus
-# 5.5) handed back a file and the Claude Code CLI exited 1 fourteen times in
-# one night: `--tools ''` turns off the CLI's BUILT-IN tools only, and the
-# account's claude.ai connectors (two MCP servers, ~68k tokens of schema) still
-# rode every request. With a native tools array in front of it the model called
-# the harness tools natively (`files.list`, `toll_bench.post_check_in`), the
-# CLI answered "No such tool available", and the second turn broke
-# `--max-turns 1`: error_max_turns, stop_reason tool_use, exit 1, no reply.
-# The harness read a crash, three times, and the loop guard parked the step.
-# Two parts: the rail now runs the CLI with `--strict-mcp-config` so no
-# ambient MCP server rides along (an explicit --mcp-config in extra_args still
-# loads), and a run that still ends on a native tool call is NOT a crash: it
-# gets ONE retry with the reminder below, and a second one is a failure that
-# names the tool.
-class NativeToolUse(Exception):
-    """The CLI run ended on the model's own native tool call, not on a reply.
-
-    `names` are the native tools the model reached for, as the CLI's stream
-    reported them; `usage` is what that call cost.
-    """
-
-    def __init__(self, names: Sequence[str], usage: ModelUsage):
-        self.names = list(names)
-        self.usage = usage
-        super().__init__(", ".join(self.names) or "a native tool the CLI did not name")
-
-
-def _named(names: Sequence[str]) -> str:
-    if not names:
-        return "the CLI did not name it"
-    return ", ".join(f"'{name}'" for name in names)
-
-
-def _native_tool_reminder(names: Sequence[str], tools: Sequence[ToolDefinition]) -> str:
-    target = f" to {_named(names)}" if names else ""
-    opening = f"Your previous reply ended on a native tool call{target}, so nothing ran."
-    if not tools:
-        return (
-            f"{opening} There are no tools on this call, native or otherwise. "
-            "Reply with EXACTLY the one JSON object the message above asks for, "
-            "as plain text."
-        )
-    reminder = (
-        f"{opening} There are no native tools on this call. Every tool here is "
-        "called by writing the JSON envelope as plain text"
-    )
-    if any(tool.name == "files.write" for tool in tools):
-        reminder += (
-            "; a file goes through files.write (base64 for binary) into the run folder"
-        )
-    return reminder + "."
 
 
 def _add_usage(first: ModelUsage, retry: ModelUsage) -> ModelUsage:
@@ -160,9 +107,11 @@ def _render_prompt(
         )
     return (
         f"{system}\n\n"
-        "# Available tools\n"
-        "You operate inside a tool loop. These are the ONLY tools; nothing else "
-        "exists, including any tools of your own runtime:\n"
+        "# Toll Bench communication actions\n"
+        "Use your own runtime's normal tools and connected services for the work. "
+        "The actions below are additional harness actions, submitted only in "
+        "your final JSON reply; do not call their names as native tools. "
+        "Keep required approvals for actions on the person's accounts.\n"
         f"{json.dumps(catalogue, ensure_ascii=False)}\n\n"
         "# Conversation so far\n"
         "Normalized transcript, oldest first. tool_result blocks are the "
@@ -326,6 +275,7 @@ class _CliRailAdapter(ModelAdapter):
     """Shared plumbing: render prompt, run the vendor CLI, parse the envelope."""
 
     provider = "cli"
+    native_tools = True
     install_hint = ""
 
     def __init__(
@@ -386,63 +336,6 @@ class _CliRailAdapter(ModelAdapter):
         """Run one CLI call and return (raw model text, usage)."""
         raise NotImplementedError
 
-    def _call_rail(
-        self, prompt: str, tools: Sequence[ToolDefinition]
-    ) -> tuple[str, ModelUsage]:
-        """One CLI call. A run that ended on a native tool call is not a crash:
-        it gets ONE retry with the envelope reminder appended. A second one
-        raises NativeToolUse carrying both calls' usage."""
-        try:
-            return self._invoke_cli(prompt)
-        except NativeToolUse as first:
-            reminder = _native_tool_reminder(first.names, tools)
-            try:
-                raw, usage = self._invoke_cli(f"{prompt}\n\n{reminder}")
-            except NativeToolUse as second:
-                raise NativeToolUse(
-                    second.names or first.names, _add_usage(first.usage, second.usage)
-                ) from None
-            return raw, _add_usage(first.usage, usage)
-
-    def _native_tool_failure(
-        self, refused: NativeToolUse, tools: Sequence[ToolDefinition]
-    ) -> ModelResponse:
-        """Twice on a native tool call: a failure that names the tool. On a run
-        that offers result.fail the run ends through it with that reason; on a
-        call that does not, the caller gets a ModelInvocationError coded
-        native_tool_use instead of an opaque exit code."""
-        reason = (
-            f"{self.provider} rail: the model twice ended its reply on a native "
-            f"tool call ({_named(refused.names)}) instead of writing the JSON "
-            "envelope. This rail carries no native tools, so nothing ran."
-        )
-        if not any(tool.name == "result.fail" for tool in tools):
-            raise ModelInvocationError(self.provider, "native_tool_use", reason)
-        call = ToolCall(
-            id=f"cli-{uuid.uuid4().hex[:12]}",
-            name="result.fail",
-            arguments={"reason": reason, "blocker": "native_tool_use"},
-        )
-        return ModelResponse(
-            message=ModelMessage(
-                role="assistant",
-                content=[
-                    {"type": "text", "text": reason},
-                    {
-                        "type": "tool_call",
-                        "id": call.id,
-                        "name": call.name,
-                        "arguments": call.arguments,
-                    },
-                ],
-            ),
-            text=reason,
-            tool_calls=[call],
-            usage=refused.usage,
-            stop_reason="native_tool_use",
-            raw_metadata={"model": self.model_id, "native_tools": refused.names},
-        )
-
     def invoke(
         self,
         *,
@@ -451,10 +344,7 @@ class _CliRailAdapter(ModelAdapter):
         tools: Sequence[ToolDefinition],
     ) -> ModelResponse:
         prompt = _render_prompt(system, messages, tools)
-        try:
-            raw, usage = self._call_rail(prompt, tools)
-        except NativeToolUse as refused:
-            return self._native_tool_failure(refused, tools)
+        raw, usage = self._invoke_cli(prompt)
         try:
             commentary, calls, normalized = _parse_envelope(raw, tools_offered=bool(tools))
         except ValueError:
@@ -462,12 +352,7 @@ class _CliRailAdapter(ModelAdapter):
             # runtime's own "continue the goal" nudge keeps the run alive
             # instead of failing it on a chatty reply.
             retry_prompt = f"{prompt}\n\n{_CORRECTION}\n\nYour previous reply was:\n{raw[:2000]}"
-            try:
-                retry_raw, retry_usage = self._call_rail(retry_prompt, tools)
-            except NativeToolUse as refused:
-                return self._native_tool_failure(
-                    NativeToolUse(refused.names, _add_usage(usage, refused.usage)), tools
-                )
+            retry_raw, retry_usage = self._invoke_cli(retry_prompt)
             usage = _add_usage(usage, retry_usage)
             try:
                 commentary, calls, normalized = _parse_envelope(
@@ -631,14 +516,9 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
             "--output-format",
             "stream-json",
             "--verbose",
-            "--max-turns",
-            "1",
         ]
-        # No ambient MCP server (the account's claude.ai connectors, user or
-        # project .mcp.json) rides along: `--tools ''` turns off only the
-        # built-in tools. An operator's explicit --mcp-config still loads.
-        if "--strict-mcp-config" not in self.extra_args:
-            argv.append("--strict-mcp-config")
+        # The vendor agent keeps its normal tools, connectors and permissions.
+        # extra_args remains the operator's explicit configuration.
         if self._configured_model:
             argv += ["--model", self._configured_model]
         argv += self.extra_args
@@ -681,10 +561,6 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
     ) -> tuple[str, ModelUsage]:
         if payload is not None:
             self._count_claude(payload)
-        if payload is not None and _ended_on_native_tool(
-            payload, native_tools, completed.returncode
-        ):
-            raise NativeToolUse(native_tools, _claude_usage(payload))
         if completed.returncode != 0:
             raise ModelInvocationError(
                 self.provider,
@@ -745,17 +621,6 @@ def _read_claude_output(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
     return payload, names
 
 
-def _ended_on_native_tool(
-    payload: dict[str, Any], native_tools: Sequence[str], returncode: int
-) -> bool:
-    """The run stopped on the model's own tool call and produced no reply."""
-    failed = returncode != 0 or bool(payload.get("is_error"))
-    on_tool = payload.get("stop_reason") == "tool_use" or (
-        bool(native_tools) and payload.get("subtype") == "error_max_turns"
-    )
-    return failed and on_tool
-
-
 def _claude_usage(payload: dict[str, Any]) -> ModelUsage:
     usage_raw = payload.get("usage") or {}
     input_tokens = int(usage_raw.get("input_tokens") or 0)
@@ -775,9 +640,8 @@ class ExternalAgentAdapter(_CliRailAdapter):
     Each invocation runs the command with the rendered prompt (system + tool
     catalog + normalized transcript + envelope instruction) on stdin, and reads
     the reply — the strict one-JSON-object envelope — from stdout. Exit 0 with
-    the envelope on stdout is the whole contract; wrap any inner agent, CLI, or
-    HTTP service in a few lines of shell or Python. The harness stays the only
-    tool executor and persistence owner; the inner agent supplies intelligence.
+    the envelope on stdout is the whole contract. The external agent keeps its
+    own tools and execution environment; this adapter carries its bench actions.
     """
 
     provider = "external"
@@ -837,8 +701,6 @@ class CodexCliAdapter(_CliRailAdapter):
         argv = [
             self.binary,
             "exec",
-            "--sandbox",
-            "read-only",
             "--skip-git-repo-check",
             "--cd",
             str(self.workdir),

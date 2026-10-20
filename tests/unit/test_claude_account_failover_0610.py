@@ -202,8 +202,8 @@ def test_no_accounts_configured_is_the_old_call_exactly(tmp_path):
     assert adapter.config_dirs == []
     # No environment handed to the CLI: it inherits the harness's own.
     assert runner.calls[0]["kwargs"] == {}
-    assert runner.calls[0]["argv"][:7] == [
-        "claude", "-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1"
+    assert runner.calls[0]["argv"][:5] == [
+        "claude", "-p", "--output-format", "stream-json", "--verbose"
     ]
 
 
@@ -387,7 +387,7 @@ def test_a_reply_that_talks_about_limits_is_a_reply(tmp_path):
     assert _table(tmp_path) == {}
 
 
-def test_a_native_tool_call_is_still_the_native_tool_retry_not_a_limit(tmp_path):
+def test_native_runtime_stop_does_not_switch_accounts_or_declare_agent_failure(tmp_path):
     native = _stream(
         {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": "t1", "name": "files.list", "input": {}}]}},
@@ -396,11 +396,9 @@ def test_a_native_tool_call_is_still_the_native_tool_retry_not_a_limit(tmp_path)
     runner = _runner([(1, native), (0, _ok_stream())])
     adapter = _adapter(tmp_path, runner)
 
-    response = adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
-
-    assert [call.name for call in response.tool_calls] == ["state.save"]
-    assert [_account(call) for call in runner.calls] == [A, A]
-    assert "native tool call" in runner.calls[1]["prompt"]
+    with pytest.raises(ModelInvocationError, match="error_max_turns"):
+        adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
+    assert [_account(call) for call in runner.calls] == [A]
     assert _table(tmp_path) == {}
 
 

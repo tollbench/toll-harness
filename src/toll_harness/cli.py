@@ -1588,7 +1588,9 @@ def _refusal_brake_holds(
         record["road"],
         record["code"],
     )
-    _report_worker_status(resources, obligation, "parked", step_payload)
+    _report_worker_status(resources, obligation, "parked", step_payload,
+                          reason=str(record.get("message") or record.get("code") or
+                                     "Toll Bench repeatedly refused the submission."))
     if not record.get("blocker_posted") or _deal_step_pulse_due(step_payload):
         _post_the_blocker(resources, obligation, step_payload, record)
     return record
@@ -2027,8 +2029,10 @@ def _breaker_record_failure(
     if guard is not None and obligation.get("deal_id") and obligation.get("step_id"):
         try:
             snapshot = resources.toll_bench.current_step(str(obligation["deal_id"]))
-            if guard.held(_loop_key(obligation), _loop_state(resources, obligation, snapshot)):
-                _report_worker_status(resources, obligation, "parked", snapshot)
+            work_state = _loop_state(resources, obligation, snapshot)
+            guard.record_reason(_loop_key(obligation), work_state, error)
+            if guard.held(_loop_key(obligation), work_state):
+                _report_worker_status(resources, obligation, "parked", snapshot, reason=error)
         except Exception:
             _LOGGER.warning("Could not check parked status for worker report")
     state = _OBLIGATION_FAILURES.get(key)
@@ -2119,7 +2123,7 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) ->
 
 
 def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str,
-                          snapshot: Any = None) -> None:
+                          snapshot: Any = None, *, reason: str | None = None) -> None:
     """Best-effort visibility; reporting failure must never restart model retries."""
     report = getattr(resources.toll_bench, "report_worker_status", None)
     deal_id, step_id = obligation.get("deal_id"), obligation.get("step_id")
@@ -2132,7 +2136,16 @@ def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str
         if (str(step.get("id")) != str(step_id)
                 or not (snapshot.get("submission") or {}).get("worker_status")):
             return
-        result = report(str(deal_id), str(step_id), state, int(step.get("rounds_used") or 0))
+        if state == "parked":
+            guard = _loop_guard(resources)
+            if not reason and guard is not None:
+                reason = guard.reason(_loop_key(obligation), _loop_state(resources, obligation, snapshot))
+            result = report(str(deal_id), str(step_id), state,
+                            int(step.get("rounds_used") or 0),
+                            reason=reason or "Runtime stopped without a recorded reason.",
+                            cause="runtime")
+        else:
+            result = report(str(deal_id), str(step_id), state, int(step.get("rounds_used") or 0))
         if isinstance(result, dict) and result.get("ok") is False:
             _LOGGER.warning("Worker status report refused for step %s", step_id)
     except Exception:
@@ -2424,170 +2437,178 @@ def _process_market_attention(
                 prefetched_steps.get(str(obligation.get("deal_id") or "")),
             )
             return _loop_parked(reachability, [key])
-    _report_worker_status(
-        resources, obligation, "running",
-        prefetched_steps.get(str(obligation.get("deal_id") or "")),
-    )
-    kind = str(obligation.get("kind") or "")
-    # RULE 241: the informed plan is built up in pieces too, at the same door.
-    if kind == "file_informed_plan" and _draft_door_available(resources):
-        planned = _file_the_informed_plan_from_draft(
-            resources, obligation, reachability, len(obligations), threshold
-        )
-        if (
-            guard is not None
-            and isinstance(planned, dict)
-            and (planned.get("draft_loop") or {}).get("error") == draft.DRAFT_PAUSED
-        ):
-            # The door read nothing; this cycle was not an attempt.
-            guard.release(_loop_key(obligation), loop_states[_loop_key(obligation)])
-        if planned is not None:
-            return planned
-    dispatch = _OBLIGATION_DISPATCH.get(kind)
-    if dispatch is None:
-        # Unranked/unknown kind: fall back to the full obligation instruction and
-        # tool set so capability is never lost for a kind we did not special-case.
-        instruction = (
-            _DEAL_STEP_INSTRUCTION
-            + " "
-            + _FILE_INFORMED_PLAN_INSTRUCTION
-            + " "
-            + _UNANSWERED_MESSAGE_INSTRUCTION
-        )
-        obligation_tools = (
-            _OBLIGATION_DISPATCH["deal_step"]["tools"]
-            | _OBLIGATION_DISPATCH["file_informed_plan"]["tools"]
-            | _OBLIGATION_DISPATCH["unanswered_message"]["tools"]
-            | {"toll_bench.guide", "human.request"}
-        )
-    else:
-        instruction = dispatch["instruction"]
-        obligation_tools = set(dispatch["tools"])
-    identity = resources.agent_identity
-    mode = identity.autonomy_mode if identity else AutonomyMode.AUTONOMOUS
-    # H6: put the step's history right in front of the model. Step-scoped
-    # obligations get the current step prefetched into the payload so the run
-    # starts with the full step state instead of spending its first call (or
-    # skipping) fetching it. Best-effort: on failure the field is null and the
-    # instruction tells the model to fetch it itself.
-    step_state = None
-    if kind in _STEP_ASK_KINDS:
-        deal_id = str(obligation.get("deal_id") or "")
-        step_state = prefetched_steps.get(deal_id)
-        if deal_id and step_state is None:
-            try:
-                step_state = resources.toll_bench.current_step(deal_id)
-            except Exception as error:  # noqa: BLE001 - prefetch must not kill the cycle
-                _LOGGER.warning(
-                    "current_step prefetch failed for deal %s: %s", deal_id, error
-                )
-    # THE STEP ASK (0.36.0): one small question and one call, on the step the
-    # dispatch just read. The old road below is the fallback, and the log
-    # says why whenever it is taken.
-    if isinstance(step_state, dict) and _step_ask_available(resources):
-        asked = _the_step_ask(
-            resources, obligation, step_state, reachability, len(obligations), threshold
-        )
-        if asked is not None:
-            if _platform_step_ids:
-                asked["platform_steps"] = len(_platform_step_ids)
-            return asked
-    # The bench's own words about the last refusal on THIS step ride the next
-    # dispatch, so a fixable refusal is fixed on try two instead of being
-    # earned again from a blank slate.
-    step_fingerprint = (
-        _deal_step_fingerprint(step_state) if isinstance(step_state, dict) else ""
-    )
-    refused_before = (
-        _standing_refusal(str(obligation.get("step_id") or ""), step_fingerprint)
-        if step_fingerprint
-        else None
-    )
-    goal = (
-        instruction
-        + (_REFUSED_BEFORE_TAIL if refused_before else "")
-        + _GOAL_COMMON_TAIL
-        + "\n\n"
-        + json.dumps(
-            {
-                "obligation": obligation,
-                "current_step": _with_whole_earlier_steps(resources, obligation, step_state),
-                "confirmed_email_send_receipt": resumed_email,
-                "previous_attempt_failure": previous_failure,
-                "the_bench_refused": refused_before,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
-    original_tools = resources.runtime.enabled_tools
-    resources.runtime.enabled_tools = [name for name in original_tools if name in obligation_tools]
-    meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
-    watch = _RefusalWatch(getattr(resources, "toll_bench", None))
     try:
-        with watch, _cost_scope(resources, obligation, step_state):
-            result = resources.runtime.start(goal, mode)
-    finally:
-        resources.runtime.enabled_tools = original_tools
-    if kind == "deal_step" and step_state is not None:
-        # Remember what the model was shown. If the next fetch of this step is
-        # identical, the run above made no move and the step is idle until the
-        # payload changes or a pulse comes due. limit_reached counts: the model
-        # spent its whole run over exactly this state and got nowhere, and an
-        # identical re-run wanders identically at full price (a looping model
-        # burned 20-iteration runs every couple of minutes on 2026-08-29).
-        # A FAILED run records nothing: an adapter or API error is transient
-        # and must retry at full cadence, not be mistaken for a judged wait.
-        _step_id = str(obligation.get("step_id") or "")
-        if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
-            _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
-    # THE BRAKE counts this run. One refusal per dispatch, whatever the run
-    # did afterwards; a run that moved the step with nothing refused forgets
-    # the whole journal.
-    if kind in _STEP_ASK_KINDS and step_state is not None:
-        _brake_step_id = str(obligation.get("step_id") or "")
-        _last_refusal = watch.last_refusal()
-        if _last_refusal is not None:
-            _refusal_note(
-                _brake_step_id,
-                step_fingerprint,
-                _last_refusal,
-                road="road",
-                number=(step_state.get("current_step") or {}).get("number"),
+        _report_worker_status(
+            resources, obligation, "running",
+            prefetched_steps.get(str(obligation.get("deal_id") or "")),
+        )
+        kind = str(obligation.get("kind") or "")
+        # RULE 241: the informed plan is built up in pieces too, at the same door.
+        if kind == "file_informed_plan" and _draft_door_available(resources):
+            planned = _file_the_informed_plan_from_draft(
+                resources, obligation, reachability, len(obligations), threshold
             )
-        elif result.status.value in {"completed", "waiting"}:
-            _STEP_REFUSALS.pop(_brake_step_id, None)
-    ok = result.status.value in {"completed", "waiting"}
-    payload: dict[str, Any] = {
-        "ok": ok,
-        "reachability": reachability,
-        "attention_count": len(obligations),
-        "dispatch": meter,
-        "run": _result_payload(result),
-    }
-    if _stalled:
-        payload["stalled_obligations"] = _stalled
-    if _platform_step_ids:
-        payload["platform_steps"] = len(_platform_step_ids)
-    if _braked_step_ids:
-        payload["braked_steps"] = len(_braked_step_ids)
-    postcondition_error = None
-    if ok and kind == "file_informed_plan":
-        ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
-        payload["ok"] = ok
-        payload["plan_filing_verified"] = ok
-    if ok:
-        _breaker_reset(obligation)
+            if (
+                guard is not None
+                and isinstance(planned, dict)
+                and (planned.get("draft_loop") or {}).get("error") == draft.DRAFT_PAUSED
+            ):
+                # The door read nothing; this cycle was not an attempt.
+                guard.release(_loop_key(obligation), loop_states[_loop_key(obligation)])
+            if planned is not None:
+                return planned
+        dispatch = _OBLIGATION_DISPATCH.get(kind)
+        if dispatch is None:
+            # Unranked/unknown kind: fall back to the full obligation instruction and
+            # tool set so capability is never lost for a kind we did not special-case.
+            instruction = (
+                _DEAL_STEP_INSTRUCTION
+                + " "
+                + _FILE_INFORMED_PLAN_INSTRUCTION
+                + " "
+                + _UNANSWERED_MESSAGE_INSTRUCTION
+            )
+            obligation_tools = (
+                _OBLIGATION_DISPATCH["deal_step"]["tools"]
+                | _OBLIGATION_DISPATCH["file_informed_plan"]["tools"]
+                | _OBLIGATION_DISPATCH["unanswered_message"]["tools"]
+                | {"toll_bench.guide", "human.request"}
+            )
+        else:
+            instruction = dispatch["instruction"]
+            obligation_tools = set(dispatch["tools"])
+        identity = resources.agent_identity
+        mode = identity.autonomy_mode if identity else AutonomyMode.AUTONOMOUS
+        # H6: put the step's history right in front of the model. Step-scoped
+        # obligations get the current step prefetched into the payload so the run
+        # starts with the full step state instead of spending its first call (or
+        # skipping) fetching it. Best-effort: on failure the field is null and the
+        # instruction tells the model to fetch it itself.
+        step_state = None
+        if kind in _STEP_ASK_KINDS:
+            deal_id = str(obligation.get("deal_id") or "")
+            step_state = prefetched_steps.get(deal_id)
+            if deal_id and step_state is None:
+                try:
+                    step_state = resources.toll_bench.current_step(deal_id)
+                except Exception as error:  # noqa: BLE001 - prefetch must not kill the cycle
+                    _LOGGER.warning(
+                        "current_step prefetch failed for deal %s: %s", deal_id, error
+                    )
+        # THE STEP ASK (0.36.0): one small question and one call, on the step the
+        # dispatch just read. The old road below is the fallback, and the log
+        # says why whenever it is taken.
+        if isinstance(step_state, dict) and _step_ask_available(resources):
+            asked = _the_step_ask(
+                resources, obligation, step_state, reachability, len(obligations), threshold
+            )
+            if asked is not None:
+                if _platform_step_ids:
+                    asked["platform_steps"] = len(_platform_step_ids)
+                return asked
+        # The bench's own words about the last refusal on THIS step ride the next
+        # dispatch, so a fixable refusal is fixed on try two instead of being
+        # earned again from a blank slate.
+        step_fingerprint = (
+            _deal_step_fingerprint(step_state) if isinstance(step_state, dict) else ""
+        )
+        refused_before = (
+            _standing_refusal(str(obligation.get("step_id") or ""), step_fingerprint)
+            if step_fingerprint
+            else None
+        )
+        goal = (
+            instruction
+            + (_REFUSED_BEFORE_TAIL if refused_before else "")
+            + _GOAL_COMMON_TAIL
+            + "\n\n"
+            + json.dumps(
+                {
+                    "obligation": obligation,
+                    "current_step": _with_whole_earlier_steps(resources, obligation, step_state),
+                    "confirmed_email_send_receipt": resumed_email,
+                    "previous_attempt_failure": previous_failure,
+                    "the_bench_refused": refused_before,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        original_tools = resources.runtime.enabled_tools
+        resources.runtime.enabled_tools = [name for name in original_tools if name in obligation_tools]
+        meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
+        watch = _RefusalWatch(getattr(resources, "toll_bench", None))
+        try:
+            with watch, _cost_scope(resources, obligation, step_state):
+                result = resources.runtime.start(goal, mode)
+        finally:
+            resources.runtime.enabled_tools = original_tools
+        if kind == "deal_step" and step_state is not None:
+            # Remember what the model was shown. If the next fetch of this step is
+            # identical, the run above made no move and the step is idle until the
+            # payload changes or a pulse comes due. limit_reached counts: the model
+            # spent its whole run over exactly this state and got nowhere, and an
+            # identical re-run wanders identically at full price (a looping model
+            # burned 20-iteration runs every couple of minutes on 2026-08-29).
+            # A FAILED run records nothing: an adapter or API error is transient
+            # and must retry at full cadence, not be mistaken for a judged wait.
+            _step_id = str(obligation.get("step_id") or "")
+            if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
+                _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
+        # THE BRAKE counts this run. One refusal per dispatch, whatever the run
+        # did afterwards; a run that moved the step with nothing refused forgets
+        # the whole journal.
+        if kind in _STEP_ASK_KINDS and step_state is not None:
+            _brake_step_id = str(obligation.get("step_id") or "")
+            _last_refusal = watch.last_refusal()
+            if _last_refusal is not None:
+                _refusal_note(
+                    _brake_step_id,
+                    step_fingerprint,
+                    _last_refusal,
+                    road="road",
+                    number=(step_state.get("current_step") or {}).get("number"),
+                )
+            elif result.status.value in {"completed", "waiting"}:
+                _STEP_REFUSALS.pop(_brake_step_id, None)
+        ok = result.status.value in {"completed", "waiting"}
+        payload: dict[str, Any] = {
+            "ok": ok,
+            "reachability": reachability,
+            "attention_count": len(obligations),
+            "dispatch": meter,
+            "run": _result_payload(result),
+        }
+        if _stalled:
+            payload["stalled_obligations"] = _stalled
+        if _platform_step_ids:
+            payload["platform_steps"] = len(_platform_step_ids)
+        if _braked_step_ids:
+            payload["braked_steps"] = len(_braked_step_ids)
+        postcondition_error = None
+        if ok and kind == "file_informed_plan":
+            ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
+            payload["ok"] = ok
+            payload["plan_filing_verified"] = ok
+        if ok:
+            _breaker_reset(obligation)
+            return payload
+        breaker = _breaker_record_failure(
+            resources,
+            obligation,
+            postcondition_error or _failure_signature(result.result),
+            threshold=threshold,
+        )
+        payload["breaker"] = breaker
+        payload["retry_after_seconds"] = breaker["retry_after_seconds"]
         return payload
-    breaker = _breaker_record_failure(
-        resources,
-        obligation,
-        postcondition_error or _failure_signature(result.result),
-        threshold=threshold,
-    )
-    payload["breaker"] = breaker
-    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
-    return payload
+    except Exception as error:
+        # A crash must survive a process restart with its real cause. The
+        # retry guard limits runtime attempts; it is not an agent failure.
+        if guard is not None:
+            guard.record_reason(_loop_key(obligation), loop_states[_loop_key(obligation)],
+                                f"{type(error).__name__}: {error}")
+        raise
 
 
 def _market_target_key(target: dict[str, Any]) -> tuple[str, str, str | None]:

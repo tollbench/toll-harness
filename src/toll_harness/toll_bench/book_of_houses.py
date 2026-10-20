@@ -3704,7 +3704,7 @@ class BookOfHousesTollBenchProvider:
 
     def report_worker_status(
         self, deal_id: str, step_id: str, state: str, round_number: int,
-        reason: str | None = None,
+        reason: str | None = None, *, cause: str | None = None,
     ) -> dict[str, Any]:
         """Say what the runtime is doing on this step. `parked` means nobody
         is working on it, and `reason` says why in one plain sentence (W29).
@@ -3712,6 +3712,8 @@ class BookOfHousesTollBenchProvider:
         anyway, because the day the door reads it the harness is already
         saying it, and the same sentence goes on the step thread either way."""
         payload: dict[str, Any] = {"state": state, "round": round_number}
+        if cause is not None:
+            payload["cause"] = cause
         words = (reason or "").strip()
         if words:
             payload["reason"] = words[:280]

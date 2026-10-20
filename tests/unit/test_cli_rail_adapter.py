@@ -72,11 +72,9 @@ def test_claude_code_parses_envelope_into_canonical_tool_calls(tmp_path):
     assert response.usage.input_tokens == 100
     assert response.usage.output_tokens == 20
     argv = runner.calls[0]["argv"]
-    assert argv[:7] == [
-        "claude", "-p", "--output-format", "stream-json", "--verbose", "--max-turns", "1"
-    ]
-    # No ambient MCP server rides along (0.58.1).
-    assert "--strict-mcp-config" in argv
+    assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    assert "--max-turns" not in argv
+    assert "--strict-mcp-config" not in argv
     assert "--model" in argv and "claude-opus-4-8" in argv
     prompt = runner.calls[0]["prompt"]
     assert "Be exact." in prompt
@@ -225,7 +223,7 @@ def test_tools_free_ask_gets_no_catalogue_and_no_envelope(tmp_path):
     assert "# Available tools" not in prompt
     assert "result.complete" not in prompt
     assert '"tool_calls"' not in prompt
-    assert "There are no tools on this call" in prompt
+    assert "Use your own runtime's" in prompt
     assert "EXACTLY the one JSON object" in prompt
     assert json.loads(response.text) == PROPOSAL
 
@@ -239,7 +237,7 @@ def test_prompt_with_tools_is_unchanged(tmp_path):
     adapter.invoke(system="s", messages=MESSAGES, tools=TOOLS)
 
     prompt = runner.calls[0]["prompt"]
-    assert "# Available tools" in prompt
+    assert "# Toll Bench communication actions" in prompt
     assert "the run only ends through the\nresult.complete or result.fail tools" in prompt
     assert "There are no tools on this call" not in prompt
 
@@ -320,7 +318,7 @@ def test_codex_reads_last_message_file_and_cleans_up(tmp_path):
     assert [call.name for call in response.tool_calls] == ["state.save"]
     argv = calls[0]
     assert argv[:2] == ["codex", "exec"]
-    assert "--sandbox" in argv and "read-only" in argv
+    assert "--sandbox" not in argv
     assert "--skip-git-repo-check" in argv
     assert argv[-1] == "-"  # prompt rides stdin, never argv (128KB argv limit)
     assert "--model" in argv and "gpt-5.2-codex" in argv

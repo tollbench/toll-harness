@@ -292,3 +292,20 @@ Inspect with `toll-harness loop-guard CONFIG`. After fixing the cause, explicitl
 reset one work key with `toll-harness loop-guard CONFIG --reset WORK_KEY`.
 The reset does not start an agent. A state-probe or database failure prevents
 model dispatch for the affected work.
+
+
+### Native agents and the bench bridge (0.65.0)
+
+The `codex`, `claude_code`, and `external` adapters keep the agent's native
+tools, connectors, and permission settings. The final JSON envelope is the
+communication channel for additional bench actions, not a replacement for
+the agent's research environment. Native agents are not offered the reference
+runtime's web, browser, or HTTP tools. They manage their own context by default;
+an explicit `runtime.context_budget_tokens` still applies. Raw-model adapters
+remain an optional reference runtime and require operator-provided capabilities.
+An unconfigured search/browser is not advertised as available.
+
+Runner stops carry their actual reason and `cause: runtime` to Toll Bench.
+They are pauses needing attention, not an agent declaring failure. Install the
+matching bench contract before rolling out this release. Existing card, outcome,
+account-permission, spending, and operator-stop checks remain in effect.

@@ -276,9 +276,10 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     model = _build_model(config, root=root, data_dir=data_dir)
     model_config = config.get("model", {})
 
+    native = bool(getattr(model, "native_tools", False))
     providers = config.get("providers", {})
-    web = BasicWebProvider() if providers.get("web") == "basic" else None
-    browser_name = providers.get("browser")
+    web = BasicWebProvider() if not native and providers.get("web") == "basic" else None
+    browser_name = None if native else providers.get("browser")
     if browser_name == "playwright":
         browser = PlaywrightBrowserProvider(
             headless=providers.get("browser_headless", True),
@@ -366,13 +367,25 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     tool_registry = build_standard_registry()
     if toll_bench_provider:
         tool_registry = add_toll_bench_tools(tool_registry)
+    enabled_tools = with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))
+    if native:
+        # Native agents do research in their own environment. Do not replace
+        # their abilities with the reference runtime's web/browser/HTTP tools.
+        enabled_tools = [name for name in enabled_tools
+                         if not name.startswith(("web.", "browser.", "http."))]
+    else:
+        # BasicWebProvider has no search backend. Never advertise a dead tool.
+        enabled_tools = [name for name in enabled_tools
+                         if not (name == "web.search" and isinstance(web, BasicWebProvider))
+                         and not (name.startswith("web.") and web is None)
+                         and not (name.startswith("browser.") and browser is None)]
     runtime = HarnessRuntime(
         model=model,
         state_store=store,
         event_store=store,
         artifact_store=artifacts,
         tools=tool_registry,
-        enabled_tools=with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS)),
+        enabled_tools=enabled_tools,
         web_provider=web,
         email_provider=email_provider,
         browser_provider=browser,
@@ -386,7 +399,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         # Input tokens this run may spend before it stops itself. Unset
         # falls through to TOLL_HARNESS_CONTEXT_BUDGET_TOKENS and then to
         # 90,000; 0 turns the guard off.
-        context_budget_tokens=runtime_config.get("context_budget_tokens"),
+        context_budget_tokens=runtime_config.get("context_budget_tokens", 0 if native else None),
         system_instruction=(
             BASE_SYSTEM_INSTRUCTION + TOLL_BENCH_SYSTEM_INSTRUCTION
             if toll_bench_provider

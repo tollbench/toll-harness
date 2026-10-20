@@ -129,7 +129,7 @@ class ToolRegistry:
             if not isinstance(output, dict):
                 raise TypeError("Tool handler output must be an object")
             _warn_on_a_large_result(name, output)
-            return ToolResult(call_id, name, output)
+            return ToolResult(call_id, name, output, output.get("ok") is False)
         except Exception as error:
             return ToolResult(call_id, name, {"error": str(error)}, True)
 

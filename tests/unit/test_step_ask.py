@@ -751,11 +751,13 @@ def test_worker_status_uses_the_current_step_contract():
               "submission": {"worker_status": {"action": "report_worker_status"}}}
     resources = SimpleNamespace(toll_bench=SimpleNamespace(
         current_step=lambda deal: packet,
-        report_worker_status=lambda *args: calls.append(args) or {"ok": True}))
+        report_worker_status=lambda *args, **kwargs: calls.append((args, kwargs)) or {"ok": True}))
     obligation = {"deal_id": "d", "step_id": "s"}
     cli._report_worker_status(resources, obligation, "parked")
     cli._report_worker_status(resources, obligation, "running")
-    assert calls == [("d", "s", "parked", 1), ("d", "s", "running", 1)]
+    assert calls == [(("d", "s", "parked", 1), {
+        "reason": "Runtime stopped without a recorded reason.", "cause": "runtime"}),
+        (("d", "s", "running", 1), {})]
     packet["current_step"]["id"] = "next-step"
     cli._report_worker_status(resources, obligation, "parked")
     assert len(calls) == 2

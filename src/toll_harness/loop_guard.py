@@ -62,6 +62,9 @@ class LoopGuard:
                 work_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
                 attempts INTEGER NOT NULL, last_attempt_at TEXT NOT NULL,
                 PRIMARY KEY (work_key, fingerprint))""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS loop_guard_reasons (
+                work_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                reason TEXT NOT NULL, PRIMARY KEY (work_key, fingerprint))""")
 
     def held(self, key: str, state: str) -> bool:
         with closing(sqlite3.connect(self.path)) as connection, connection:
@@ -103,6 +106,21 @@ class LoopGuard:
                 "WHERE work_key=? AND fingerprint=?",
                 (key, state),
             )
+
+    def record_reason(self, key: str, state: str, reason: str) -> None:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO loop_guard_reasons VALUES (?,?,?)",
+                (key, state, reason[:2000]),
+            )
+
+    def reason(self, key: str, state: str) -> str:
+        with closing(sqlite3.connect(self.path)) as connection:
+            row = connection.execute(
+                "SELECT reason FROM loop_guard_reasons WHERE work_key=? AND fingerprint=?",
+                (key, state),
+            ).fetchone()
+        return row[0] if row else "Runtime stopped after three attempts without a change."
 
     def status(self) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path)) as connection, connection:

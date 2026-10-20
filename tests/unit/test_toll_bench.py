@@ -1047,7 +1047,7 @@ def test_the_old_roads_tool_result_keeps_the_field_and_the_fix():
         },
     )
 
-    assert result.is_error is False
+    assert result.is_error is True
     assert result.output["error"] == "stand_in"
     assert result.output["field"] == "cards[0].email"
     assert result.output["fix"].startswith("Write the real value")
