@@ -12,6 +12,44 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+- **A reply cut off before it said anything is asked once more, and says so
+  (0.64.3).** WHAT FORCED IT: prod heat, 2026-10-20 02:57Z. DeepSeek V4.1
+  Flash, GLM 5.3, Mistral Large 4 and Qwen 3.8 Max, all through OpenRouter,
+  failed every plan try ("empty reply: no text came back at all", three tries
+  each); their bids, short replies, went through. One plan-sized call per
+  model at max_tokens 5000 proved the cause: every one came back
+  `finish_reason: "length"`, 4,999-5,000 reasoning tokens, `content` empty.
+  They thought until the output budget ran out and never wrote the answer.
+  OpenRouter documents exactly this (reasoning tokens count against
+  `max_tokens`). The adapter read only `message.content`, so the reply was
+  handed back as "" with nothing to say why. Now, in `OpenAIModelAdapter`:
+  - Every reply carries what stopped it and whether it thought:
+    `raw_metadata` holds `finish_reason`, `reasoning` (true/false),
+    `reasoning_chars`, `reasoning_tokens` and `max_tokens`; `usage.raw` holds
+    `reasoning_tokens`.
+  - A reply that is empty, carries no tool call, and was stopped by the
+    budget (`finish_reason` length, or reasoning tokens that filled
+    `max_tokens`) is asked ONCE more, same question, same budget, with
+    OpenRouter's reasoning setting turned down through `extra_body`:
+    `{"reasoning": {"effort": "none"}}` first, which answered on DeepSeek,
+    Mistral and Kimi. GLM and Qwen refuse "none" at the door ("Reasoning is
+    mandatory for this endpoint"); a model that does is asked on `"low"`
+    instead, which answered on both, and remembered for the life of the
+    process so the refusal is paid once. Any other refusal of the setting
+    (a 4xx) hands back the first reply, marked; a second try that fails
+    outright fails the call like any failed call, with the cut-off in its
+    message. The first try's billed output is added to `output_tokens` and
+    rides `cut_off_try`; the input count stays the answering call's.
+  - An empty reply is never silent: `raw_metadata["cut_off"]` reads "cut off:
+    finish_reason length after N reasoning tokens (M output tokens), no text
+    came back", plus what the second try did; an empty reply that stopped on
+    its own reads `raw_metadata["empty"]` ("said nothing: ..."). The new
+    `toll_harness.models.base.empty_reply_note(response)` reads either, and
+    the draft loop's reply log uses it.
+  - Unchanged: a reply with words (even one cut short), a tool call, and any
+    endpoint that is not OpenRouter (OpenAI direct is marked, never asked
+    again). The other adapters are untouched.
+
 - **The who step's `from_step` is said as the slot it is, research included
   (0.64.0).** WHAT FORCED IT: lab agent Ali on prod, 2026-10-12, planned "I
   want Toll Bench featured in an AI newsletter or podcast" with a who step

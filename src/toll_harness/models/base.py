@@ -17,6 +17,26 @@ class ModelInvocationError(RuntimeError):
         self.message = message
 
 
+def empty_reply_note(response: Any) -> str:
+    """Why a reply came back with no text, in plain words, or "".
+
+    0.64.3: an adapter that can tell marks it on `raw_metadata` -- `cut_off`
+    when the output budget stopped the model before it said anything (a
+    thinking model that spent max_tokens reasoning), `empty` when it stopped
+    on its own and said nothing. A caller prints this instead of guessing,
+    so "cut off" and "said nothing" are never the same line. An adapter that
+    marks nothing answers "".
+    """
+    metadata = getattr(response, "raw_metadata", None)
+    if not isinstance(metadata, dict):
+        return ""
+    for key in ("cut_off", "empty"):
+        note = metadata.get(key)
+        if isinstance(note, str) and note:
+            return note
+    return ""
+
+
 class ModelAdapter(ABC):
     """Provider-neutral intelligence boundary."""
 

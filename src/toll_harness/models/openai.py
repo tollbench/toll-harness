@@ -24,8 +24,70 @@ from toll_harness.models.base import ModelAdapter, ModelInvocationError
 CACHE_MIN_CHARS = 4_000
 
 
+# A REPLY CUT OFF BEFORE IT SAID ANYTHING (0.64.3). WHAT FORCED IT: prod
+# heat, 2026-10-20 02:57Z. DeepSeek V4.1 Flash, GLM 5.3, Mistral Large 4 and
+# Qwen 3.8 Max, all through OpenRouter, failed every plan try with "empty
+# reply". One plan-sized call each at max_tokens 5000 proved it: every one
+# came back finish_reason "length", 4,999-5,000 reasoning tokens, content
+# empty -- they thought until the budget ran out and never wrote the answer.
+# OpenRouter documents exactly this: reasoning tokens count against
+# max_tokens, and when they spend it the reply is `length` with no content.
+# So a reply that is empty, carries no tool call and was stopped by the
+# budget is asked ONCE more with the reasoning turned down. The cap that
+# worked differs by model: "none" answered on DeepSeek, Mistral and Kimi, and
+# GLM and Qwen refuse it at the door ("Reasoning is mandatory for this
+# endpoint") -- they answered on "low". A model that refused "none" is
+# remembered for the life of the process, so the refusal is paid once.
+CUT_OFF_REASONING = {"effort": "none"}
+MANDATORY_REASONING = {"effort": "low"}
+_CUT_OFF_FINISH = frozenset({"length", "max_tokens", "max_output_tokens"})
+_REASONING_IS_MANDATORY: set[str] = set()
+
+
 def _is_openrouter(client: Any) -> bool:
     return "openrouter" in str(getattr(client, "base_url", "") or "").lower()
+
+
+def _field(obj: Any, name: str) -> Any:
+    """An attribute or a key: SDK objects carry extra fields as attributes,
+    a plain decoded body carries them as keys."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _reasoning_tokens(usage: Any) -> int:
+    details = _field(usage, "completion_tokens_details")
+    try:
+        return int(_field(details, "reasoning_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _error_says_reasoning_is_mandatory(error: Exception) -> bool:
+    """The provider's own words, read only for this one refusal and never
+    passed on (a body can echo the request)."""
+    texts = [str(error), str(getattr(error, "message", "") or "")]
+    body = getattr(error, "body", None)
+    if body is not None:
+        texts.append(json.dumps(body, default=str) if not isinstance(body, str) else body)
+    reader = getattr(error, "read", None)
+    if callable(reader):  # urllib's HTTPError keeps the body unread
+        try:
+            raw = reader()
+            texts.append(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw))
+        except Exception:  # noqa: BLE001 - a body that will not read says nothing
+            pass
+    said = " ".join(texts).lower()
+    return "reasoning is mandatory" in said or "cannot be disabled" in said
+
+
+def _status_of(error: Exception) -> int | None:
+    for name in ("status_code", "status", "code"):
+        value = getattr(error, name, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def _tool_alias(name: str) -> str:
@@ -161,13 +223,70 @@ class OpenAIModelAdapter(ModelAdapter):
                 for tool in tools
             ]
             request["tool_choice"] = "auto"
+        first = self._read(self._create(request))
+        if not first["cut_off"] or not _is_openrouter(self.client):
+            # Everything that came back whole, and every endpoint that is not
+            # OpenRouter, is answered exactly as before; a cut-off reply off
+            # another endpoint is only marked, never asked again.
+            return self._respond(first)
+        return self._respond(self._ask_again(request, first), cut=first)
+
+    def _create(self, request: JsonObject) -> Any:
         try:
-            response = self.client.chat.completions.create(**request)
+            return self.client.chat.completions.create(**request)
         except Exception as error:
             code = getattr(error, "type", None) or type(error).__name__
             message = getattr(error, "message", None) or str(error)
             raise ModelInvocationError("openai", code, message) from error
 
+    def _ask_again(self, request: JsonObject, first: JsonObject) -> JsonObject:
+        """ONE more call with the reasoning turned down, on the same budget.
+
+        "none" first; a model that answers that reasoning cannot be turned
+        off is asked on "low" instead, and remembered. A refusal of the
+        setting itself (any 4xx) hands back the first reply, marked; anything
+        else fails the call exactly as a first call would.
+        """
+        mandatory = self.model_id in _REASONING_IS_MANDATORY
+        cap = MANDATORY_REASONING if mandatory else CUT_OFF_REASONING
+        while True:
+            retry = dict(request)
+            extra = dict(request.get("extra_body") or {})
+            extra["reasoning"] = dict(cap)
+            retry["extra_body"] = extra
+            try:
+                response = self.client.chat.completions.create(**retry)
+            except Exception as error:
+                status = _status_of(error)
+                if (
+                    cap is CUT_OFF_REASONING
+                    and status is not None
+                    and 400 <= status < 500
+                    and _error_says_reasoning_is_mandatory(error)
+                ):
+                    _REASONING_IS_MANDATORY.add(self.model_id)
+                    cap = MANDATORY_REASONING
+                    continue
+                if status is not None and 400 <= status < 500:
+                    # Nothing was generated: the first reply is the answer,
+                    # marked with the refusal.
+                    return dict(first, retry={"reasoning": dict(cap), "refused": status},
+                                same_call=True)
+                code = getattr(error, "type", None) or type(error).__name__
+                message = getattr(error, "message", None) or str(error)
+                raise ModelInvocationError(
+                    "openai",
+                    code,
+                    f"{cut_off_words(first)}; the second try with reasoning "
+                    f"{cap} failed: {message}",
+                ) from error
+            again = self._read(response)
+            again["retry"] = {"reasoning": dict(cap)}
+            return again
+
+    def _read(self, response: Any) -> JsonObject:
+        """One provider reply, normalized, with what stopped it and whether
+        it thought out loud. Its spend is counted here, once per call."""
         choice = response.choices[0]
         model_message = choice.message
         normalized: list[JsonObject] = []
@@ -204,29 +323,105 @@ class OpenAIModelAdapter(ModelAdapter):
             cache_read=min(cached_tokens, input_tokens),
             out=output_tokens,
         )
+        finish = getattr(choice, "finish_reason", None)
+        native = _field(choice, "native_finish_reason")
+        reasoning = _field(model_message, "reasoning")
+        reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+        reasoning_tokens = _reasoning_tokens(usage)
+        stops = {str(finish or "").lower(), str(native or "").lower()}
+        spent = bool(reasoning_tokens) and output_tokens >= self.max_tokens
+        return {
+            "text": text,
+            "normalized": normalized,
+            "calls": calls,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "cached_tokens": cached_tokens,
+            "finish_reason": finish,
+            "model": getattr(response, "model", self.model_id),
+            "reasoning": bool(reasoning) or bool(_field(model_message, "reasoning_details")),
+            "reasoning_chars": reasoning_chars,
+            "reasoning_tokens": reasoning_tokens,
+            # Empty, no tool call, and the budget is what stopped it.
+            "cut_off": (
+                not text.strip()
+                and not calls
+                and (bool(stops & _CUT_OFF_FINISH) or spent)
+            ),
+        }
+
+    def _respond(self, read: JsonObject, cut: JsonObject | None = None) -> ModelResponse:
+        """The reply as the runtime reads it. When a cut-off first try came
+        before it, its billed output is added in and it rides `cut_off_try`;
+        the input count stays the answering call's, which is the
+        conversation's size."""
+        output_tokens = read["output_tokens"]
+        total_tokens = read["total_tokens"]
+        metadata: JsonObject = {
+            "model": read["model"],
+            "finish_reason": read["finish_reason"],
+            "reasoning": read["reasoning"],
+            "reasoning_chars": read["reasoning_chars"],
+            "reasoning_tokens": read["reasoning_tokens"],
+            "max_tokens": self.max_tokens,
+        }
+        raw: JsonObject = {
+            "prompt_tokens": read["input_tokens"],
+            "completion_tokens": read["output_tokens"],
+            # Both providers report the cached share here; OpenAI as
+            # prompt_tokens_details.cached_tokens, OpenRouter the same.
+            "cached_tokens": read["cached_tokens"],
+            "reasoning_tokens": read["reasoning_tokens"],
+        }
+        if read.get("retry"):
+            metadata["retry"] = read["retry"]
+        if cut is not None and not read.get("same_call"):
+            first = {
+                "finish_reason": cut["finish_reason"],
+                "prompt_tokens": cut["input_tokens"],
+                "completion_tokens": cut["output_tokens"],
+                "reasoning_tokens": cut["reasoning_tokens"],
+            }
+            metadata["cut_off_try"] = first
+            raw["cut_off_try"] = first
+            # The first try's output was generated and billed.
+            output_tokens += cut["output_tokens"]
+            total_tokens += cut["output_tokens"]
+        if read["cut_off"]:
+            metadata["cut_off"] = cut_off_words(read)
+        elif not read["text"].strip() and not read["calls"]:
+            metadata["empty"] = (
+                f"said nothing: finish_reason {read['finish_reason'] or 'unreported'}, "
+                "no text and no tool call"
+            )
         return ModelResponse(
-            message=ModelMessage(role="assistant", content=normalized),
-            text=text,
-            tool_calls=calls,
+            message=ModelMessage(role="assistant", content=read["normalized"]),
+            text=read["text"],
+            tool_calls=read["calls"],
             usage=ModelUsage(
-                input_tokens=input_tokens,
+                input_tokens=read["input_tokens"],
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                raw={
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                    # Both providers report the cached share here; OpenAI as
-                    # prompt_tokens_details.cached_tokens, OpenRouter the same.
-                    "cached_tokens": int(
-                        getattr(
-                            getattr(usage, "prompt_tokens_details", None),
-                            "cached_tokens",
-                            0,
-                        )
-                        or 0
-                    ),
-                },
+                raw=raw,
             ),
-            stop_reason=getattr(choice, "finish_reason", None),
-            raw_metadata={"model": getattr(response, "model", self.model_id)},
+            stop_reason=read["finish_reason"],
+            raw_metadata=metadata,
         )
+
+
+def cut_off_words(read: JsonObject) -> str:
+    """Plain words for a reply the budget stopped before it said anything."""
+    words = (
+        f"cut off: finish_reason {read.get('finish_reason') or 'unreported'} "
+        f"after {int(read.get('reasoning_tokens') or 0)} reasoning tokens "
+        f"({int(read.get('output_tokens') or 0)} output tokens), no text came back"
+    )
+    retry = read.get("retry")
+    if isinstance(retry, dict):
+        effort = (retry.get("reasoning") or {}).get("effort")
+        if retry.get("refused"):
+            words += f"; the second try with reasoning {effort} was refused ({retry['refused']})"
+        else:
+            words += f"; the second try with reasoning {effort} was cut off too"
+    return words

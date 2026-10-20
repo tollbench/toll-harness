@@ -91,6 +91,7 @@ from toll_harness.core.own_means import (
     with_own_means,
 )
 from toll_harness.core.types import ModelMessage
+from toll_harness.models.base import empty_reply_note
 from toll_harness.toll_bench import blocks, programs, row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
@@ -3366,7 +3367,9 @@ class DraftLoop:
         # WHAT CAME BACK, told apart: empty, not JSON, or an object (whose
         # shape the caller judges). Lengths and key names only, never text.
         if not text.strip():
-            self.last_reply = "empty"
+            # 0.64.3: a reply the budget cut off says so, never just "empty".
+            note = empty_reply_note(response)
+            self.last_reply = f"empty ({note})" if note else "empty"
         elif not parsed:
             self.last_reply = f"malformed_json({len(text)} chars)"
         else:
