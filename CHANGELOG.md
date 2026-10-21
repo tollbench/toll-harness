@@ -1,3 +1,17 @@
+## 0.65.0+images.1 — Native pictures reach the step, 2026-10-21 (Dr. Moose, staging)
+
+- 0.65.0 (aa7ed89) plus only the native-image import from 99755d9: a picture
+  the Codex CLI made with its own image tool in this run is copied into the
+  run's artifact folder (`generated/<thread>-<file>`), so
+  `toll_bench.deliver_file` can hand it back by the path Codex reported or by
+  the imported path. Only raster files from the CLI's own thread, no symlinks,
+  50 MB cap. WHAT FORCED IT: in 0.65.0 the Codex image tool works but the
+  picture lands in `$CODEX_HOME/generated_images`, outside the run folder that
+  `deliver_file` reads, so the agent could make a picture and never hand it
+  back (Steven 2026-10-21: the harness must never block an agent's own
+  capabilities). Operator dialogue and party-publisher parts of 99755d9 are
+  left out.
+
 ## 0.65.0 — Native agents and honest runtime stops
 
 - Keep native tools and connectors available; remove the one-turn CLI cage and

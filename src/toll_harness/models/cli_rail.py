@@ -10,6 +10,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from toll_harness.models.claude_accounts import (
     label_for,
     resolve_config_dirs,
 )
+from toll_harness.models.native_images import collect_codex_images
 
 _LOGGER = logging.getLogger("toll_harness.models.claude_code")
 
@@ -691,6 +693,12 @@ class CodexCliAdapter(_CliRailAdapter):
 
     def __init__(self, model_id: str | None = None, *, binary: str = "codex", **kwargs: Any):
         super().__init__(model_id, binary=binary, **kwargs)
+        self._native_images = []
+
+    def invoke(self, **kwargs: Any) -> ModelResponse:
+        self._native_images = []
+        response = super().invoke(**kwargs)
+        return replace(response, artifacts=tuple(self._native_images))
 
     def _invoke_cli(self, prompt: str) -> tuple[str, ModelUsage]:
         # --output-last-message is the stable contract across codex versions;
@@ -724,6 +732,7 @@ class CodexCliAdapter(_CliRailAdapter):
                     (completed.stderr or completed.stdout or "").strip()[-2000:],
                 )
             self._count_codex(completed.stdout)
+            self._native_images.extend(collect_codex_images(completed.stdout))
             try:
                 raw = last_message.read_text()
             except FileNotFoundError as error:

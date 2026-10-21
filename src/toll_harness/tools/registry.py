@@ -94,6 +94,7 @@ class ToolContext:
     terminal_status: RunStatus | None = None
     terminal_result: JsonObject | None = None
     wait_requested: bool = False
+    native_artifact_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1790,6 +1791,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
     def deliver_file(context: ToolContext, arguments: JsonObject) -> JsonObject:
         provider = require_toll_bench(context)
         path = str(arguments["path"])
+        path = context.native_artifact_aliases.get(path, path)
         try:
             content = context.artifact_store.read(context.run_id, path)
         except FileNotFoundError:
@@ -1828,7 +1830,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.deliver_file",
             (
                 "Hand a file from this run's folder to the person (rule 230). "
-                "Reads `path` out of the run's isolated artifact directory and "
+                "Reads `path` out of the run's isolated artifact directory (native generated "
+                "images from this run are imported automatically; their returned path works) and "
                 "uploads the BYTES to the deal, where the platform sniffs the "
                 "type from the bytes themselves, fingerprints them and attaches "
                 "a file receipt to the step you are working. 50 MB per file, "

@@ -437,6 +437,11 @@ class HarnessRuntime:
         definitions = self.tools.definitions(self.enabled_tools)
         usage = ModelUsage()
         failed_protected_writes: dict[str, int] = {}
+        native_artifact_aliases = {
+            event.payload["source_path"]: event.payload["path"]
+            for event in self.event_store.list_events(run_id)
+            if event.kind == "model.artifact" and event.source == "harness"
+        }
         budget = ContextBudget(limit=self.context_budget_tokens)
 
         for iteration in range(1, self.max_iterations + 1):
@@ -493,6 +498,21 @@ class HarnessRuntime:
                     iteration,
                 )
 
+            for artifact in response.artifacts:
+                # The adapter supplies bytes; the runtime never opens a model path.
+                from pathlib import PurePath
+
+                if PurePath(artifact.filename).name != artifact.filename:
+                    raise ValueError("Invalid native artifact filename")
+                imported = self.artifact_store.write(
+                    run_id, "generated/" + artifact.filename, artifact.content
+                )
+                native_artifact_aliases[artifact.source_path] = imported["path"]
+                self.event_store.append_event(
+                    run_id, "model.artifact", "harness",
+                    {**imported, "source_path": artifact.source_path},
+                )
+
             usage = self._add_usage(usage, response.usage)
             budget.record(response.usage, conversation_chars)
             _LOGGER.info("%s", budget.line())
@@ -531,6 +551,7 @@ class HarnessRuntime:
                 event_store=self.event_store,
                 artifact_store=self.artifact_store,
                 event_cursor=event_cursor,
+                native_artifact_aliases=native_artifact_aliases,
                 web_provider=self.web_provider,
                 email_provider=self.email_provider,
                 browser_provider=self.browser_provider,

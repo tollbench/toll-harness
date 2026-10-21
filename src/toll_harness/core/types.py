@@ -68,6 +68,13 @@ class ModelUsage:
 
 
 @dataclass(frozen=True)
+class ModelArtifact:
+    source_path: str
+    filename: str
+    content: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
 class ModelResponse:
     message: ModelMessage
     text: str
@@ -75,6 +82,7 @@ class ModelResponse:
     usage: ModelUsage = field(default_factory=ModelUsage)
     stop_reason: str | None = None
     raw_metadata: JsonObject = field(default_factory=dict)
+    artifacts: tuple[ModelArtifact, ...] = ()
 
 
 @dataclass(frozen=True)
