@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -113,6 +114,13 @@ def test_goal_tool_schema_and_submit_mapping():
     registry = add_toll_bench_tools(build_standard_registry())
     definitions = {item.name: item for item in registry.definitions()}
     assert set(GOAL_CHECK_TOOLS) <= set(definitions)
+    for name in GOAL_CHECK_TOOLS:
+        pattern = definitions[name].input_schema["properties"]["run_id"]["pattern"]
+        assert re.fullmatch(pattern, RUN_ID)
+        assert all(
+            re.fullmatch(pattern, value) is None
+            for value in ("..", "../attention", "?query")
+        )
     schema = definitions["toll_bench.submit_goal_check"].input_schema
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])
