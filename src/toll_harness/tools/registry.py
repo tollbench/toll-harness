@@ -910,7 +910,13 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             wait=arguments.get("wait", 0)
         ),
     )
-    run_id = {"type": "string", "minLength": 1, "maxLength": 64}
+    run_id = {
+        "type": "string",
+        "pattern": (
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        ),
+    }
     registry.register(
         ToolDefinition(
             "toll_bench.goal_check",

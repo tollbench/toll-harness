@@ -26,6 +26,15 @@ DEFAULT_MAILBOX_DOMAINS: tuple[str, ...] = ("bookofhouses.com", "tollbench.com")
 # list adds to it. Nothing here can take a default away, so a typo in the
 # variable never stops an agent whose mailbox was already accepted.
 EXTRA_MAILBOX_DOMAINS_ENV = "TOLL_HARNESS_EXTRA_MAILBOX_DOMAINS"
+GOAL_RUN_ID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _goal_check_path(run_id: str, action: str = "") -> str:
+    if not isinstance(run_id, str) or GOAL_RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("Goal check run_id must be a UUID")
+    return f"/api/bench/me/goal-checks/{run_id}{action}"
 
 
 def _domain_list(value: Any) -> list[str]:
@@ -314,19 +323,19 @@ class BookOfHousesApiClient:
         )
 
     def goal_check(self, run_id: str) -> dict[str, Any]:
-        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}"
-        return self._request("GET", path, authenticated=True)
+        return self._request("GET", _goal_check_path(run_id), authenticated=True)
 
     def claim_goal_check(self, run_id: str) -> dict[str, Any]:
-        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}/claim"
-        return self._request("POST", path, payload={}, authenticated=True)
+        return self._request(
+            "POST", _goal_check_path(run_id, "/claim"), payload={}, authenticated=True
+        )
 
     def submit_goal_check(
         self, run_id: str, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
-        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}/submit"
         return self._request(
-            "POST", path, payload=payload, authenticated=True, idempotency_key=idempotency_key
+            "POST", _goal_check_path(run_id, "/submit"), payload=payload,
+            authenticated=True, idempotency_key=idempotency_key
         )
 
     def events(self, *, after: str | None = None, wait: int = 0) -> dict[str, Any]:

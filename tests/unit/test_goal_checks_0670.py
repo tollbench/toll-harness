@@ -7,6 +7,8 @@ import json
 import urllib.error
 import urllib.request
 
+import pytest
+
 from toll_harness import cli
 from toll_harness.config import GOAL_CHECK_TOOLS, with_goal_check_tools
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
@@ -29,6 +31,9 @@ class Response:
         return False
 
 
+RUN_ID = "24f1b8b8-ac64-4de4-a3ad-712fe0f5c5e9"
+
+
 def test_authenticated_goal_doors_preserve_submit_key_and_body(monkeypatch):
     calls = []
 
@@ -47,14 +52,14 @@ def test_authenticated_goal_doors_preserve_submit_key_and_body(monkeypatch):
     body = {"leaseToken": "lease", "assessment": "On track", "nextAction": "Ask owner",
             "strategy": "Review weekly", "blockers": []}
 
-    provider.goal_check("run/1")
-    provider.claim_goal_check("run/1")
-    first = provider.submit_goal_check("run/1", body, "same-run-retry")
-    second = provider.submit_goal_check("run/1", body, "same-run-retry")
+    provider.goal_check(RUN_ID)
+    provider.claim_goal_check(RUN_ID)
+    first = provider.submit_goal_check(RUN_ID, body, "same-run-retry")
+    second = provider.submit_goal_check(RUN_ID, body, "same-run-retry")
 
     assert first["receipt"] == 3 and second["receipt"] == 4
     assert [call["method"] for call in calls] == ["GET", "POST", "POST", "POST"]
-    assert all("/goal-checks/run%2F1" in call["url"] for call in calls)
+    assert all(f"/goal-checks/{RUN_ID}" in call["url"] for call in calls)
     assert all(call["authorization"] == "Bearer agent-token" for call in calls)
     assert calls[1]["body"] == {}
     assert calls[2]["key"] == calls[3]["key"] == "same-run-retry"
@@ -71,12 +76,31 @@ def test_revoked_goal_door_returns_refusal_without_fallback(monkeypatch):
     api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
     for operation in (api.goal_check, api.claim_goal_check):
         try:
-            operation("revoked-run")
+            operation(RUN_ID)
         except BookOfHousesApiError as error:
             assert error.status == 404
             assert error.code == "not_found"
         else:
             raise AssertionError("revoked goal check was accepted")
+
+
+@pytest.mark.parametrize("run_id", ["..", "../attention", "?query", "not-a-uuid", ""])
+def test_malformed_run_id_is_rejected_before_any_network_call(monkeypatch, run_id):
+    def forbidden_urlopen(_request, timeout=None):
+        raise AssertionError("malformed run ID reached the network")
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden_urlopen)
+    api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    body = {"leaseToken": "lease", "assessment": "On track", "nextAction": "Ask owner",
+            "strategy": "Weekly review", "blockers": []}
+    operations = (
+        lambda: api.goal_check(run_id),
+        lambda: api.claim_goal_check(run_id),
+        lambda: api.submit_goal_check(run_id, body, "same-run-retry"),
+    )
+    for operation in operations:
+        with pytest.raises(ValueError, match="run_id must be a UUID"):
+            operation()
 
 
 def test_goal_tool_schema_and_submit_mapping():
@@ -95,13 +119,13 @@ def test_goal_tool_schema_and_submit_mapping():
     assert schema["properties"]["assessment"]["maxLength"] == 2000
     assert schema["properties"]["blockers"]["maxItems"] == 10
     context = ToolContext("run", None, None, None, 0, toll_bench_provider=provider)
-    args = {"run_id": "check-1", "lease_token": "lease", "assessment": "On track",
+    args = {"run_id": RUN_ID, "lease_token": "lease", "assessment": "On track",
             "next_action": "Ask owner", "strategy": "Weekly review", "blockers": [],
             "idempotency_key": "check-1-report"}
     result = registry.execute(context, "call", "toll_bench.submit_goal_check", args)
     assert not result.is_error
     assert provider.submitted == (
-        "check-1", {"leaseToken": "lease", "assessment": "On track",
+        RUN_ID, {"leaseToken": "lease", "assessment": "On track",
                     "nextAction": "Ask owner", "strategy": "Weekly review", "blockers": []},
         "check-1-report",
     )
@@ -120,7 +144,7 @@ def test_goal_tool_schema_and_submit_mapping():
     )
     assert body_too_large.is_error
     assert "8192-byte" in body_too_large.output["error"]
-    assert provider.submitted[0] == "check-1"
+    assert provider.submitted[0] == RUN_ID
 
 
 def test_goal_attention_has_focused_tools_and_distinct_run_keys():
