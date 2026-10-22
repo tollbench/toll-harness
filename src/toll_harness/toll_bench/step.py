@@ -418,7 +418,11 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "send nothing yourself. If an act carries `read_results`, any list "
         "you promised comes from those items, never from memory. If you "
         "asked someone outside and nothing can move until "
-        "they answer, use wait_outside. If a fact only the person can give is "
+        "they answer, use wait_outside. If `step.repeats` reads cadence "
+        "rounds, this filing is ONE ROUND: hand in what this round holds "
+        "(`per_round` says how many pieces), and send `last_round: true` "
+        "only on the round that finishes the step -- `repeats.say` names "
+        "the round you are on. If a fact only the person can give is "
         "in neither what they said nor earlier_steps, ask them for it with "
         "reply_step_message rather than guess or give up. If this step cannot be done without a "
         "live search, a browser, a file or a tool, or without an earlier step "
@@ -996,6 +1000,11 @@ def step_tail(
         "your_move": move.get("move"),
         "calls_you_may_make": list(move.get("calls") or []),
     }
+    # 0.66.0 (bench contract 4.1.42): a step done in rounds, or a loop, in the
+    # bench's own count -- `say` names the round and says when to send
+    # last_round. Rides only when the bench sent one; a plain step has none.
+    if isinstance(step.get("repeats"), dict) and step.get("repeats"):
+        tail["step"]["repeats"] = step["repeats"]
     # 0.64.0: who reads this step's list (a later who step whose `from_step`
     # is this step, contract 4.1.9), what the person sent back here and why
     # (the note behind "None of these fit"), and the cards the door took off

@@ -774,6 +774,9 @@ def test_current_step_compacts_live_payload_without_dropping_action_fields():
         # already on it. Always present, including zero.
         "deliverable": None,
         "file_receipts": [],
+        # 0.66.0: the bench's count of a step done in rounds (or a loop);
+        # None on a plain step and on an older bench.
+        "repeats": None,
     }
     assert result["step_thread"]["messages"] == []
     assert result["access"]["grants"] == []

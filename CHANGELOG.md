@@ -1,17 +1,3 @@
-## 0.65.0+images.1 — Native pictures reach the step, 2026-10-21 (Dr. Moose, staging)
-
-- 0.65.0 (aa7ed89) plus only the native-image import from 99755d9: a picture
-  the Codex CLI made with its own image tool in this run is copied into the
-  run's artifact folder (`generated/<thread>-<file>`), so
-  `toll_bench.deliver_file` can hand it back by the path Codex reported or by
-  the imported path. Only raster files from the CLI's own thread, no symlinks,
-  50 MB cap. WHAT FORCED IT: in 0.65.0 the Codex image tool works but the
-  picture lands in `$CODEX_HOME/generated_images`, outside the run folder that
-  `deliver_file` reads, so the agent could make a picture and never hand it
-  back (Steven 2026-10-21: the harness must never block an agent's own
-  capabilities). Operator dialogue and party-publisher parts of 99755d9 are
-  left out.
-
 ## 0.65.0 — Native agents and honest runtime stops
 
 - Keep native tools and connectors available; remove the one-turn CLI cage and
@@ -36,6 +22,41 @@ PyPI via Trusted Publishing, and mirrored here.
 ## [Unreleased]
 
 - Nothing removed. No fields or calls deprecated.
+
+## 0.66.0 — The flow factory gaps Dr. Moose's picture book forced, 2026-10-22
+
+Staging bench contract 4.1.48. Nothing removed. No fields or calls deprecated.
+
+- **`last_round` rides `toll_bench.file_outcome` and `deliver_hosted_file`
+  (bench contract 4.1.42).** The outcome schema and the provider's allowed
+  set refused the key, so an agent on a step done in rounds had no way to say
+  "this was the last round": told all pages were in, Dr. Moose tried three
+  times and his loop guard parked the step. `last_round: true` now rides the
+  outcome of the round that finishes the step; absent or false, the step
+  opens again for the next round.
+- **`repeats` rides `current_step` and the step tail.** The provider
+  whitelist dropped the bench's own count of a step done in rounds (cadence,
+  total, per_round, current, items and `say`, which names the round and says
+  when to send last_round), so the model never read it. It rides whole when
+  the bench sends one; the hand-back instruction says what a round is.
+- **`what_your_operator_gave_you` rides the proposal, outline and form asks
+  (bench contract 4.1.43).** The brief and every plan-door answer carry
+  `flow_materials` (the operator's recipe, notes, links, documents, pictures)
+  and no prompt carried them, so Dr. Moose's first plan asked the person for
+  the recipe his operator had already given him. `draft.operator_materials`
+  renders them compact under their own 12,000-character budget (never inside
+  the 3,000-character strategy budget), newest copy first (the door answer,
+  then the brief); `text_trimmed` says when a text was cut.
+- **Native Codex pictures reach the step (0.65.0+images.1, folded in).** A
+  picture the Codex CLI made with its own image tool is copied into the run's
+  artifact folder (`generated/<thread>-<file>`), so `toll_bench.deliver_file`
+  can hand it back by the path Codex reported or by the imported path. Only
+  raster files from the CLI's own thread, no symlinks, 50 MB cap.
+- The bench side of the same batch (contract 4.1.48): `per_round` on the
+  rounds blank, `failed`/`error` on every `read_results` entry (a read that
+  ran and failed is tellable from one that never started), and a link the
+  person wrote into the want is never the agent's bare URL. Nothing in this
+  package changes for those; the 0.65.1 `read_results` note below still holds.
 
 - **`read_results` rides every act row, whole (0.65.1, bench contract
   4.1.44).** The bench puts an always-present `read_results` list on every

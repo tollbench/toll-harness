@@ -204,6 +204,75 @@ SHORT_FRONT_DOOR = (
 # The bid road's own outline instruction went with rule 243 on 2026-09-11: a
 # proposal is seven fields and one call, it opens no draft, and nothing asks a
 # model for the outline of a plan nobody has picked it for.
+# WHAT YOUR OPERATOR GAVE YOU (bench contract 4.1.43; 0.66.0). The brief and
+# every plan-door answer carry `flow_materials`: the recipe, notes, links,
+# documents and pictures the operator put in the materials box for this flow.
+# No prompt here carried them, so Dr. Moose's first plan asked the person for
+# the recipe his operator had already given him (2026-10-21). They ride the
+# outline ask, the form ask and the proposal ask under one key, compact and
+# within a budget of their own (never under the 3,000-character strategy
+# budget, which a recipe would empty in one row).
+MATERIALS_KEY = "what_your_operator_gave_you"
+MATERIALS_CHAR_BUDGET = 12_000
+MATERIALS_SENTENCE = (
+    "`what_your_operator_gave_you`, when present, is the recipe your operator "
+    "put in the materials box for this flow -- notes, links, documents, "
+    "pictures (a `text` was trimmed where `text_trimmed` is true; read the "
+    "whole item with get_flow_material). Plan FROM it and never ask the "
+    "person for what it already holds; a picture with `public_url` may be an "
+    "option's `image_url`."
+)
+# The form ask has a length test of its own (`test_the_words_stay_short`), so
+# it carries the short form; the outline asks carry the whole sentence.
+MATERIALS_SENTENCE_SHORT = (
+    "`what_your_operator_gave_you`, when present, is your operator's recipe "
+    "for this flow (get_flow_material reads a trimmed item whole): plan FROM "
+    "it, never ask the person for what it holds; a picture's `public_url` may "
+    "be an option's `image_url`."
+)
+
+
+def operator_materials(brief: Any, answer: Any = None) -> list[dict[str, Any]] | None:
+    """The operator's materials, compact, or None when there are none.
+
+    Read off the plan-door `answer` first (it is the newer copy), then the
+    brief. Each row keeps id, kind, title, url, public_url, use_in_flow and
+    its inline text; text past the budget is cut and `text_trimmed` says so.
+    """
+    rows: Any = None
+    for source in (answer, brief):
+        if isinstance(source, dict) and isinstance(source.get("flow_materials"), list):
+            rows = source["flow_materials"]
+            if rows:
+                break
+    if not rows:
+        return None
+    out: list[dict[str, Any]] = []
+    left = MATERIALS_CHAR_BUDGET
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {
+            key: item.get(key)
+            for key in ("id", "kind", "title", "url", "public_url", "use_in_flow")
+            if item.get(key) is not None
+        }
+        text = item.get("text")
+        trimmed = bool(item.get("text_trimmed"))
+        if isinstance(text, str) and text:
+            room = max(0, left)
+            if len(text) > room:
+                text = text[:room]
+                trimmed = True
+            left -= len(text)
+            if text:
+                row["text"] = text
+        if trimmed:
+            row["text_trimmed"] = True
+        out.append(row)
+    return out or None
+
+
 PLAN_OUTLINE_INSTRUCTION = (
     "The person picked your bid and answered your questions. Below are "
     "`steps_you_bid` -- your own steps, one line each, numbered -- and "
@@ -215,6 +284,7 @@ PLAN_OUTLINE_INSTRUCTION = (
     "given -- and add a step only where the answers call for one. No promises, "
     "no pitch, no money, no odds: each of those is asked for afterwards, one "
     "at a time.\n"
+    + MATERIALS_SENTENCE + "\n"
     'Answer: {"steps": [{"bid_step": 2, "ask": "APPROVE", "title": "..."}, ...]}.'
 )
 
@@ -2002,6 +2072,7 @@ SEEDED_OUTLINE_INSTRUCTION = (
     "ADJUSTED for the want above -- retitle each step in this want's words, "
     "drop a step this want does not need, add one it does, change a tool only "
     "where this want needs a different one. Keep the shape that worked.\n"
+    + MATERIALS_SENTENCE + "\n"
     'Answer: {"steps": [ ... ]}.'
 )
 
@@ -2852,25 +2923,25 @@ FORM_INSTRUCTION = (
     "fill in ONE reply.\n"
     "`form` is the blank form, one entry per step. "
     "`answer_these_on_every_step` is the bench's own question for each blank "
-    "of a step -- they are written for step 1 and the same questions are "
-    "asked of every step you write -- and `and_for_the_plan` is what the plan "
-    "itself asks. A question that lists `choices` is a PICK: answer with one "
-    "of those words exactly as it is written. A question that names a number "
-    "of characters is a CAP: stay within it.\n"
+    "of a step -- written for step 1, asked of every step you write -- and "
+    "`and_for_the_plan` is what the plan itself asks. A question with `choices` is a PICK: answer with one of "
+    "them, verbatim. One that names a number of characters is a CAP: stay "
+    "within it.\n"
     "The plan itself needs `overview` (its blank in `and_for_the_plan` says "
-    "what it is) and `odds` (YOUR chance of achieving the whole goal "
-    "within `span_days`, a number greater than 0 and less than 1). Each "
-    "step's `declared_odds` is that same chance judged once the step is done, "
-    "so the line starts at or above `odds` and never falls from one step to "
-    "the next (`forecast_context` is the bench's own rule for the numbers).\n"
+    "what it is) and `odds` (YOUR chance of the whole goal within "
+    "`span_days`, more than 0 and less than 1). Each step's `declared_odds` "
+    "is that chance once the step is done: it starts at or above `odds` and "
+    "never falls step to step (`forecast_context` is the bench's rule for "
+    "the numbers).\n"
     "`you_may_also_use` are extra picks a step MAY carry; leave out what "
-    "this plan does not need.\n"
+    "you do not need.\n"
     + NO_TOOL_SENTENCE
-    + "WRITE AS MANY STEPS AS THE PLAN NEEDS -- two or twenty, there is no cap "
-    "-- so add entries to the blank form or drop them freely. You never write "
+    + "WRITE AS MANY STEPS AS THE PLAN NEEDS, two or twenty: add entries to "
+    "the blank form or drop them freely. You never write "
     "a connect row, a grant request, a title, a schedule or a pointer: the "
     "bench writes those from your picks.\n"
     + WHO_STEP_SENTENCE
+    + MATERIALS_SENTENCE_SHORT + "\n"
     + 'Answer: {"overview": "...", "odds": 0.35, "span_days": 14, "steps": '
     '[{"verb": "finds", "do_line": "...", "hand_over_line": "...", '
     '"need_line": "", "declared_odds": 0.4, "proof": "text", "who": "agent"}, '
@@ -3715,6 +3786,9 @@ class DraftLoop:
         self, want: Any, strategy: Any, brief: Any, seed: dict[str, Any] | None
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"want": want, "what_the_person_said": strategy}
+        materials = operator_materials(brief)
+        if materials:
+            payload[MATERIALS_KEY] = materials
         if seed:
             payload["outline_you_ran"] = seed["steps"]
         elif self._tools_ride_the_outline:
@@ -3763,6 +3837,9 @@ class DraftLoop:
             "and_for_the_plan": [self._blank_row(row) for row in plan_rows],
             "you_may_also_use": answer.get("optional_picks") or [],
         }
+        materials = operator_materials(brief, answer)
+        if materials:
+            payload[MATERIALS_KEY] = materials
         send = answer.get("send") or ""
         if send:
             payload["how_to_send_it"] = send
@@ -3888,6 +3965,9 @@ class DraftLoop:
             "budget_cents": budget_of(brief),
             "tools_on_this_want": tools_index(brief),
         }
+        materials = operator_materials(brief)
+        if materials:
+            payload[MATERIALS_KEY] = materials
         if self.standing_direction:
             payload["lab_lead_standing_direction"] = self.standing_direction
         if self.approach_default:

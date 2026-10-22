@@ -1716,6 +1716,19 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "type": "string",
                 "description": "The name a file_url delivery wears on the person's card.",
             },
+            # A STEP DONE IN ROUNDS (bench contract 4.1.42; 0.66.0). WHAT
+            # FORCED IT: Dr. Moose painted the last pages of a book and had
+            # no way to say so -- this schema refused the key, so his loop
+            # guard parked the step after three tries (2026-10-21).
+            "last_round": {
+                "type": "boolean",
+                "description": (
+                    "On a step whose `step.repeats` reads cadence `rounds`: true "
+                    "on the filing that is the LAST round, so the person's "
+                    "approval closes the step; false or absent and the step "
+                    "opens again for the next round. Ignored on any other step."
+                ),
+            },
             # THE WIN LADDER (bench contract 4.1.0, 2026-09-24): the optional
             # proof list. Paying never depends on it; counting does.
             "proof": {
@@ -1763,7 +1776,11 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "outcome.proof is optional, a list of {kind: 'money', charge_id OR transfer_id, "
                 "amount_cents} naming a settled Book of Houses checkout record; a long-odds or "
                 "moonshot win counts official only with one proof the bench checked. The 201 "
-                "echoes proof (each item's check) and proof_notes."
+                "echoes proof (each item's check) and proof_notes. A STEP DONE IN "
+                "ROUNDS (contract 4.1.42): when `step.repeats` reads cadence rounds, "
+                "this filing is ONE round (`repeats.say` names it, `per_round` how "
+                "many pieces it hands in); send last_round: true only on the round "
+                "that finishes the step."
             ),
             _object_schema(
                 {
@@ -1927,6 +1944,13 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                         ),
                     },
                     "step_ref": {"type": "string"},
+                    "last_round": {
+                        "type": "boolean",
+                        "description": (
+                            "On a step done in rounds (contract 4.1.42): true "
+                            "when this hosted file is the LAST round's hand-in."
+                        ),
+                    },
                     "idempotency_key": {"type": "string"},
                 },
                 ["target_id", "file_url", "note", "idempotency_key"],
@@ -1935,9 +1959,16 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         lambda context, arguments: require_toll_bench(context).deliver_hosted_file(
             arguments["target_id"],
             {
-                key: arguments[key]
-                for key in ("note", "file_url", "claim_url", "filename", "step_ref")
-                if arguments.get(key)
+                **{
+                    key: arguments[key]
+                    for key in ("note", "file_url", "claim_url", "filename", "step_ref")
+                    if arguments.get(key)
+                },
+                **(
+                    {"last_round": arguments["last_round"]}
+                    if isinstance(arguments.get("last_round"), bool)
+                    else {}
+                ),
             },
             arguments["idempotency_key"],
         ),

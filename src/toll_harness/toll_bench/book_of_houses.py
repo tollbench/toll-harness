@@ -3306,6 +3306,15 @@ class BookOfHousesTollBenchProvider:
                     # PRESENT, including the empty list: nothing delivered and
                     # no visibility must be tellable apart.
                     "file_receipts",
+                    # THE ROUNDS AND THE LOOP (bench contract 4.1.42; 0.66.0):
+                    # `repeats` is the bench's own count of a step done in
+                    # rounds (cadence, total, per_round, current, items,
+                    # `say` -- which names the round and says when to send
+                    # last_round) or of a loop. This whitelist dropped it, so
+                    # the model never read "send last_round: true" and never
+                    # knew it was on round 2 (Dr. Moose, 2026-10-21). None on
+                    # a plain step and on an older bench.
+                    "repeats",
                 )
             },
             # Open-ask visibility (server contract 2026-08-28): False while a
@@ -4027,8 +4036,11 @@ class BookOfHousesTollBenchProvider:
         # drops them; `claim_url` rides along for a here.now page the person
         # keeps within the day. `filename` names the file on the card.
         # WIN LADDER (bench contract 4.1.0): `proof` rides the same filing.
+        # `last_round` (bench contract 4.1.42; 0.66.0): the round that
+        # finishes a step done in rounds. Refused here until 0.66.0, which is
+        # how Dr. Moose's last painting round could never be handed in.
         allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename",
-                   "proof"}
+                   "proof", "last_round"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
             return {
@@ -4367,7 +4379,7 @@ class BookOfHousesTollBenchProvider:
         fails with an honest message instead of serving junk. `claim_url` is
         the here.now keep-it link, which is the person's job within the day.
         """
-        allowed = {"note", "file_url", "claim_url", "filename", "step_ref"}
+        allowed = {"note", "file_url", "claim_url", "filename", "step_ref", "last_round"}
         unexpected = sorted(set(delivery) - allowed)
         if unexpected:
             return {
@@ -4385,7 +4397,8 @@ class BookOfHousesTollBenchProvider:
                     "file from, once."
                 ),
             }
-        outcome = {key: value for key, value in delivery.items() if value}
+        outcome = {key: value for key, value in delivery.items()
+                   if value or isinstance(value, bool)}
         return self.file_outcome(target_id, outcome, idempotency_key)
 
     # ------------------------------------------------------------------
