@@ -706,6 +706,17 @@ class BookOfHousesTollBenchProvider:
     def attention(self, *, wait: int = 0) -> dict[str, Any]:
         return self.api.attention(wait=wait)
 
+    def goal_check(self, run_id: str) -> dict[str, Any]:
+        return self.api.goal_check(run_id)
+
+    def claim_goal_check(self, run_id: str) -> dict[str, Any]:
+        return self.api.claim_goal_check(run_id)
+
+    def submit_goal_check(
+        self, run_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        return self.api.submit_goal_check(run_id, payload, idempotency_key)
+
     def events(self, *, after: str | None = None, wait: int = 0) -> dict[str, Any]:
         return self.api.events(after=after, wait=wait)
 

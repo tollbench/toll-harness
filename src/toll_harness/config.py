@@ -66,6 +66,12 @@ STEP_DOOR_TOOLS = [
     "toll_bench.list_act_kinds",
 ]
 
+GOAL_CHECK_TOOLS = [
+    "toll_bench.goal_check",
+    "toll_bench.claim_goal_check",
+    "toll_bench.submit_goal_check",
+]
+
 # The toll_bench tools every onboarding before 0.56.2 wrote. A list holding
 # all of them is one onboarding wrote, not an operator's choice, so it gets
 # the step doors onboarding forgot. A hand-cut list is left exactly as it is.
@@ -87,6 +93,20 @@ def with_step_doors(tools: Any) -> Any:
     if not isinstance(tools, list) or not _ONBOARDED_BEFORE_STEP_DOORS <= set(tools):
         return tools
     return list(tools) + [name for name in STEP_DOOR_TOOLS if name not in tools]
+
+
+_ONBOARDED_BEFORE_GOAL_CHECKS = (
+    _ONBOARDED_BEFORE_STEP_DOORS
+    | frozenset(STEP_DOOR_TOOLS)
+    | {"toll_bench.deliver_file", "toll_bench.deliver_hosted_file"}
+)
+
+
+def with_goal_check_tools(tools: Any) -> Any:
+    """Add goal doors to the complete standard Bench list, not hand-cut lists."""
+    if not isinstance(tools, list) or not _ONBOARDED_BEFORE_GOAL_CHECKS <= set(tools):
+        return tools
+    return list(tools) + [name for name in GOAL_CHECK_TOOLS if name not in tools]
 
 
 @dataclass
@@ -367,7 +387,9 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     tool_registry = build_standard_registry()
     if toll_bench_provider:
         tool_registry = add_toll_bench_tools(tool_registry)
-    enabled_tools = with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))
+    enabled_tools = with_goal_check_tools(
+        with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))
+    )
     if native:
         # Native agents do research in their own environment. Do not replace
         # their abilities with the reference runtime's web/browser/HTTP tools.

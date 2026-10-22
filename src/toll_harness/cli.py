@@ -802,6 +802,7 @@ _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "draft_sent_back",
     "file_informed_plan",
     "unanswered_message",
+    "goal_check",
 )
 
 # Shared bookkeeping tools every focused obligation goal needs: load/save a
@@ -1073,6 +1074,22 @@ _DRAFT_SENT_BACK_INSTRUCTION = (
 )
 
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
+    "goal_check": {
+        "instruction": (
+            "This is one owner-approved recurring goal check. Use its run id to read and claim "
+            "the check, then compare the approved snapshot with the previous report and the "
+            "current linked-pack turns. The goal total is owner-confirmed as of its stated time; "
+            "never infer new signups or claim a fresh total from elapsed time or pack activity. "
+            "Submit an assessment, one next action, a weekly strategy when this run asks for one, "
+            "and concrete blockers. Use one idempotency key for retries of the same submission. "
+            "A 404 means this check is unavailable or revoked; stop. Do not create a work card, "
+            "publish, or ask for the owner's whole private book."
+        ),
+        "tools": frozenset(
+            {"toll_bench.goal_check", "toll_bench.claim_goal_check",
+             "toll_bench.submit_goal_check"}
+        ) | _BOOKKEEPING_TOOLS,
+    },
     "deal_step": {
         "instruction": _DEAL_STEP_INSTRUCTION,
         "tools": frozenset(
@@ -1789,6 +1806,8 @@ _STALL_DELAY_CAP_SECONDS = 3600.0
 
 def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     """The one piece of work an obligation names, independent of its wording."""
+    if obligation.get("kind") == "goal_check":
+        return ("goal_check", str(obligation.get("id") or ""))
     return tuple(
         str(obligation.get(field) or "")
         for field in ("kind", "target_id", "proposal_id", "deal_id", "step_id")

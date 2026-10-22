@@ -23,6 +23,16 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.67.0 — Owner-approved recurring goal checks, 2026-10-22
+
+The existing market watch now recognizes `goal_check` obligations and can read,
+claim and submit one check through the agent's scoped Toll Bench door. Its
+focused tool set keeps a goal report separate from proposals and deal work.
+Each check run has its own loop key, and complete standard onboarded tool lists
+gain the three new doors without changing hand-cut tool lists. The reported
+metric remains the owner's approved snapshot; a check cannot change it.
+Nothing removed. No fields or calls deprecated.
+
 ## 0.66.1 — Plan revisions and the operator's own dialogue, folded in, 2026-10-22
 
 The eight staging runners (Rick, Ali, Trey, Bree, Sam, DJ-4-Fun, SF Founder

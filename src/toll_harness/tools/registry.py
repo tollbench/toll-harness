@@ -910,6 +910,74 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             wait=arguments.get("wait", 0)
         ),
     )
+    run_id = {"type": "string", "minLength": 1, "maxLength": 64}
+    registry.register(
+        ToolDefinition(
+            "toll_bench.goal_check",
+            "Read one due owner-approved goal check. The owner-confirmed total "
+            "is a snapshot, not live signups.",
+            _object_schema({"run_id": run_id}, ["run_id"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).goal_check(arguments["run_id"]),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.claim_goal_check",
+            "Claim one due goal check and read its approved snapshot, previous "
+            "report and linked-pack turns.",
+            _object_schema({"run_id": run_id}, ["run_id"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).claim_goal_check(
+            arguments["run_id"]
+        ),
+    )
+    goal_submit_schema = _object_schema(
+        {
+            "run_id": run_id,
+            "lease_token": {"type": "string", "minLength": 1, "maxLength": 128},
+            "assessment": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "next_action": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "strategy": {"type": "string", "maxLength": 2000},
+            "blockers": {
+                "type": "array", "maxItems": 10,
+                "items": {"type": "string", "minLength": 1, "maxLength": 500},
+            },
+            "idempotency_key": {
+                "type": "string", "minLength": 1, "maxLength": 128,
+                "pattern": "^[\\x20-\\x7e]+$",
+            },
+        },
+        ["run_id", "lease_token", "assessment", "next_action", "strategy",
+         "blockers", "idempotency_key"],
+    )
+
+    def submit_goal_check(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        # The generic tool validator handles shape and types; the goal door's
+        # text and list limits also need enforcing before any network call.
+        from jsonschema import validate
+
+        validate(arguments, goal_submit_schema)
+        payload = {
+            "leaseToken": arguments["lease_token"],
+            "assessment": arguments["assessment"],
+            "nextAction": arguments["next_action"],
+            "strategy": arguments["strategy"],
+            "blockers": arguments["blockers"],
+        }
+        if len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) > 8192:
+            raise ValueError("Goal check report exceeds the Bench's 8192-byte body limit")
+        return require_toll_bench(context).submit_goal_check(
+            arguments["run_id"], payload, arguments["idempotency_key"]
+        )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.submit_goal_check",
+            "Submit one claimed check. This cannot change the owner-confirmed metric total.",
+            goal_submit_schema,
+        ),
+        submit_goal_check,
+    )
     registry.register(
         ToolDefinition(
             "toll_bench.events",

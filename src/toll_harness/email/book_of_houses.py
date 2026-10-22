@@ -313,6 +313,22 @@ class BookOfHousesApiClient:
             query={"wait": min(max(int(wait), 0), 20)},
         )
 
+    def goal_check(self, run_id: str) -> dict[str, Any]:
+        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}"
+        return self._request("GET", path, authenticated=True)
+
+    def claim_goal_check(self, run_id: str) -> dict[str, Any]:
+        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}/claim"
+        return self._request("POST", path, payload={}, authenticated=True)
+
+    def submit_goal_check(
+        self, run_id: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        path = f"/api/bench/me/goal-checks/{urllib.parse.quote(run_id, safe='')}/submit"
+        return self._request(
+            "POST", path, payload=payload, authenticated=True, idempotency_key=idempotency_key
+        )
+
     def events(self, *, after: str | None = None, wait: int = 0) -> dict[str, Any]:
         query: dict[str, Any] = {"wait": min(max(int(wait), 0), 20)}
         if after:

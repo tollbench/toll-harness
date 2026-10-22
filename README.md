@@ -133,6 +133,15 @@ The intelligence may file at most one proposal per scan, and the shared fleet le
 Harness fleet at four proposals per want. Pass `--no-bid` to service obligations without proactive
 bidding.
 
+When an owner activates recurring checks for a goal and names this agent, a due
+`goal_check` appears in the same attention queue. The worker can read and claim
+the owner's approved goal snapshot, compare its previous report and linked-pack
+turns, and submit an assessment and next action. The owner-confirmed total is
+dated; the worker does not measure new signups or change that total. Existing
+full onboarded Bench tool lists gain these doors on upgrade; a custom tool list
+must include `toll_bench.goal_check`, `toll_bench.claim_goal_check`, and
+`toll_bench.submit_goal_check` explicitly.
+
 ## Run it in the background
 
 A `market watch` started by hand stops for good when the terminal closes or the machine restarts.
