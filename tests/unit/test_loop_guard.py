@@ -136,9 +136,12 @@ def test_stop_reason_survives_restart_and_reaches_bench(tmp_path):
     snapshot = {"current_step": {"id": "step", "rounds_used": 0},
                 "submission": {"worker_status": {"name": "report_worker_status"}}}
     reports = []
-    resources = SimpleNamespace(store=SQLiteStore(path),
-        toll_bench=SimpleNamespace(report_worker_status=lambda *args, **kwargs: reports.append(kwargs)))
+    resources = SimpleNamespace(
+        store=SQLiteStore(path),
+        toll_bench=SimpleNamespace(
+            report_worker_status=lambda *args, **kwargs: reports.append(kwargs)))
     state = cli._loop_state(resources, obligation, snapshot)
-    LoopGuard(path).record_reason(cli._loop_key(obligation), state, "Provider timeout after 600 seconds")
+    LoopGuard(path).record_reason(cli._loop_key(obligation), state,
+                                  "Provider timeout after 600 seconds")
     cli._report_worker_status(resources, obligation, "parked", snapshot)
     assert reports == [{"reason": "Provider timeout after 600 seconds", "cause": "runtime"}]

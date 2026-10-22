@@ -7,10 +7,12 @@ from toll_harness import config
 
 
 @pytest.mark.parametrize('limit', [None, 120000])
-def test_native_runtime_uses_own_tools_without_initializing_replacements(tmp_path, monkeypatch, limit):
+def test_native_runtime_uses_own_tools_without_initializing_replacements(
+        tmp_path, monkeypatch, limit):
     monkeypatch.setattr(config, '_build_model', lambda *a, **k: SimpleNamespace(native_tools=True))
-    monkeypatch.setattr(config, 'PlaywrightBrowserProvider',
-                        lambda **k: pytest.fail('native agent must not initialize a replacement browser'))
+    monkeypatch.setattr(
+        config, 'PlaywrightBrowserProvider',
+        lambda **k: pytest.fail('native agent must not initialize a replacement browser'))
     settings = {'version': 1, 'model': {'adapter': 'codex'}, 'storage': {'directory': 'state'},
                 'runtime': {'tools': ['web.search', 'web.fetch', 'browser.open',
                                      'http.request', 'result.complete']},

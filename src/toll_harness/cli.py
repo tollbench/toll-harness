@@ -2143,7 +2143,8 @@ def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str
         if state == "parked":
             guard = _loop_guard(resources)
             if not reason and guard is not None:
-                reason = guard.reason(_loop_key(obligation), _loop_state(resources, obligation, snapshot))
+                reason = guard.reason(_loop_key(obligation),
+                                      _loop_state(resources, obligation, snapshot))
             result = report(str(deal_id), str(step_id), state,
                             int(step.get("rounds_used") or 0),
                             reason=reason or "Runtime stopped without a recorded reason.",
@@ -2539,7 +2540,8 @@ def _process_market_attention(
             )
         )
         original_tools = resources.runtime.enabled_tools
-        resources.runtime.enabled_tools = [name for name in original_tools if name in obligation_tools]
+        resources.runtime.enabled_tools = [name for name in original_tools
+                                           if name in obligation_tools]
         meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
         watch = _RefusalWatch(getattr(resources, "toll_bench", None))
         try:

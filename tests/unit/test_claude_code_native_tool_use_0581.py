@@ -23,7 +23,8 @@ def test_native_research_then_bench_handback_is_one_agent_run(tmp_path):
         ]
         return SimpleNamespace(returncode=0, stdout="\n".join(map(json.dumps, events)), stderr="")
     adapter = ClaudeCodeCliAdapter(workdir=tmp_path, runner=run)
-    response = adapter.invoke(system="Find podcasts.", messages=[ModelMessage.text("user", "Research")],
+    response = adapter.invoke(
+        system="Find podcasts.", messages=[ModelMessage.text("user", "Research")],
         tools=[ToolDefinition("toll_bench.post_check_in", "Report progress", {"type": "object"})])
     assert len(calls) == 1
     assert response.tool_calls[0].name == "toll_bench.post_check_in"
