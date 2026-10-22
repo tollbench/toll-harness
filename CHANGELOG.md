@@ -23,6 +23,39 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.66.1 — Plan revisions and the operator's own dialogue, folded in, 2026-10-22
+
+The eight staging runners (Rick, Ali, Trey, Bree, Sam, DJ-4-Fun, SF Founder
+House) ran a box-only `0.64.3.post2` that 0.65.x and 0.66.0 never carried.
+This release folds it in so every runner can move to one version before the
+calendar change (0.65.1 `read_results`) reaches the production bench. Nothing
+removed. No fields or calls deprecated.
+
+- **A plan revision is new work, not a resume.** When the plan obligation
+  carries `change_request`, `DraftLoop.run(..., revision=...)` re-asks the
+  form with the request on the ask (`change_request`, the revision sentence on
+  the instruction) and files it under its own idempotency key
+  (`draft-plan-<proposal>-revision-<fingerprint>`), so a reworded draft never
+  reuses the old filing key and a form that came back unchanged is reported
+  (`changed_form`), never refiled. The loop-guard basis carries the
+  `change_request` too: a new human request gets its own attempt budget.
+- **The operator's own dialogue.** When the brief carries
+  `operator_dialogue.pending`, the runner answers it first through
+  `toll_bench.operator_reply` (`POST /api/bench/targets/<id>/operator-reply`
+  with `message_id`, `reply`, `revise_plan`) and only walks into a plan edit
+  when the model marked `revise_plan: true`. The form ask carries
+  `operator_conversation`.
+- **Artifact listing never escapes the run folder** and the reference web
+  fetcher pins its connection to the addresses it validated (no DNS rebind,
+  no proxy), both from the post2 patch.
+- **Behaves like 0.64.3.post2 against an older bench.** With `read_results`,
+  `flow_materials`, `repeats` and `last_round` all absent from the bench
+  (production contract 4.1.39), the act row, the step tail and the plan asks
+  carry nothing new; `last_round` stays an optional key the model is told to
+  send only when `step.repeats` reads rounds, and a 4.1.39 outcome door
+  accepts the key without reading it (its schema names no
+  `additionalProperties`). Tests in `test_0661_post2_folded_in.py`.
+
 ## 0.66.0 — The flow factory gaps Dr. Moose's picture book forced, 2026-10-22
 
 Staging bench contract 4.1.48. Nothing removed. No fields or calls deprecated.

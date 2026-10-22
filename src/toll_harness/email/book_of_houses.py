@@ -327,6 +327,14 @@ class BookOfHousesApiClient:
     def open_targets(self) -> dict[str, Any]:
         return self._request("GET", "/api/bench/targets/open", authenticated=True)
 
+    def operator_reply(self, target_id: str, message_id: str, reply: str,
+                       revise_plan: bool) -> dict[str, Any]:
+        target = urllib.parse.quote(target_id, safe="")
+        return self._request(
+            "POST", f"/api/bench/targets/{target}/operator-reply", authenticated=True,
+            payload={"message_id": message_id, "reply": reply, "revise_plan": revise_plan},
+        )
+
     def target_brief(self, target_id: str) -> dict[str, Any]:
         target = urllib.parse.quote(target_id, safe="")
         # ?tools=1 (bench 2026-09-09): the brief went slim for raw agents that hold

@@ -16,6 +16,8 @@ class FilesystemArtifactStore(ArtifactStore):
         if not run_id.isalnum():
             raise ValueError("Invalid run id")
         run_root = (self.root / run_id).resolve()
+        if self.root not in run_root.parents:
+            raise ValueError("Run directory escapes the artifact root")
         candidate = (run_root / path).resolve()
         if candidate != run_root and run_root not in candidate.parents:
             raise ValueError("Artifact path escapes the run directory")
@@ -27,9 +29,14 @@ class FilesystemArtifactStore(ArtifactStore):
         if not base.exists():
             return []
         paths = [base] if base.is_file() else sorted(p for p in base.rglob("*") if p.is_file())
-        return [
-            {"path": str(path.relative_to(run_root)), "size": path.stat().st_size} for path in paths
-        ]
+        safe = []
+        for path in paths:
+            try:
+                self._path(run_id, str(path.relative_to(run_root)))
+            except ValueError:
+                continue
+            safe.append({"path": str(path.relative_to(run_root)), "size": path.stat().st_size})
+        return safe
 
     def read(self, run_id: str, path: str, limit: int | None = None) -> bytes:
         target = self._path(run_id, path)

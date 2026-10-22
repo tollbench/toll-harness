@@ -712,6 +712,10 @@ class BookOfHousesTollBenchProvider:
     def list_targets(self) -> dict[str, Any]:
         return self.api.open_targets()
 
+    def operator_reply(self, target_id: str, message_id: str, reply: str,
+                       revise_plan: bool) -> dict[str, Any]:
+        return self.api.operator_reply(target_id, message_id, reply, revise_plan)
+
     def read_brief(self, target_id: str) -> dict[str, Any]:
         """The want, and the whole legal FORM to bid with.
 

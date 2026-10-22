@@ -3837,6 +3837,10 @@ class DraftLoop:
             "and_for_the_plan": [self._blank_row(row) for row in plan_rows],
             "you_may_also_use": answer.get("optional_picks") or [],
         }
+        if answer.get("change_request"):
+            payload["change_request"] = answer["change_request"]
+        if isinstance(brief, dict) and brief.get("operator_dialogue"):
+            payload["operator_conversation"] = brief["operator_dialogue"].get("messages") or []
         materials = operator_materials(brief, answer)
         if materials:
             payload[MATERIALS_KEY] = materials
@@ -3874,6 +3878,15 @@ class DraftLoop:
         instruction = with_the_person_said(
             form_instruction(self.own_means), payload, answer
         )
+        if answer.get("change_request"):
+            instruction += (
+                "\nThe person requested a revision in change_request. Read the existing "
+                "form and return the COMPLETE revised form. Add, remove, reorder or "
+                "change steps and approval/delivery blocks as their request requires. "
+                "Preserve unaffected scope and agreed terms. Do not just refile the "
+                "old form or acknowledge the request; edit the actual plan. Do not "
+                "claim abilities or deliverables you cannot perform."
+            )
         form = read_form(
             self._ask(
                 instruction,
@@ -3914,6 +3927,8 @@ class DraftLoop:
                 len(handed_over),
                 ", ".join(handed_over),
             )
+        if answer.get("change_request") and read_form(form) == read_form(form_of(answer) or {}):
+            return answer, "changed_form"
         self.log.info(
             "draft loop %s target=%s: the form came back with %d step(s) and "
             "span_days=%s",
@@ -5450,6 +5465,7 @@ class DraftLoop:
         proposal_id: str | None = None,
         idempotency_key: str = "",
         file: bool = True,
+        revision: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """ONE WANT, ONE ANSWER, and which road depends on the stage.
 
@@ -5508,10 +5524,23 @@ class DraftLoop:
             )
         if state == self.NOTHING_STANDING:
             answer = self._open(target_id, kind)
-        # THE DOOR SAYS WHAT COMES NEXT. Read it before assuming a template.
-        answer, unanswered = self._follow(
-            target_id, kind, answer, want, strategy, brief
-        )
+        # A human revision is new work, not a resume of the ready saved form.
+        # Only an explicit request authorizes replacing that form's structure.
+        if revision:
+            if answer.get("next") != "form":
+                return self._gave_up(
+                    target_id, kind, "revision_form_unavailable",
+                    "The plan door has no editable form for this revision.", answer,
+                )
+            answer = dict(answer, change_request=revision)
+            answer, unanswered = self._fill_the_form(
+                target_id, kind, answer, want, strategy, brief
+            )
+        else:
+            # Ordinary recovery still preserves the standing form.
+            answer, unanswered = self._follow(
+                target_id, kind, answer, want, strategy, brief
+            )
         if unanswered:
             return self._gave_up(
                 target_id, kind, f"no_{unanswered}",
