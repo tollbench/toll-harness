@@ -413,9 +413,11 @@ MOVE_INSTRUCTIONS: dict[str, str] = {
         "items are objects keyed by exactly those field names, at least "
         "min_count of them, every value filled. `step.control.closes` says "
         "what the person does with them, and `your_last_filing`, when there, "
-        "names the cards the door took off: replace them. If an act on this step reads "
-        "sent or executed, quote its receipt in the document and send nothing "
-        "yourself. If you asked someone outside and nothing can move until "
+        "names the cards the door took off: replace them. If an act on this "
+        "step reads sent or executed, quote its receipt in the document and "
+        "send nothing yourself. If an act carries `read_results`, any list "
+        "you promised comes from those items, never from memory. If you "
+        "asked someone outside and nothing can move until "
         "they answer, use wait_outside. If a fact only the person can give is "
         "in neither what they said nor earlier_steps, ask them for it with "
         "reply_step_message rather than guess or give up. If this step cannot be done without a "
@@ -655,6 +657,21 @@ def _act_row(act: dict[str, Any]) -> dict[str, Any]:
     # PERSON's own reason for sending it back or saying no: it rides whole.
     if act.get("note") is not None:
         row["note"] = act.get("note")
+    # 0.65.1 (contract 4.1.44): `read_results` is a read run's own data on
+    # this act -- one entry per run, `{run, tool, ran, count, items, facts,
+    # trimmed}` (a calendar read's `items` are events: start, end, all_day,
+    # title, status, busy, id). The bench already trims it to 50 items /
+    # 8,000 characters before it ever reaches here, so it rides WHOLE, never
+    # re-clipped at 400 like the rest of this row -- a second clip would cut
+    # a calendar read down to a couple of events and the agent would invent
+    # the rest of the list it promised. Dropping it from the key allowlist
+    # above is exactly how the failed-act `error` field went missing for Kai
+    # (0.56.3): a key the bench adds and this row drops does not exist. Kept
+    # present (as `[]`) whenever the bench sent the key at all, including
+    # empty, so "no reads ran" and "an older bench that never sends this" are
+    # tellable apart; absent only on a bench that never sent it.
+    if act.get("read_results") is not None:
+        row["read_results"] = act.get("read_results")
     return row
 
 

@@ -23,6 +23,22 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+- **`read_results` rides every act row, whole (0.65.1, bench contract
+  4.1.44).** The bench puts an always-present `read_results` list on every
+  act entry in `current_step` `acts[]` (also the check-in 201 and step
+  thread): one entry per read run, `{run, tool, ran, count, items, facts,
+  trimmed}` -- a calendar read's `items` are events `{start, end, all_day,
+  title, status, busy, id}`, trimmed server-side to 50 items / 8,000
+  characters. `_act_row` in `toll_bench/step.py` copied a fixed allowlist of
+  act keys that did not include it, so an agent asked to write a list it
+  promised from a read (e.g. "three open times") had only its own memory to
+  write it from. `_act_row` now carries `read_results` through whole,
+  present (as `[]`) whenever the bench sends the key at all and never
+  re-clipped by this row's own 400-character pass (the bench already trimmed
+  it); absent only on an older bench that never sent it. The `hand_back`
+  move instruction now says, in one sentence, that a promised list comes
+  from `read_results`, never from memory.
+
 - **A reply cut off before it said anything is asked once more, and says so
   (0.64.3).** WHAT FORCED IT: prod heat, 2026-10-20 02:57Z. DeepSeek V4.1
   Flash, GLM 5.3, Mistral Large 4 and Qwen 3.8 Max, all through OpenRouter,
