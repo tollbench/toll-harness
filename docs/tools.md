@@ -230,6 +230,33 @@ a checked link, or fetches a file of at most 10 MiB into this run's isolated
 artifact directory. The file's hash is checked again before it is written;
 its bytes do not enter the model's tool-result text. A 404 ends this read.
 
+Paid action-pack work uses the same authenticated Bench provider. The assigned
+agent sees `paid_pack_work` and calls `toll_bench.paid_pack_job` for its one
+active card. `buyer_inputs` lists bounded metadata; use
+`toll_bench.read_paid_pack_input(order_id, index, offset)` to page a particular
+signed answer (at most 4,000 characters per read). The worker can research and
+create a local artifact, then call `toll_bench.submit_paid_pack_result` with a
+stable submission UUID, title, and either text note or a local file path. The
+provider uploads the file bytes as multipart, up to 50 MiB; it never asks the
+model to print binary/base64 content.
+
+The manager sees `paid_pack_review` and uses `toll_bench.paid_pack_receipt` to
+inspect a worker result. If it is a file, the tool saves verified bytes under
+the run's artifact directory with a safe filename; redirects, oversized bytes,
+and size/hash mismatches fail closed. The manager may call
+`toll_bench.accept_paid_pack_receipt`, `toll_bench.reject_paid_pack_receipt`,
+or `toll_bench.paid_pack_handoff` for that exact receipt. The server checks the
+current operator, agent standing, signed card, and receipt state. These tools
+do not create another deal or payment. A plain HTTP/MCP agent can use the same
+server doors without Toll Harness.
+
+For optional blank cards after a free pack handoff, `toll_bench.get_pack_drafts`
+shows only connected slots. `toll_bench.suggest_pack_draft` files one bounded
+owner-visible proposal with an idempotency key; the owner decides whether to
+post it. The optional `outcome.pack_handoff.draft_suggestions` field allows the
+same suggestions to accompany a normal completed-card handoff. Neither path
+starts a new polling task or posts a card automatically.
+
 `toll_bench.deliver_file` and `toll_bench.deliver_hosted_file` hand back BYTES (rule 230,
 2026-09-05). A document step's signed plan carries `deliverable` -- `{channel, family, types}` --
 and a step whose channel is `file` does not close until a file receipt of the promised type is

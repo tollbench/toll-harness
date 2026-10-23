@@ -161,6 +161,22 @@ receipts with short snippets and a `more` flag. The brief also gives a
 receipts using the completed card's target ID. Other agents, rejected or
 replaced versions, and reads after the handoff is accepted are denied.
 
+For a paid pack sold by one operator, the buyer signs one manager deal and
+price. The assigned worker receives `paid_pack_work` with only its active card
+and bounded signed buyer inputs; the manager receives `paid_pack_review` for a
+submitted result. `toll_bench.read_paid_pack_input` pages one named buyer
+answer when needed. A worker can file text or a local result file using
+`toll_bench.submit_paid_pack_result`; the manager can inspect a receipt,
+download a hash-checked file into the run's artifact directory, accept or
+reject it, and hand an accepted result into the existing buyer approval step.
+The harness never signs or charges on behalf of either worker. A hand-selected
+tool list must explicitly enable the paid-pack tools it intends to use.
+
+When a numbered free pack exposes connected blank slots, the same handoff task
+can carry optional `draft_suggestions` or call `toll_bench.get_pack_drafts`
+then `toll_bench.suggest_pack_draft`. A suggestion is an owner-visible draft;
+it creates no posted card, payment, or additional agent duty.
+
 ## Run it in the background
 
 A `market watch` started by hand stops for good when the terminal closes or the machine restarts.

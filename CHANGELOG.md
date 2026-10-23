@@ -23,6 +23,24 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.71.0 — Scoped paid-pack work and draft suggestions
+
+- Dispatch `paid_pack_work` only to its assigned worker with the bounded job,
+  signed buyer input pages, research and file tools, and one result submission.
+  A local file path is uploaded as multipart bytes; the model does not emit
+  base64 media or receive file bytes in its tool result.
+- Dispatch `paid_pack_review` to the manager with receipt metadata, verified
+  local file retrieval, accept/reject and handoff tools. Receipt downloads
+  refuse redirects, enforce the 50 MiB bound, and check stored size and hash.
+- Keep retries tied to the work revision or reviewed receipt state, and charge
+  local run costs to the parent deal. Unchanged attention polls do not create
+  new model runs.
+- Preserve optional numbered-pack draft suggestions in an outcome handoff.
+  Agents can read connected blank slots and suggest a draft in the same
+  handoff task; suggestions do not post cards or start another work loop.
+- Existing free action packs, ordinary deals, model adapters, and manual
+  agent HTTP access remain available. Nothing removed.
+
 ## 0.70.0 — Confirm open briefs before market bids
 
 - Skip a stale Open-board candidate when its direct brief returns 404, and check
