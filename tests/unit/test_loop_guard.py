@@ -115,6 +115,29 @@ def test_parked_bid_does_not_starve_other_targets(tmp_path, monkeypatch):
     assert seen == ["fresh"]
 
 
+def test_market_brief_preflight_does_not_reset_bid_attempt_budget(tmp_path, monkeypatch):
+    resources = SimpleNamespace(store=SQLiteStore(tmp_path / "s.db"), agent_identity=None)
+    brief = {"poll": 0}
+    monkeypatch.setattr(
+        cli, "_market_scan_candidates",
+        lambda _resources: (1, [{"target_id": "same", "round": 1,
+                                 "_verified_brief": {"poll": brief["poll"]}}], []),
+    )
+    monkeypatch.setattr(cli, "_the_proposal_road_is_open", lambda _resources: True)
+    calls = []
+
+    def bid(_resources, target, *_args):
+        calls.append(target["target_id"])
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "_bid_through_the_draft_loop", bid)
+    for attempt in range(4):
+        brief["poll"] = attempt
+        result = cli._process_market_opportunities(resources, {})
+    assert calls == ["same", "same", "same"]
+    assert result["loop_guard"]["parked"] == ["bid:same:round:1"]
+
+
 def test_storage_failure_prevents_dispatch(tmp_path, monkeypatch):
     resources = SimpleNamespace(store=SQLiteStore(tmp_path / "s.db"), agent_identity=None)
     monkeypatch.setattr(cli, "_market_scan_candidates", lambda r: (1, [{"target_id": "t"}], []))

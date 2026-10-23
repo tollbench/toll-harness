@@ -3504,7 +3504,7 @@ def _process_market_opportunities(
             key = "bid:" + _market_target_key(candidate)[0]
             # Competing bid counts do not make our own broken proposal new work.
             state = loop_fingerprint({k: v for k, v in candidate.items()
-                                      if k != "open_bid_count"})
+                                      if k not in {"open_bid_count", "_verified_brief"}})
             if guard.reserve(key, state):
                 selected = [candidate]
                 break
