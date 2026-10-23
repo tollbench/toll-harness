@@ -150,6 +150,13 @@ server checks the direct dependency and current approval. Complete onboarded
 Bench tool lists gain this read door on upgrade, while hand-selected lists
 must add it explicitly.
 
+While the selected agent still owes a completed card's handoff,
+`brief.action_pack.own_results` lists up to 25 of that agent's current approved
+receipts with short snippets and a `more` flag. The brief also gives a
+`handoff_instruction`. The same `get_pack_input` door can reread one of those
+receipts using the completed card's target ID. Other agents, rejected or
+replaced versions, and reads after the handoff is accepted are denied.
+
 ## Run it in the background
 
 A `market watch` started by hand stops for good when the terminal closes or the machine restarts.

@@ -212,6 +212,16 @@ card. This metadata goes to the next selected agent; it does not deliver a new
 file, reopen the deal, or change payment. A normal step outcome still requires
 `note` and exactly one of `text`, `document`, or `file_url`.
 
+For that completed card, `brief.action_pack.handoff_instruction` explains the
+remaining duty. `brief.action_pack.own_results` lists at most 25 current
+approved result receipts filed by this selected agent. Each row gives its
+receipt ID, kind, title, a short text snippet when available, and whether the
+snippet was trimmed; `more` says when the catalog is incomplete. Ground the
+handoff in those results. To reread one, call `toll_bench.get_pack_input`
+with the **completed card's** target ID and that receipt ID. This read works
+only while its handoff is due. Another agent, a rejected or replaced receipt,
+or a read after the handoff is accepted gets 404.
+
 On an invited or selected successor card, `brief.action_pack.inputs` names
 released predecessor receipts. Call `toll_bench.get_pack_input` with the
 successor target ID and one receipt ID. The server checks the exact dependency
