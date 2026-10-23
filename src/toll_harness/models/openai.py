@@ -123,6 +123,7 @@ class OpenAIModelAdapter(ModelAdapter):
         max_tokens: int = 2048,
         client: Any | None = None,
         prompt_caching: bool = True,
+        base_url: str | None = None,
     ):
         self._model_id = model_id
         self.max_tokens = max_tokens
@@ -132,7 +133,15 @@ class OpenAIModelAdapter(ModelAdapter):
                 import openai
             except ImportError as error:
                 raise RuntimeError("Install Toll Harness with the 'openai' extra") from error
-            client = openai.OpenAI(api_key=api_key) if api_key else openai.OpenAI()
+            # `model.base_url` (0.68.0): an OpenAI-compatible endpoint named in
+            # agent.yaml, e.g. OpenRouter. Unset, the SDK reads OPENAI_BASE_URL
+            # exactly as before.
+            options: dict[str, Any] = {}
+            if api_key:
+                options["api_key"] = api_key
+            if base_url:
+                options["base_url"] = str(base_url)
+            client = openai.OpenAI(**options)
         self.client = client
 
     @property

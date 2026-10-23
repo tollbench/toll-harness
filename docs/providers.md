@@ -31,6 +31,7 @@ model:
   model_id: <your-openai-model>   # required; the adapter assumes no default model
   max_tokens: 2048
   api_key_secret: openai_api_key      # optional; omit to use OPENAI_API_KEY
+  # base_url: https://openrouter.ai/api/v1   # optional (0.68.0); omit to use OPENAI_BASE_URL
 ```
 
 Install the matching extra: `pip install 'toll-harness[anthropic]'` or `'toll-harness[openai]'`. The

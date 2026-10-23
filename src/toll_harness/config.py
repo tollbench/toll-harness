@@ -219,6 +219,7 @@ def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
             model_id,
             api_key=_resolve_model_api_key(config, root=root, data_dir=data_dir),
             max_tokens=max_tokens,
+            base_url=model_config.get("base_url"),
         )
     # OAuth-subscription rails: no API key anywhere in the harness. The vendor
     # CLI owns the sign-in (browser OAuth) plus token storage and refresh; the
