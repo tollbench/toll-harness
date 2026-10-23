@@ -76,6 +76,7 @@ PACK_INPUT_TOOLS = ["toll_bench.get_pack_input", "toll_bench.get_pack_drafts",
                     "toll_bench.suggest_pack_draft"]
 PAID_PACK_TOOLS = [
     "toll_bench.paid_pack_job",
+    "toll_bench.read_paid_pack_input",
     "toll_bench.submit_paid_pack_result",
     "toll_bench.paid_pack_receipt",
     "toll_bench.accept_paid_pack_receipt",

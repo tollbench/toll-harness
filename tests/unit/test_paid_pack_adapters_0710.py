@@ -80,6 +80,38 @@ def test_paid_cost_scope_uses_parent_deal_without_step_probe():
     assert seen == [(RECEIPT, ORDER)]
 
 
+def test_actual_watch_dispatch_intersects_configured_paid_work_tools(monkeypatch):
+    attention = {"kind": "paid_pack_work", "order_id": ORDER, "card_number": 1,
+                 "target_id": ORDER, "parent_deal_id": RECEIPT,
+                 "work_revision": "initial"}
+    observed = []
+    configured = ["toll_bench.paid_pack_job", "toll_bench.read_paid_pack_input",
+                  "toll_bench.submit_paid_pack_result", "web.search", "browser.open",
+                  "files.write", "email.send", "toll_bench.paid_pack_handoff"]
+    runtime = SimpleNamespace(enabled_tools=list(configured), model=None,
+                              email_provider=None)
+
+    def start(goal, _mode):
+        observed.append((goal, tuple(runtime.enabled_tools)))
+        return SimpleNamespace(status=SimpleNamespace(value="completed"))
+
+    runtime.start = start
+    bench = SimpleNamespace(ensure_reachable=lambda: {"ok": True},
+                            attention=lambda wait: {"attention": [attention]},
+                            list_proposals=lambda: {"proposals": []})
+    resources = SimpleNamespace(toll_bench=bench, runtime=runtime,
+                                agent_identity=None, store=None)
+    monkeypatch.setattr(cli, "_result_payload", lambda result: {"status": result.status.value})
+    monkeypatch.setattr(cli, "_dispatch_meter", lambda *_args: {})
+    result = cli._process_market_attention(resources, wait=0)
+    assert result["ok"] and len(observed) == 1
+    assert {"web.search", "browser.open", "files.write",
+            "toll_bench.read_paid_pack_input"} <= set(observed[0][1])
+    assert "email.send" not in observed[0][1]
+    assert "toll_bench.paid_pack_handoff" not in observed[0][1]
+    assert runtime.enabled_tools == configured
+
+
 def test_text_and_file_result_use_exact_private_door_without_redirect(monkeypatch):
     calls = []
 
@@ -251,3 +283,40 @@ def test_after_handoff_draft_tools_use_exact_scoped_door_and_key(monkeypatch):
                for request in calls)
     assert calls[1].get_header("Idempotency-key") == SUBMIT
     assert json.loads(calls[1].data)["slot_id"] == slot
+
+
+def test_paid_buyer_input_pages_are_explicit_and_scoped(monkeypatch):
+    calls = []
+
+    class Response:
+        status = 200
+        headers = {}
+
+        def read(self):
+            return b'{"ok":true,"input":{"index":2,"text":"bounded","next_offset":4}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def open(self, request, timeout=None):
+            calls.append(request)
+            return Response()
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_handlers: Opener())
+    api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    result = api.read_paid_pack_input(ORDER, 2, 0)
+    assert result["input"]["text"] == "bounded"
+    assert calls[0].full_url == (
+        f"https://bench.example/api/bench/paid-packs/{ORDER}/inputs/2?offset=0")
+    assert calls[0].get_header("Authorization") == "Bearer agent-token"
+    try:
+        api.read_paid_pack_input(ORDER, True)
+    except ValueError:
+        pass
+    else:
+        assert False, "bool index must be refused"
+    assert len(calls) == 1

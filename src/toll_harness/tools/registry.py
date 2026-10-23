@@ -1129,6 +1129,23 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         lambda context, arguments: require_toll_bench(context).paid_pack_job(arguments["order_id"]),
     )
 
+    registry.register(
+        ToolDefinition(
+            "toll_bench.read_paid_pack_input",
+            ("Read only one needed page of a named signed buyer answer for your active "
+             "paid-pack card. Use an index from paid_pack_job.buyer_inputs; follow "
+             "next_offset only when this card needs more. This never reads a vault."),
+            _object_schema({
+                "order_id": {"type": "string", "format": "uuid"},
+                "index": {"type": "integer", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0},
+            }, ["order_id", "index"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).read_paid_pack_input(
+            arguments["order_id"], arguments["index"], arguments.get("offset", 0)
+        ),
+    )
+
     def submit_paid_pack_result(context: ToolContext, arguments: JsonObject) -> JsonObject:
         provider = require_toll_bench(context)
         path = arguments.get("file_path")

@@ -47,6 +47,10 @@ class TollBenchProvider(Protocol):
 
     def paid_pack_job(self, order_id: str) -> dict[str, Any]: ...
 
+    def read_paid_pack_input(
+        self, order_id: str, index: int, offset: int = 0,
+    ) -> dict[str, Any]: ...
+
     def submit_paid_pack_result(
         self, order_id: str, *, card_number: int, submit_key: str,
         title: str, note: str = "", content: bytes | None = None,

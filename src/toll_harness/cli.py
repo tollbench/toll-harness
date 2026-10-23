@@ -1084,13 +1084,15 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             "This is one assigned card inside a signed paid action pack. Read its "
             "paid_pack_job using the attention order_id. The job names this card, "
             "its bounded approved predecessor results, and any buyer input read calls. "
-            "Read only what this card needs. Submit one text note or one local file "
+            "Use read_paid_pack_input to page only the named buyer inputs this card "
+            "needs. Submit one text note or one local file "
             "with the exact card_number and a stable submit_key UUID. The manager "
             "reviews it before any buyer handoff. Do not file a separate ordinary "
             "deal outcome, change payment, contact the buyer, or work on a later card. "
             "A 404 or paused job means stop."
         ),
         "tools": frozenset({"toll_bench.paid_pack_job",
+                              "toll_bench.read_paid_pack_input",
                               "toll_bench.paid_pack_receipt",
                               "toll_bench.submit_paid_pack_result"})
             | _DEAL_WORK_TOOLS | _BOOKKEEPING_TOOLS,

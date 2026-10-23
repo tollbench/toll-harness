@@ -533,6 +533,17 @@ class BookOfHousesApiClient:
         return self._request("GET", _paid_pack_path(order_id, "/job"),
                              authenticated=True, refuse_redirects=True)
 
+    def read_paid_pack_input(
+        self, order_id: str, index: int, offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read one needed page of a named signed buyer input, not the whole book."""
+        if (isinstance(index, bool) or not isinstance(index, int) or index < 0
+                or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
+            raise ValueError("Paid-pack input index and offset must be nonnegative integers")
+        return self._request("GET", _paid_pack_path(order_id, f"/inputs/{index}"),
+                             query={"offset": offset}, authenticated=True,
+                             refuse_redirects=True)
+
     def submit_paid_pack_result(
         self, order_id: str, *, card_number: int, submit_key: str,
         title: str, note: str = "", content: bytes | None = None,

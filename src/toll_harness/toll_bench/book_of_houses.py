@@ -782,6 +782,11 @@ class BookOfHousesTollBenchProvider:
     def paid_pack_job(self, order_id: str) -> dict[str, Any]:
         return self.api.paid_pack_job(order_id)
 
+    def read_paid_pack_input(
+        self, order_id: str, index: int, offset: int = 0,
+    ) -> dict[str, Any]:
+        return self.api.read_paid_pack_input(order_id, index, offset)
+
     def submit_paid_pack_result(
         self, order_id: str, *, card_number: int, submit_key: str,
         title: str, note: str = "", content: bytes | None = None,
