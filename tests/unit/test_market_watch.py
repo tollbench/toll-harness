@@ -2030,9 +2030,10 @@ def test_a_changed_obligation_payload_lifts_the_stall(monkeypatch):
     assert len(goals) == 1
 
 
-def test_an_unknown_kind_still_dispatches_without_the_retired_feedback_tools(monkeypatch):
-    """The unknown-kind fallback keeps every live instruction and tool set;
-    the retired feedback_returned set is no longer folded in."""
+def test_an_unknown_kind_is_a_notice_and_costs_no_model_call(monkeypatch):
+    """0.68.0: an attention item this build has no action for is reported on
+    the cycle's `notices` and never dispatched (until then it ran a full model
+    call with every obligation's tools, which could do nothing about it)."""
     monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     goals = []
     obligation = {
@@ -2045,12 +2046,10 @@ def test_an_unknown_kind_still_dispatches_without_the_retired_feedback_tools(mon
 
     result = cli._process_market_attention(resources, wait=0)
 
-    assert result["ok"] is True
-    goal, tools = goals[0]
-    assert "re-file ONCE" not in goal
-    assert "back on the table" not in goal
-    assert "toll_bench.submit_proposal" not in set(tools)
-    assert "toll_bench.validate_proposal" not in set(tools)
+    assert result["ok"] is True and result["run"] is None
+    assert goals == []
+    assert result["notices"] == [{"kind": "some_future_kind", "target_id": "target-1"}]
+    assert result["retry_after_seconds"] == 60.0
 
 
 def test_stall_threshold_comes_from_the_agent_configuration(tmp_path):

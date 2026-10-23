@@ -2207,12 +2207,44 @@ def command_loop_guard(arguments: argparse.Namespace) -> int:
         resources.close()
 
 
+def _notice_of(item: dict[str, Any]) -> dict[str, Any]:
+    """An attention item this harness has no action for, as the cycle reports it."""
+    return {
+        key: item.get(key)
+        for key in ("kind", "your_move", "target_id", "deal_id", "step_id", "waiting_since")
+        if item.get(key) not in (None, "")
+    }
+
+
 def _process_market_attention(
     resources: Any,
     wait: int,
     previous_failure: dict[str, Any] | None = None,
     *,
     stall_threshold: int | None = None,
+) -> dict[str, Any]:
+    """One attention cycle. NOTICES COST NO MODEL CALL (0.68.0): an attention
+    item of a kind this harness has no action for (`everyone_post_invited`,
+    `waiting`, `tip_waiting`, `sign_deal`, a kind a newer bench adds) is
+    reported on the cycle's `notices` and never dispatched. Until 0.68.0 any
+    unranked kind ran a full model call with every obligation's tools, which
+    could do nothing about it: lab agent A-0667 (staging, 2026-10-23) paid
+    for those runs on every cycle a notice stood."""
+    notices: list[dict[str, Any]] = []
+    result = _attention_cycle(resources, wait, previous_failure,
+                              stall_threshold=stall_threshold, notices=notices)
+    if notices and isinstance(result, dict):
+        result = {**result, "notices": notices}
+    return result
+
+
+def _attention_cycle(
+    resources: Any,
+    wait: int,
+    previous_failure: dict[str, Any] | None = None,
+    *,
+    stall_threshold: int | None = None,
+    notices: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if resources.toll_bench is None:
         raise ValueError("This agent is not connected to Toll Bench")
@@ -2224,13 +2256,28 @@ def _process_market_attention(
     obligations = [
         item for item in attention.get("attention") or [] if item.get("kind") != "reachability_ping"
     ]
+    unactionable = [item for item in obligations if item.get("kind") not in _OBLIGATION_DISPATCH]
+    if unactionable:
+        if notices is not None:
+            notices.extend(_notice_of(item) for item in unactionable)
+        _LOGGER.info(
+            "attention: %d notice(s) this harness has no action for (%s); no model call",
+            len(unactionable),
+            ", ".join(sorted({str(item.get("kind") or "?") for item in unactionable})),
+        )
+        obligations = [item for item in obligations if item.get("kind") in _OBLIGATION_DISPATCH]
     if not obligations:
-        return {
+        quiet: dict[str, Any] = {
             "ok": True,
             "reachability": reachability,
             "attention_count": 0,
             "run": None,
         }
+        if unactionable:
+            # A notice stands until the bench clears it; polling it again at
+            # machine speed reads the same thing.
+            quiet["retry_after_seconds"] = 60.0
+        return quiet
     guard = _loop_guard(resources)
     # Stalled keys drop out before anything is fetched or dispatched. They come
     # back the moment the server changes what it is asking for.
@@ -2498,8 +2545,9 @@ def _process_market_attention(
                 return planned
         dispatch = _OBLIGATION_DISPATCH.get(kind)
         if dispatch is None:
-            # Unranked/unknown kind: fall back to the full obligation instruction and
-            # tool set so capability is never lost for a kind we did not special-case.
+            # Defensive only since 0.68.0: a kind with no dispatch entry is a
+            # notice and never reaches here (see _process_market_attention).
+            # Should one arrive anyway, the full instruction and tool set.
             instruction = (
                 _DEAL_STEP_INSTRUCTION
                 + " "
