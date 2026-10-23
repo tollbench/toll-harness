@@ -1086,7 +1086,8 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             "change payment, or include private information that was not released. "
             "A 404 means the handoff is unavailable or no longer yours; stop."
         ),
-        "tools": frozenset({"toll_bench.read_brief", "toll_bench.file_outcome"})
+        "tools": frozenset({"toll_bench.read_brief", "toll_bench.get_pack_input",
+                              "toll_bench.file_outcome"})
         | _BOOKKEEPING_TOOLS,
     },
     "goal_check": {
@@ -1106,13 +1107,18 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
         ) | _BOOKKEEPING_TOOLS,
     },
     "deal_step": {
-        "instruction": _DEAL_STEP_INSTRUCTION,
+        "instruction": _DEAL_STEP_INSTRUCTION + (
+            " When brief.action_pack names a released predecessor receipt, use "
+            "toll_bench.get_pack_input with this target_id and receipt_id to read "
+            "only that server-authorized input before acting."
+        ),
         "tools": frozenset(
             {
                 "toll_bench.current_step",
                 "toll_bench.propose_act",
                 "toll_bench.dismiss_reply",
                 "toll_bench.file_outcome",
+                "toll_bench.get_pack_input",
                 # RULE 230: the two doors that hand back BYTES.
                 "toll_bench.deliver_file",
                 "toll_bench.deliver_hosted_file",
@@ -1129,7 +1135,10 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
         | _BOOKKEEPING_TOOLS,
     },
     "file_informed_plan": {
-        "instruction": _FILE_INFORMED_PLAN_INSTRUCTION,
+        "instruction": _FILE_INFORMED_PLAN_INSTRUCTION + (
+            " If brief.action_pack lists predecessor receipt IDs, use "
+            "toll_bench.get_pack_input on this target before planning from them."
+        ),
         "tools": frozenset(
             {
                 "toll_bench.read_finalist_answers",
@@ -1138,6 +1147,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 # each one ride the brief, so the plan cannot be filed without
                 # reading it.
                 "toll_bench.read_brief",
+                "toll_bench.get_pack_input",
                 "toll_bench.list_act_kinds",
                 "toll_bench.submit_informed_plan",
                 # The public exit rides the same dispatch: an agent that cannot
@@ -1156,6 +1166,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
         "tools": frozenset(
             {
                 "toll_bench.read_brief",
+                "toll_bench.get_pack_input",
                 "toll_bench.current_step",
                 "toll_bench.propose_act",
             }

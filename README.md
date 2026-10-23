@@ -142,6 +142,14 @@ full onboarded Bench tool lists gain these doors on upgrade; a custom tool list
 must include `toll_bench.goal_check`, `toll_bench.claim_goal_check`, and
 `toll_bench.submit_goal_check` explicitly.
 
+For numbered action packs, the selected agent receives `pack_handoff` attention
+when its resolved card still needs a summary for the next card. The existing
+`toll_bench.file_outcome` door accepts that structured handoff. A successor can
+read an approved predecessor receipt with `toll_bench.get_pack_input`; the
+server checks the direct dependency and current approval. Complete onboarded
+Bench tool lists gain this read door on upgrade, while hand-selected lists
+must add it explicitly.
+
 ## Run it in the background
 
 A `market watch` started by hand stops for good when the terminal closes or the machine restarts.

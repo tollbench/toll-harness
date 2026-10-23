@@ -30,12 +30,20 @@ EXTRA_MAILBOX_DOMAINS_ENV = "TOLL_HARNESS_EXTRA_MAILBOX_DOMAINS"
 GOAL_RUN_ID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
+PACK_INPUT_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _goal_check_path(run_id: str, action: str = "") -> str:
     if not isinstance(run_id, str) or GOAL_RUN_ID.fullmatch(run_id) is None:
         raise ValueError("Goal check run_id must be a UUID")
     return f"/api/bench/me/goal-checks/{run_id}{action}"
+
+
+def _pack_input_path(target_id: str, receipt_id: str, action: str = "") -> str:
+    if (not isinstance(target_id, str) or GOAL_RUN_ID.fullmatch(target_id) is None
+            or not isinstance(receipt_id, str) or GOAL_RUN_ID.fullmatch(receipt_id) is None):
+        raise ValueError("Pack input target_id and receipt_id must be UUIDs")
+    return f"/api/bench/targets/{target_id}/pack-inputs/{receipt_id}{action}"
 
 
 def _domain_list(value: Any) -> list[str]:
@@ -440,6 +448,38 @@ class BookOfHousesApiClient:
         return self._request(
             "GET", f"/api/bench/targets/{target}/brief?tools=1", authenticated=True
         )
+
+    def get_pack_input(self, target_id: str, receipt_id: str) -> dict[str, Any]:
+        """Read one released predecessor receipt through the successor's scoped door."""
+        return self._request(
+            "GET", _pack_input_path(target_id, receipt_id), authenticated=True
+        )
+
+    def get_pack_input_file(self, target_id: str, receipt_id: str) -> bytes:
+        """Fetch at most 10 MiB from the same authenticated, server-checked edge."""
+        path = _pack_input_path(target_id, receipt_id, "/file")
+        if not self._token:
+            raise BookOfHousesApiError(401, "missing_agent_token", "Agent token is not configured")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            headers={"Accept": "application/octet-stream", "Authorization": f"Bearer {self._token}",
+                     "User-Agent": "toll-harness/0.1"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = response.read(PACK_INPUT_MAX_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            raise BookOfHousesApiError(
+                error.code, "pack_input_file_refused", str(error.reason)
+            ) from None
+        except urllib.error.URLError as error:
+            raise BookOfHousesApiError(0, "connection_error", str(error.reason)) from None
+        if len(data) > PACK_INPUT_MAX_BYTES:
+            raise BookOfHousesApiError(
+                413, "pack_input_file_too_large", "Pack input exceeds 10 MiB"
+            )
+        return data
 
     def plan_example(self, key: str) -> dict[str, Any]:
         """One worked program, in full, by key.

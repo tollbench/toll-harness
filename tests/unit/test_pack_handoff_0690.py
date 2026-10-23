@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import urllib.request
 from types import SimpleNamespace
 
 from toll_harness import cli
+from toll_harness.config import PACK_INPUT_TOOLS, with_pack_input_tools
+from toll_harness.email.book_of_houses import BookOfHousesApiClient
+from toll_harness.onboarding import TOLL_BENCH_TOOLS
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import ToolContext, add_toll_bench_tools, build_standard_registry
 
@@ -56,6 +62,13 @@ def test_active_deal_outcome_can_carry_handoff_with_ordinary_delivery():
     payload = {"note": "Done", "text": "Delivered", "pack_handoff": HANDOFF}
     assert provider.file_outcome("target-1", payload, "key")["ok"]
     assert calls == [("target-1", payload, "key")]
+
+
+def test_legacy_note_on_resolved_handoff_is_ignored_without_a_second_delivery():
+    provider, calls = _provider()
+    payload = {"note": "This card is complete", "pack_handoff": HANDOFF}
+    assert provider.file_outcome("target-1", payload, "key")["ok"]
+    assert calls == [("target-1", {"pack_handoff": HANDOFF}, "key")]
 
 
 def test_invalid_handoff_never_reaches_the_server():
@@ -110,3 +123,112 @@ def test_watch_dispatches_handoff_instead_of_classifying_it_as_notice(monkeypatc
     assert len(started) == 1
     assert "brief.action_pack" in started[0][0]
     assert "email.send" not in started[0][1]
+
+
+def test_authenticated_pack_input_read_is_scoped_to_successor_and_receipt(monkeypatch):
+    calls = []
+
+    class Response:
+        status = 200
+
+        def read(self):
+            return json.dumps({"ok": True, "receipt_id": RECEIPT,
+                               "kind": "text", "text": "Approved result"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def urlopen(request, timeout=None):
+        calls.append((request.full_url, request.get_header("Authorization")))
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    provider = BookOfHousesTollBenchProvider(api)
+    registry = add_toll_bench_tools(build_standard_registry())
+    context = ToolContext("run", None, None, None, 0, toll_bench_provider=provider)
+    target = "4fa1b409-2d68-4811-8190-7abbdb448ab6"
+    result = registry.execute(context, "call", "toll_bench.get_pack_input",
+                              {"target_id": target, "receipt_id": RECEIPT})
+    assert not result.is_error and result.output["text"] == "Approved result"
+    assert calls == [(f"https://bench.example/api/bench/targets/{target}"
+                      f"/pack-inputs/{RECEIPT}", "Bearer agent-token")]
+    invalid = registry.execute(context, "bad", "toll_bench.get_pack_input",
+                               {"target_id": "../other", "receipt_id": RECEIPT})
+    assert invalid.is_error and len(calls) == 1
+
+
+def test_existing_complete_tool_lists_gain_pack_input_but_hand_cut_lists_do_not():
+    old = [name for name in TOLL_BENCH_TOOLS if name not in PACK_INPUT_TOOLS]
+    assert with_pack_input_tools(old).count("toll_bench.get_pack_input") == 1
+    assert with_pack_input_tools(with_pack_input_tools(old)).count(
+        "toll_bench.get_pack_input") == 1
+    assert with_pack_input_tools(["toll_bench.read_brief"]) == ["toll_bench.read_brief"]
+    for kind in ("pack_handoff", "file_informed_plan", "deal_step", "draft_sent_back"):
+        assert "toll_bench.get_pack_input" in cli._OBLIGATION_DISPATCH[kind]["tools"]
+
+
+def test_file_input_is_authenticated_hash_checked_and_stored_outside_model_context(monkeypatch):
+    content = b"approved source file"
+    digest = hashlib.sha256(content).hexdigest()
+    calls = []
+    written = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def read(self, limit=None):
+            return self.payload if limit is None else self.payload[:limit]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def urlopen(request, timeout=None):
+        calls.append((request.full_url, request.get_header("Authorization")))
+        if request.full_url.endswith("/file"):
+            return Response(content)
+        return Response(json.dumps({"ok": True, "receipt_id": RECEIPT,
+                                    "kind": "file", "sha256": digest,
+                                    "download_url": request.full_url + "/file"}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    provider = BookOfHousesTollBenchProvider(api)
+    store = SimpleNamespace(write=lambda run, path, data: (
+        written.append((run, path, data)) or {"path": path, "size": len(data)}))
+    registry = add_toll_bench_tools(build_standard_registry())
+    context = ToolContext("run", None, None, store, 0, toll_bench_provider=provider)
+    target = "4fa1b409-2d68-4811-8190-7abbdb448ab6"
+    result = registry.execute(context, "call", "toll_bench.get_pack_input",
+                              {"target_id": target, "receipt_id": RECEIPT})
+    assert not result.is_error
+    assert result.output["artifact_path"] == f"pack-inputs/{digest}.bin"
+    assert result.output["size_bytes"] == len(content)
+    assert "download_url" not in result.output
+    assert written == [("run", f"pack-inputs/{digest}.bin", content)]
+    assert len(calls) == 2 and all(token == "Bearer agent-token" for _, token in calls)
+
+
+def test_changed_file_is_refused_before_artifact_write():
+    expected = hashlib.sha256(b"approved").hexdigest()
+    provider = SimpleNamespace(
+        get_pack_input=lambda *_: {"ok": True, "kind": "file", "sha256": expected},
+        get_pack_input_file=lambda *_: b"changed",
+    )
+    writes = []
+    store = SimpleNamespace(write=lambda *args: writes.append(args))
+    context = ToolContext("run", None, None, store, 0, toll_bench_provider=provider)
+    registry = add_toll_bench_tools(build_standard_registry())
+    result = registry.execute(context, "call", "toll_bench.get_pack_input",
+                              {"target_id": "target", "receipt_id": RECEIPT})
+    assert result.is_error and "differs" in result.output["error"]
+    assert writes == []

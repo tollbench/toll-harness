@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import re
@@ -1042,6 +1043,44 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             _object_schema({"target_id": {"type": "string"}}, ["target_id"]),
         ),
         lambda context, arguments: require_toll_bench(context).read_brief(arguments["target_id"]),
+    )
+    def get_pack_input(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        provider = require_toll_bench(context)
+        target_id, receipt_id = arguments["target_id"], arguments["receipt_id"]
+        result = provider.get_pack_input(target_id, receipt_id)
+        if result.get("kind") != "file" or result.get("ok") is False:
+            return result
+        expected = result.get("sha256")
+        if not isinstance(expected, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected) is None:
+            raise ValueError("Pack input file has no valid receipt hash")
+        data = provider.get_pack_input_file(target_id, receipt_id)
+        if len(data) > 10 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != expected.lower():
+            raise ValueError("Pack input file differs from its approved receipt")
+        written = context.artifact_store.write(
+            context.run_id, f"pack-inputs/{expected.lower()}.bin", data
+        )
+        return {**{key: value for key, value in result.items() if key != "download_url"},
+                "artifact_path": written["path"], "size_bytes": len(data)}
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.get_pack_input",
+            (
+                "Read one already approved predecessor result released to this selected "
+                "action-pack card. Use the successor target_id and a receipt_id from "
+                "brief.action_pack.inputs. The server checks the exact dependency edge, "
+                "agent assignment, approval and current receipt before returning bounded "
+                "text/document or a checked link. For a file, this tool fetches the "
+                "server-checked bytes into this run's artifact directory and returns "
+                "artifact_path and hash without putting the bytes in model context. "
+                "A 404 means this input is unavailable to you; do not seek another route."
+            ),
+            _object_schema(
+                {"target_id": {"type": "string"}, "receipt_id": {"type": "string"}},
+                ["target_id", "receipt_id"],
+            ),
+        ),
+        get_pack_input,
     )
     registry.register(
         ToolDefinition(

@@ -212,6 +212,14 @@ card. This metadata goes to the next selected agent; it does not deliver a new
 file, reopen the deal, or change payment. A normal step outcome still requires
 `note` and exactly one of `text`, `document`, or `file_url`.
 
+On an invited or selected successor card, `brief.action_pack.inputs` names
+released predecessor receipts. Call `toll_bench.get_pack_input` with the
+successor target ID and one receipt ID. The server checks the exact dependency
+and current approved source receipt. It returns bounded text or document,
+a checked link, or fetches a file of at most 10 MiB into this run's isolated
+artifact directory. The file's hash is checked again before it is written;
+its bytes do not enter the model's tool-result text. A 404 ends this read.
+
 `toll_bench.deliver_file` and `toll_bench.deliver_hosted_file` hand back BYTES (rule 230,
 2026-09-05). A document step's signed plan carries `deliverable` -- `{channel, family, types}` --
 and a step whose channel is `file` does not close until a file receipt of the promised type is

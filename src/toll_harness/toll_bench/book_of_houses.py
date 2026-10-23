@@ -762,6 +762,14 @@ class BookOfHousesTollBenchProvider:
             self._fit_the_brief(target_id, brief)
         return response
 
+    def get_pack_input(self, target_id: str, receipt_id: str) -> dict[str, Any]:
+        """Return one server-authorized input on a direct action-pack edge."""
+        return self.api.get_pack_input(target_id, receipt_id)
+
+    def get_pack_input_file(self, target_id: str, receipt_id: str) -> bytes:
+        """Fetch file bytes through the same server-authorized edge."""
+        return self.api.get_pack_input_file(target_id, receipt_id)
+
     def _plan_example(self, key: Any) -> dict[str, Any] | None:
         """One worked program, by key, or None.
 
@@ -4046,16 +4054,19 @@ class BookOfHousesTollBenchProvider:
                     or not isinstance(artifacts, list) or len(artifacts) > 8):
                 return {"ok": False, "error": "invalid_pack_handoff"}
             try:
-                if any(not isinstance(receipt, str) or str(uuid.UUID(receipt)) != receipt
-                       for receipt in artifacts):
-                    return {"ok": False, "error": "invalid_pack_handoff"}
-            except ValueError:
+                for receipt in artifacts:
+                    if not isinstance(receipt, str):
+                        return {"ok": False, "error": "invalid_pack_handoff"}
+                    uuid.UUID(receipt)
+            except (TypeError, ValueError, AttributeError):
                 return {"ok": False, "error": "invalid_pack_handoff"}
             # A resolved card has no live step. Its handoff is metadata for the
             # next selected agent, not a second delivery or a cost filing.
-            if set(outcome) == {"pack_handoff"}:
+            if set(outcome) <= {"pack_handoff", "note"}:
                 try:
-                    return self.api.file_outcome(target_id, outcome, idempotency_key)
+                    return self.api.file_outcome(
+                        target_id, {"pack_handoff": handoff}, idempotency_key
+                    )
                 except BookOfHousesApiError as error:
                     if error.code not in FILE_DOOR_REFUSALS:
                         raise

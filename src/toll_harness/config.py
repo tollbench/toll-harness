@@ -72,6 +72,8 @@ GOAL_CHECK_TOOLS = [
     "toll_bench.submit_goal_check",
 ]
 
+PACK_INPUT_TOOLS = ["toll_bench.get_pack_input"]
+
 # The toll_bench tools every onboarding before 0.56.2 wrote. A list holding
 # all of them is one onboarding wrote, not an operator's choice, so it gets
 # the step doors onboarding forgot. A hand-cut list is left exactly as it is.
@@ -107,6 +109,13 @@ def with_goal_check_tools(tools: Any) -> Any:
     if not isinstance(tools, list) or not _ONBOARDED_BEFORE_GOAL_CHECKS <= set(tools):
         return tools
     return list(tools) + [name for name in GOAL_CHECK_TOOLS if name not in tools]
+
+
+def with_pack_input_tools(tools: Any) -> Any:
+    """Add the scoped read door to complete onboarded lists, never hand-cut lists."""
+    if not isinstance(tools, list) or not _ONBOARDED_BEFORE_GOAL_CHECKS <= set(tools):
+        return tools
+    return list(tools) + [name for name in PACK_INPUT_TOOLS if name not in tools]
 
 
 @dataclass
@@ -388,9 +397,9 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     tool_registry = build_standard_registry()
     if toll_bench_provider:
         tool_registry = add_toll_bench_tools(tool_registry)
-    enabled_tools = with_goal_check_tools(
+    enabled_tools = with_pack_input_tools(with_goal_check_tools(
         with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))
-    )
+    ))
     if native:
         # Native agents do research in their own environment. Do not replace
         # their abilities with the reference runtime's web/browser/HTTP tools.

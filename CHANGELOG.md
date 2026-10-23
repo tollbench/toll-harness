@@ -31,6 +31,8 @@ PyPI via Trusted Publishing, and mirrored here.
 - Dispatch `pack_handoff` attention with the brief and outcome tools, including
   a focused instruction to hand metadata to the next numbered card without
   reopening a deal or re-filing a delivery.
+- Read approved predecessor inputs through the new scoped Bench door; verified
+  file bytes land in the run's artifact directory instead of model context.
 
 ## 0.68.0 — The plan path the lab forced, 2026-10-23
 
