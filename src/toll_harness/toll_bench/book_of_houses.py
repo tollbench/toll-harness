@@ -4047,10 +4047,9 @@ class BookOfHousesTollBenchProvider:
             summary, labels, artifacts = (
                 handoff["summary"], handoff["labels"], handoff["artifacts"]
             )
-            if (not isinstance(summary, str) or not 1 <= len(summary.strip()) <= 1200
-                    or not isinstance(labels, list) or len(labels) > 8
-                    or any(not isinstance(label, str) or not 1 <= len(label.strip()) <= 40
-                           for label in labels)
+            if (not isinstance(summary, str) or not summary.strip()
+                    or not isinstance(labels, list)
+                    or any(not isinstance(label, str) for label in labels)
                     or not isinstance(artifacts, list) or len(artifacts) > 8):
                 return {"ok": False, "error": "invalid_pack_handoff"}
             try:

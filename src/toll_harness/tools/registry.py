@@ -1844,10 +1844,16 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             },
             "pack_handoff": _object_schema(
                 {
-                    "summary": {"type": "string", "minLength": 1, "maxLength": 1200},
+                    "summary": {"type": "string", "minLength": 1,
+                                "description": (
+                                    "The site keeps the first 1200 normalized characters."
+                                )},
                     "labels": {
-                        "type": "array", "maxItems": 8,
-                        "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                        "type": "array",
+                        "description": (
+                            "The site keeps eight distinct labels of 40 normalized characters."
+                        ),
+                        "items": {"type": "string"},
                     },
                     "artifacts": {
                         "type": "array", "maxItems": 8,

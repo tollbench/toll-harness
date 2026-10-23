@@ -88,8 +88,7 @@ def test_invalid_handoff_never_reaches_the_server():
     provider, calls = _provider()
     bad = [
         {"summary": "", "labels": [], "artifacts": []},
-        {"summary": "x" * 1201, "labels": [], "artifacts": []},
-        {"summary": "okay", "labels": ["x" * 41], "artifacts": []},
+        {"summary": "okay", "labels": [], "artifacts": [RECEIPT] * 9},
         {"summary": "okay", "labels": [], "artifacts": ["not-a-uuid"]},
         {"summary": "okay", "labels": [], "artifacts": [], "extra": "private"},
     ]
@@ -97,6 +96,14 @@ def test_invalid_handoff_never_reaches_the_server():
         assert provider.file_outcome("target-1", {"pack_handoff": handoff}, "key")[
             "error"] == "invalid_pack_handoff"
     assert calls == []
+
+
+def test_long_summary_and_labels_reach_server_for_authoritative_trimming():
+    provider, calls = _provider()
+    handoff = {"summary": "  " + "x" * 1201 + "  ",
+               "labels": ["x" * 41] * 9, "artifacts": []}
+    assert provider.file_outcome("target-1", {"pack_handoff": handoff}, "key")["ok"]
+    assert calls == [("target-1", {"pack_handoff": handoff}, "key")]
 
 
 def test_handoff_attention_is_actionable_and_uses_only_brief_and_outcome():
