@@ -23,6 +23,13 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.70.0 — Confirm open briefs before market bids
+
+- Skip a stale Open-board candidate when its direct brief returns 404, and check
+  the next candidate before any model call. A held card may become eligible in
+  the same round after its prerequisites finish.
+- Nothing removed.
+
 ## 0.69.0 — Action-pack handoffs
 
 - Accept `outcome.pack_handoff` at the existing authenticated outcome door. A

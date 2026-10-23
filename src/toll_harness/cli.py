@@ -89,6 +89,8 @@ from toll_harness.worker import (
 )
 
 MARKET_SCAN_CANDIDATE_LIMIT = 1
+MARKET_SCAN_BRIEF_CHECK_LIMIT = 10
+_MARKET_BRIEF_OFFSET = 0
 MARKET_SCAN_TOOLS = [
     "state.save",
     "result.complete",
@@ -2745,6 +2747,7 @@ def _market_freshness(target: dict[str, Any]) -> str:
 def _market_scan_candidates(
     resources: Any,
 ) -> tuple[int, list[dict[str, Any]], list[tuple[str, str, str | None]]]:
+    global _MARKET_BRIEF_OFFSET
     response = resources.toll_bench.list_targets()
     targets = list(response.get("targets") or [])
     provider = resources.toll_bench
@@ -2780,7 +2783,37 @@ def _market_scan_candidates(
             continue
         eligible.append(target)
     eligible.sort(key=_market_freshness, reverse=True)
-    selected = eligible[:MARKET_SCAN_CANDIDATE_LIMIT]
+    # A cached board can briefly list a card whose direct brief has closed.
+    # Confirm the door before handing any candidate to a model, and continue
+    # past a refused newest card instead of starving the rest of the board.
+    reader = getattr(provider, "read_brief", None)
+    selected = []
+    offset = _MARKET_BRIEF_OFFSET % len(eligible) if eligible else 0
+    ordered = eligible[offset:] + eligible[:offset]
+    inspected = 0
+    for target in ordered[:MARKET_SCAN_BRIEF_CHECK_LIMIT]:
+        inspected += 1
+        if callable(reader):
+            target_id = str(target.get("target_id") or "")
+            try:
+                answer = reader(target_id)
+            except BookOfHousesApiError as error:
+                if error.status != 404:
+                    raise
+                # A held numbered card can become open in the same round;
+                # do not put this read refusal in the permanent round memo.
+                _LOGGER.info("Skipped closed board candidate %s before bidding", target_id)
+                continue
+            if not isinstance(answer, dict) or not isinstance(answer.get("brief"), dict):
+                raise ValueError(f"Brief for board candidate {target_id} was not a brief")
+            target = {**target, "_verified_brief": answer["brief"]}
+        selected.append(target)
+        if len(selected) >= MARKET_SCAN_CANDIDATE_LIMIT:
+            break
+    # If a stale board has more refused cards than the per-scan read bound,
+    # next cycle starts after this batch. A released card is never permanently
+    # excluded, and a healthy board always starts with its newest card.
+    _MARKET_BRIEF_OFFSET = 0 if selected or not eligible else (offset + inspected) % len(eligible)
     summaries = [
         {
             "target_id": target.get("target_id"),
@@ -2806,6 +2839,9 @@ def _market_scan_candidates(
         }
         for target in selected
     ]
+    for summary, target in zip(summaries, selected, strict=True):
+        if "_verified_brief" in target:
+            summary["_verified_brief"] = target["_verified_brief"]
     return len(targets), summaries, [_market_target_key(target) for target in selected]
 
 
@@ -2888,7 +2924,11 @@ def _bid_through_the_draft_loop(
     back to the single-shot road rather than filing nothing.
     """
     target_id = str(target.get("target_id") or "")
-    brief = _brief_for_the_loop(resources, target_id, target.get("want"))
+    brief = target.get("_verified_brief")
+    if brief is None:
+        brief = _brief_for_the_loop(resources, target_id, target.get("want"))
+    elif target.get("want") and not brief.get("want"):
+        brief = {**brief, "want": target["want"]}
     loop = DraftLoop(resources.runtime.model, resources.toll_bench)
     loop.standing_direction = _lab_lead_direction(resources)
     # THE APPROACH FIRST (0.57.0): the agent's default style is where the
@@ -3499,6 +3539,10 @@ def _process_market_opportunities(
         )
         if scanned is not None:
             return scanned
+    # The verified brief is an internal preflight result, not an extra board
+    # field in the single-shot model prompt or a public protocol extension.
+    for candidate in candidates:
+        candidate.pop("_verified_brief", None)
     # THE OLD ROAD IS A PROPOSAL TOO (rule 243, 2026-09-11). This runs only
     # for a bench or a runtime the one-call road above cannot use, and what it
     # asks for is the SAME EIGHT FIELDS. It used to ask for a whole plan --

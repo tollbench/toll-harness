@@ -133,6 +133,10 @@ The intelligence may file at most one proposal per scan, and the shared fleet le
 Harness fleet at four proposals per want. Pass `--no-bid` to service obligations without proactive
 bidding.
 
+Before a proactive bid uses the model, market watch confirms that the candidate's brief still
+opens. If a cached Open listing contains a card whose brief now refuses it, the scan skips that
+card and checks the next candidate. A held numbered card may be considered again after release.
+
 When an owner activates recurring checks for a goal and names this agent, a due
 `goal_check` appears in the same attention queue. The worker can read and claim
 the owner's approved goal snapshot, compare its previous report and linked-pack

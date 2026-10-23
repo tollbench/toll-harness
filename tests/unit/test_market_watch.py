@@ -12,6 +12,7 @@ from toll_harness.core.types import (
     RunResult,
     RunStatus,
 )
+from toll_harness.email.book_of_houses import BookOfHousesApiError
 
 
 class _Resources:
@@ -78,6 +79,91 @@ def test_scan_draft_road_still_files_when_submit_proposal_is_enabled(monkeypatch
 
     assert result["proposal_filed"] is True
     assert seen == {"target_id": "target-1", "file": True}
+
+
+def test_market_scan_skips_closed_newest_brief_before_model_and_uses_next(monkeypatch):
+    cli._CLOSED_TARGET_MEMO.clear()
+    brief_reads = []
+    model_targets = []
+    released = False
+
+    class _DraftLoop:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, target_id, **kwargs):
+            model_targets.append((target_id, kwargs["brief"]["want"]))
+            return {"ok": True, "filed": False, "model_calls": 1}
+
+    monkeypatch.setattr(cli, "DraftLoop", _DraftLoop)
+    resources, _calls = _scan_resources(["toll_bench.submit_proposal"], model=object())
+    resources.toll_bench.list_targets = lambda: {"targets": [
+        {"target_id": "older-open", "want": "open", "round": 1,
+         "posted_at": "2026-10-22T00:00:00Z"},
+        {"target_id": "newer-held", "want": "held", "round": 1,
+         "posted_at": "2026-10-23T00:00:00Z"},
+    ]}
+
+    def read_brief(target_id):
+        brief_reads.append(target_id)
+        if target_id == "newer-held" and not released:
+            raise BookOfHousesApiError(404, "not_found", "not open")
+        return {"brief": {"want": target_id}}
+
+    resources.toll_bench.read_brief = read_brief
+    try:
+        result = cli._process_market_opportunities(resources, {"ok": True})
+        assert brief_reads == ["newer-held", "older-open"]
+        assert model_targets == [("older-open", "older-open")]
+        assert result["candidate_count"] == 1
+        assert not cli._CLOSED_TARGET_MEMO
+        released = True
+        cli._process_market_opportunities(resources, {"ok": True})
+        assert brief_reads[-1] == "newer-held"
+        assert model_targets[-1] == ("newer-held", "newer-held")
+    finally:
+        cli._CLOSED_TARGET_MEMO.clear()
+
+
+def test_market_scan_does_not_model_on_only_closed_or_transient_brief(monkeypatch):
+    monkeypatch.setattr(cli, "DraftLoop", _NoDraftLoop)
+    resources, _calls = _scan_resources(["toll_bench.submit_proposal"], model=object())
+
+    def refused(status):
+        def read_brief(_target_id):
+            raise BookOfHousesApiError(status, "http_error", "unavailable")
+        return read_brief
+
+    resources.toll_bench.read_brief = refused(404)
+    result = cli._process_market_opportunities(resources, {"ok": True})
+    assert result["candidate_count"] == 0
+    resources.toll_bench.read_brief = refused(503)
+    with pytest.raises(BookOfHousesApiError) as error:
+        cli._process_market_opportunities(resources, {"ok": True})
+    assert error.value.status == 503
+
+
+def test_market_scan_advances_after_bounded_stale_board_batch():
+    resources, _calls = _scan_resources(["toll_bench.submit_proposal"], model=object())
+    resources.toll_bench.list_targets = lambda: {"targets": [
+        {"target_id": f"held-{index}", "posted_at": f"2026-10-23T{index:02d}:00:00Z"}
+        for index in range(10)
+    ] + [{"target_id": "card-one", "posted_at": "2026-10-22T00:00:00Z"}]}
+
+    def read_brief(target_id):
+        if target_id != "card-one":
+            raise BookOfHousesApiError(404, "not_found", "held")
+        return {"brief": {"want": "card one"}}
+
+    resources.toll_bench.read_brief = read_brief
+    try:
+        first_count, first, _ = cli._market_scan_candidates(resources)
+        second_count, second, _ = cli._market_scan_candidates(resources)
+        assert first_count == second_count == 11
+        assert first == []
+        assert [row["target_id"] for row in second] == ["card-one"]
+    finally:
+        cli._MARKET_BRIEF_OFFSET = 0
 
 
 @pytest.mark.parametrize(
