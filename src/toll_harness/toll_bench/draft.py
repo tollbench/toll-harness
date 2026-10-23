@@ -3327,6 +3327,10 @@ class DraftLoop:
         # The odds this agent's proposal on this want was filed at, when the
         # caller knows it; the odds line carries it, null when unknown.
         self.proposal_odds: Any = None
+        # WHICH WANT, on every model-call log line (0.68.0). `run` sets both;
+        # a caller that asks before `run` (the operator dialogue) sets the id.
+        self.target_id: str = ""
+        self.kind: str = ""
 
     # -- the model ---------------------------------------------------------
     # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER. The example goes first
@@ -3682,9 +3686,20 @@ class DraftLoop:
     OVER = "over"                           # closed, or a door that will not
                                             # answer: leave the want this cycle
 
-    def _read_first(self, target_id: str, kind: str) -> tuple[str, dict[str, Any]]:
+    def _read_first(
+        self, target_id: str, kind: str, already_read: Any = None
+    ) -> tuple[str, dict[str, Any]]:
         """THE FIRST STEP OF EVERY CYCLE. `GET .../proposals/draft` (and
         `?kind=plan` for a plan), which costs no round.
+
+        ONE READ BEFORE ANY WRITE (0.68.0). `already_read` is the answer this
+        cycle already got off that same GET -- the market watch's loop-guard
+        probe reads the plan draft to fingerprint the work before it reserves
+        a try -- and when it is given, the door is not asked again. A plan
+        nobody has opened was read twice (the probe, then here, both 404)
+        before the loop opened it; now the probe's 404 goes straight to the
+        PUT that creates the draft, and everything after that is read off the
+        door's own answers.
 
         A PUT over a standing draft is not a retry, it is a demolition: it
         replaces the document and sets the rounds back to zero. Live on
@@ -3697,17 +3712,27 @@ class DraftLoop:
         and when the bench says the draft is over, leave the want alone until
         it expires.
         """
-        try:
-            answer = self.provider.read_draft(target_id, kind=kind)
-        except Exception:  # noqa: BLE001 - a read that will not answer is not a licence to PUT
-            self.log.warning(
-                "draft loop %s target=%s: the draft could not be read; PUTting "
-                "nothing this cycle",
+        if isinstance(already_read, dict):
+            answer = already_read
+            self.log.info(
+                "draft loop %s target=%s: this cycle already read the draft (%s); "
+                "not reading it again",
                 kind,
                 target_id,
-                exc_info=True,
+                str(already_read.get("error") or already_read.get("status") or "read"),
             )
-            return self.OVER, {}
+        else:
+            try:
+                answer = self.provider.read_draft(target_id, kind=kind)
+            except Exception:  # noqa: BLE001 - a read that will not answer is not a licence to PUT
+                self.log.warning(
+                    "draft loop %s target=%s: the draft could not be read; PUTting "
+                    "nothing this cycle",
+                    kind,
+                    target_id,
+                    exc_info=True,
+                )
+                return self.OVER, {}
         if not isinstance(answer, dict):
             return self.OVER, {}
         if answer.get("closed"):
@@ -5467,6 +5492,7 @@ class DraftLoop:
         idempotency_key: str = "",
         file: bool = True,
         revision: dict[str, Any] | None = None,
+        already_read: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """ONE WANT, ONE ANSWER, and which road depends on the stage.
 
@@ -5478,7 +5504,13 @@ class DraftLoop:
 
         `file` false runs the whole thing and stops at the door: the document
         the bench holds comes back on `draft` and nothing is filed.
+
+        `already_read` is this cycle's own read of the plan draft, when the
+        caller made one (0.68.0): the loop starts from it instead of reading
+        the door a second time before it writes anything.
         """
+        self.target_id = str(target_id or "")
+        self.kind = str(kind or "")
         want = (brief or {}).get("want") if isinstance(brief, dict) else None
         strategy = person_strategy(brief)
         # ONCE, and byte-identical from here to the end of the run: the front
@@ -5502,7 +5534,7 @@ class DraftLoop:
             return self._propose(target_id, brief, idempotency_key, file)
         # READ FIRST, EVERY CYCLE. This is the loop's first step and the only
         # thing that decides whether an outline goes out at all.
-        state, answer = self._read_first(target_id, kind)
+        state, answer = self._read_first(target_id, kind, already_read)
         # A PAUSED DOOR IS READ BEFORE ANYTHING IS SENT. The read itself costs
         # no round; everything after it would be spent on a refusal the body in
         # hand already announced.

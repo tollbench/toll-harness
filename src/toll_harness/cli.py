@@ -2118,7 +2118,14 @@ def _loop_key(obligation: dict[str, Any]) -> str:
     return ":".join(_obligation_key(obligation))
 
 
-def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) -> str:
+def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None,
+                seen: dict[str, Any] | None = None) -> str:
+    """The work-state fingerprint the loop guard counts tries against.
+
+    For a plan, the draft is read here (a GET costs no round). `seen`, when
+    given, keeps that answer by target id so the dispatch that follows starts
+    from it instead of reading the same draft again (0.68.0).
+    """
     basis: dict[str, Any] = {"work": _obligation_key(obligation),
                              "round": obligation.get("round"),
                              "message_id": obligation.get("message_id")}
@@ -2131,7 +2138,10 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None) ->
             basis["change_request"] = obligation["change_request"]
         reader = getattr(resources.toll_bench, "read_draft", None)
         if callable(reader):
-            answer = reader(str(obligation.get("target_id") or ""), kind="plan")
+            target_id = str(obligation.get("target_id") or "")
+            answer = reader(target_id, kind="plan")
+            if isinstance(answer, dict) and seen is not None and target_id:
+                seen[target_id] = answer
             if isinstance(answer, dict):
                 # Rewording the same bad field and updating a timestamp do not
                 # count as progress. Clearing/changing the problem does.
@@ -2317,6 +2327,9 @@ def _process_market_attention(
     # Skipped steps drop out of this cycle's contention so plan requests and
     # message debts are not starved behind a person's silence.
     prefetched_steps: dict[str, dict[str, Any]] = {}
+    # The plan drafts the loop-guard probe read this cycle, by target id
+    # (0.68.0): the plan dispatch starts from them rather than reading again.
+    plan_drafts: dict[str, Any] = {}
     loop_states: dict[str, str] = {}
     loop_parked: list[str] = []
     _remaining: list[dict[str, Any]] = []
@@ -2362,7 +2375,8 @@ def _process_market_attention(
                 loop_parked.append(key)
                 continue
             try:
-                state = _loop_state(resources, item, prefetched_steps.get(deal_id))
+                state = _loop_state(resources, item, prefetched_steps.get(deal_id),
+                                    seen=plan_drafts)
             except Exception:  # No model dispatch without a reliable state probe.
                 _LOGGER.exception("Loop guard state probe failed for %s", key)
                 loop_parked.append(key)
@@ -2470,7 +2484,8 @@ def _process_market_attention(
         # RULE 241: the informed plan is built up in pieces too, at the same door.
         if kind == "file_informed_plan" and _draft_door_available(resources):
             planned = _file_the_informed_plan_from_draft(
-                resources, obligation, reachability, len(obligations), threshold
+                resources, obligation, reachability, len(obligations), threshold,
+                already_read=plan_drafts.get(str(obligation.get("target_id") or "")),
             )
             if (
                 guard is not None
@@ -2865,7 +2880,8 @@ def _bid_through_the_draft_loop(
 
 
 def _operator_dialogue_reply(resources: Any, loop: DraftLoop, target_id: str,
-                             brief: dict[str, Any]) -> dict[str, Any] | None:
+                             brief: dict[str, Any],
+                             already_read: Any = None) -> dict[str, Any] | None:
     conversation = brief.get("operator_dialogue") or {}
     pending = conversation.get("pending") or {}
     if not pending.get("id"):
@@ -2873,7 +2889,11 @@ def _operator_dialogue_reply(resources: Any, loop: DraftLoop, target_id: str,
     sender = getattr(resources.toll_bench, "operator_reply", None)
     if not callable(sender):
         return {"ok": False, "error": "operator_dialogue_unavailable"}
-    answer = resources.toll_bench.read_draft(target_id, kind="plan")
+    # 0.68.0: the draft this cycle already read is the one the operator is
+    # talking about; reading it again before anything is written buys nothing.
+    answer = (already_read if isinstance(already_read, dict)
+              else resources.toll_bench.read_draft(target_id, kind="plan"))
+    loop.target_id = loop.target_id or str(target_id or "")
     loop.prefix = draft.with_operator_block(
         "You are the operator's own agent, talking privately about this flow. "
         "Answer questions directly. Only request a plan revision when the operator "
@@ -2923,6 +2943,8 @@ def _file_the_informed_plan_from_draft(
     reachability: dict[str, Any],
     attention_count: int,
     threshold: int,
+    *,
+    already_read: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The informed plan, built up the same way (rule 113 through rule 241).
 
@@ -2930,6 +2952,10 @@ def _file_the_informed_plan_from_draft(
     this agent already filed and the person's selection answers ride the
     answer, so the loop sharpens the plan the person picked instead of
     replacing it. Returns None when the bench has no draft door.
+
+    `already_read` is the plan draft this cycle's loop-guard probe read
+    (0.68.0). The loop starts from it, so a plan nobody has opened yet is
+    created with the very next draft call instead of being read again first.
     """
     target_id = str(obligation.get("target_id") or "")
     proposal_id = str(obligation.get("proposal_id") or "")
@@ -2956,7 +2982,12 @@ def _file_the_informed_plan_from_draft(
     loop.proposal_odds = _FILED_PROPOSAL_ODDS.get(target_id)
     loop.own_means = _own_means(resources)
     _hand_on_the_operator_instructions(resources, loop)
-    dialogue = _operator_dialogue_reply(resources, loop, target_id, brief)
+    loop.target_id = target_id
+    dialogue = _operator_dialogue_reply(resources, loop, target_id, brief, already_read)
+    if dialogue is not None:
+        # The reply door may stamp the operator's request on the draft, so the
+        # draft read before it is not the one the loop should start from.
+        already_read = None
     if dialogue is not None and (not dialogue.get("ok") or not dialogue.get("revise_plan")):
         return {"ok": bool(dialogue.get("ok")), "error": dialogue.get("error"),
                 "reachability": reachability, "attention_count": attention_count,
@@ -2970,6 +3001,7 @@ def _file_the_informed_plan_from_draft(
         proposal_id=proposal_id,
         idempotency_key=_plan_filing_key(obligation),
         revision=obligation.get("change_request"),
+        already_read=already_read,
     )
     if _door_is_missing(outcome):
         _LOGGER.warning(
