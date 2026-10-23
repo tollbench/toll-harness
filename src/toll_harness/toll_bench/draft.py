@@ -91,7 +91,11 @@ from toll_harness.core.own_means import (
     with_own_means,
 )
 from toll_harness.core.types import ModelMessage
-from toll_harness.models.base import empty_reply_note
+from toll_harness.models.base import (
+    asked_again_over_a_cut_off,
+    empty_reply_note,
+    was_cut_off,
+)
 from toll_harness.toll_bench import blocks, programs, row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
@@ -585,6 +589,17 @@ WHOLE_FORM_STILL_RED_INSTRUCTION = (
     "YOUR LAST FORM DID NOT CLEAR THE ROWS IN `still_red`. The same words "
     "will not clear them a second time: change what the bench's sentence "
     "names, or take the step out.\n"
+)
+
+# A REPLY THE OUTPUT LIMIT CUT OFF IS ASKED ONCE MORE, EMPTY OR SLICED
+# (0.68.0). WHAT FORCED IT: the lab's thinking models spent most of their
+# output allowance reasoning and were stopped part way through the plan's
+# JSON; the harness retried a cut-off reply only when it came back EMPTY, so a
+# sliced plan read as no plan at all and the attempt was lost on one reply.
+CUT_OFF_AGAIN_INSTRUCTION = (
+    "YOUR LAST REPLY WAS CUT OFF by the output limit before it was finished. "
+    "Answer again with the JSON object alone: no words around it, no fence, "
+    "and keep every line short.\n"
 )
 
 # ONE MORE ASK, SAYING WHAT WAS WRONG WITH THE LAST ONE. Asked once a round.
@@ -3463,12 +3478,16 @@ class DraftLoop:
         *,
         head: Sequence[tuple[str, Any]] = (),
         budget: int = PROMPT_CHAR_BUDGET,
-        shed: Sequence[str] | None = None,
+        shed_order: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """One question: the stable prefix as the system, the variable tail as
         the message. Every call is measured, and what the cache did is logged
-        where the provider reports it. `shed` names what may come off a tail
-        that runs long, in order (SHED_ORDER when not given)."""
+        where the provider reports it. `shed_order` names what may come off a
+        tail that runs long, in order (SHED_ORDER when not given).
+
+        A reply the output limit cut off -- empty, or sliced part way through
+        its JSON -- is asked ONCE more (0.68.0), unless the adapter already
+        asked again over it; `cut_off_retried` says so to the caller."""
         head = list(head)
         tail = self._tail(instruction, payload, head)
         if len(tail) > budget:
@@ -3477,7 +3496,7 @@ class DraftLoop:
             # went, rather than quietly spending a window on a prompt this
             # loop was built to keep small.
             payload = dict(payload)
-            for name in (self.SHED_ORDER if shed is None else shed):
+            for name in (self.SHED_ORDER if shed_order is None else shed_order):
                 if len(tail) <= budget:
                     break
                 before = len(tail)
@@ -3509,6 +3528,29 @@ class DraftLoop:
                 budget,
             )
         self.cut_off_retried = False
+        response, parsed = self._call(tail, what)
+        if was_cut_off(response) and asked_again_over_a_cut_off(response):
+            # The adapter already asked once more over this cut-off (the
+            # reasoning turned down): that was the one retry.
+            self.cut_off_retried = True
+        elif not parsed and was_cut_off(response):
+            # A CUT-OFF REPLY GETS ONE RETRY, EMPTY OR SLICED (0.68.0). The
+            # output limit ended it before the answer was whole; the same
+            # question once more, asking for the object alone and short, and
+            # never a third time.
+            self.cut_off_retried = True
+            self.log.info(
+                "draft loop ask %s: the output limit cut the reply off (%s); "
+                "asking once more",
+                what or "?",
+                self.last_reply,
+            )
+            again = self._tail(CUT_OFF_AGAIN_INSTRUCTION + instruction, payload, head)
+            response, parsed = self._call(again, f"{what or '?'} (cut off, again)")
+        return parsed
+
+    def _call(self, tail: str, what: str) -> tuple[Any, dict[str, Any]]:
+        """ONE model call on this tail: counted, measured, logged and read."""
         self.calls += 1
         self.prompt_chars += len(tail)
         try:
@@ -3544,12 +3586,13 @@ class DraftLoop:
             note = empty_reply_note(response)
             self.last_reply = f"empty ({note})" if note else "empty"
         elif not parsed:
-            self.last_reply = f"malformed_json({len(text)} chars)"
+            cut = ", cut off" if was_cut_off(response) else ""
+            self.last_reply = f"malformed_json({len(text)} chars{cut})"
         else:
             self.last_reply = f"object({len(text)} chars)"
         self.log.info("draft loop ask %s: reply %s %s", what or "?",
                       self.last_reply, answer_shape(parsed))
-        return parsed
+        return response, parsed
 
     def _head(self, answer: Any = None) -> list[tuple[str, str]]:
         """THE TWO THINGS THAT GO ABOVE THE FORM, in order.
@@ -5326,7 +5369,7 @@ class DraftLoop:
                 answer = self._drop_step(target_id, kind, dropping, path, key)
                 continue
             patches = self._what_lands(patches, several, kind, target_id)
-            if not patches:
+            if not patches and not self.cut_off_retried:
                 # ONCE MORE, SAYING SO. An empty answer once is a hiccup (a
                 # fenced reply with nothing in it, a refusal, a timeout); twice
                 # is the model's answer. Live on 2026-09-09 two agents lost a
@@ -5741,7 +5784,7 @@ class DraftLoop:
             )
             shed = ("example", "tools_on_this_want", "what_goes_in", "forecast_context")
             reply = self._ask(instruction, payload, what, head=self._head(answer),
-                              budget=FORM_CHAR_BUDGET, shed=shed)
+                              budget=FORM_CHAR_BUDGET, shed_order=shed)
             form, why = self._whole_form_from(reply, standing)
             if form is None and not self.cut_off_retried:
                 self.log.info(
@@ -5751,7 +5794,7 @@ class DraftLoop:
                 )
                 reply = self._ask(WHOLE_FORM_AGAIN[why] + instruction, payload,
                                   f"{what} (again)", head=self._head(answer),
-                                  budget=FORM_CHAR_BUDGET, shed=shed)
+                                  budget=FORM_CHAR_BUDGET, shed_order=shed)
                 form, why = self._whole_form_from(reply, standing)
             if form is None:
                 self.log.warning(

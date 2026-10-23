@@ -37,6 +37,47 @@ def empty_reply_note(response: Any) -> str:
     return ""
 
 
+# WHAT A PROVIDER SAYS WHEN THE OUTPUT LIMIT, NOT THE MODEL, ENDED A REPLY
+# (0.68.0): OpenAI and OpenRouter say `length`, Anthropic and Bedrock say
+# `max_tokens`, the Responses API says `max_output_tokens`.
+CUT_OFF_STOPS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def stop_reason_of(response: Any) -> str:
+    """What stopped this reply, as the provider said it, or ""."""
+    reason = getattr(response, "stop_reason", None)
+    if not reason:
+        metadata = getattr(response, "raw_metadata", None)
+        if isinstance(metadata, dict):
+            reason = metadata.get("finish_reason")
+    return str(reason or "")
+
+
+def was_cut_off(response: Any) -> bool:
+    """True when the output limit ended this reply, empty or sliced (0.68.0).
+
+    Read off the provider's own stop reason, or off the adapter's mark
+    (`cut_off` on an empty reply, `sliced` on one that stopped mid-answer).
+    """
+    if stop_reason_of(response).lower() in CUT_OFF_STOPS:
+        return True
+    metadata = getattr(response, "raw_metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    return any(isinstance(metadata.get(key), str) and metadata.get(key)
+               for key in ("cut_off", "sliced"))
+
+
+def asked_again_over_a_cut_off(response: Any) -> bool:
+    """True when the adapter itself already asked once more because the first
+    reply was cut off (0.64.3 `retry`, 0.68.0 for a sliced reply too), so a
+    caller never spends a second retry on the same cut-off."""
+    metadata = getattr(response, "raw_metadata", None)
+    return isinstance(metadata, dict) and bool(
+        metadata.get("retry") or metadata.get("cut_off_try")
+    )
+
+
 class ModelAdapter(ABC):
     """Provider-neutral intelligence boundary."""
 

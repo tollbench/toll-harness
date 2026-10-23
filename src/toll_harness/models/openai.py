@@ -38,6 +38,15 @@ CACHE_MIN_CHARS = 4_000
 # GLM and Qwen refuse it at the door ("Reasoning is mandatory for this
 # endpoint") -- they answered on "low". A model that refused "none" is
 # remembered for the life of the process, so the refusal is paid once.
+#
+# A SLICED REPLY GETS THE SAME ONE RETRY (0.68.0). A thinking model that
+# spent most of the budget reasoning and was then stopped part way through its
+# answer (`length`, text present, no tool call) has the same cause and the
+# same cure: until 0.68.0 only an EMPTY cut-off was asked again, so a plan
+# sliced mid-JSON was handed back as it stood and read as no plan at all. The
+# lever here is the reasoning setting, so a sliced reply is asked again only
+# when the model reasoned; one that did not think has nothing to turn down,
+# and is marked (`sliced`) for its caller, which can ask for a shorter answer.
 CUT_OFF_REASONING = {"effort": "none"}
 MANDATORY_REASONING = {"effort": "low"}
 _CUT_OFF_FINISH = frozenset({"length", "max_tokens", "max_output_tokens"})
@@ -224,10 +233,11 @@ class OpenAIModelAdapter(ModelAdapter):
             ]
             request["tool_choice"] = "auto"
         first = self._read(self._create(request))
-        if not first["cut_off"] or not _is_openrouter(self.client):
+        again = first["cut_off"] or (first["sliced"] and first["thought"])
+        if not again or not _is_openrouter(self.client):
             # Everything that came back whole, and every endpoint that is not
             # OpenRouter, is answered exactly as before; a cut-off reply off
-            # another endpoint is only marked, never asked again.
+            # another endpoint is only marked, never asked again here.
             return self._respond(first)
         return self._respond(self._ask_again(request, first), cut=first)
 
@@ -349,6 +359,13 @@ class OpenAIModelAdapter(ModelAdapter):
                 and not calls
                 and (bool(stops & _CUT_OFF_FINISH) or spent)
             ),
+            # 0.68.0: words came back, no tool call, and the budget stopped
+            # them part way: a sliced reply.
+            "sliced": bool(text.strip()) and not calls and bool(stops & _CUT_OFF_FINISH),
+            "thought": bool(
+                reasoning_tokens or reasoning_chars or reasoning
+                or _field(model_message, "reasoning_details")
+            ),
         }
 
     def _respond(self, read: JsonObject, cut: JsonObject | None = None) -> ModelResponse:
@@ -390,6 +407,10 @@ class OpenAIModelAdapter(ModelAdapter):
             total_tokens += cut["output_tokens"]
         if read["cut_off"]:
             metadata["cut_off"] = cut_off_words(read)
+        elif read.get("sliced"):
+            # Not `cut_off`: that key says a reply came back EMPTY, and a
+            # caller reads it only then (`empty_reply_note`).
+            metadata["sliced"] = cut_off_words(read)
         elif not read["text"].strip() and not read["calls"]:
             metadata["empty"] = (
                 f"said nothing: finish_reason {read['finish_reason'] or 'unreported'}, "
@@ -411,11 +432,17 @@ class OpenAIModelAdapter(ModelAdapter):
 
 
 def cut_off_words(read: JsonObject) -> str:
-    """Plain words for a reply the budget stopped before it said anything."""
+    """Plain words for a reply the budget stopped before it said anything, or
+    (0.68.0) part way through what it was saying."""
+    text = str(read.get("text") or "")
+    came_back = (
+        f"{len(text)} characters came back and stopped mid-reply"
+        if text.strip() else "no text came back"
+    )
     words = (
         f"cut off: finish_reason {read.get('finish_reason') or 'unreported'} "
         f"after {int(read.get('reasoning_tokens') or 0)} reasoning tokens "
-        f"({int(read.get('output_tokens') or 0)} output tokens), no text came back"
+        f"({int(read.get('output_tokens') or 0)} output tokens), {came_back}"
     )
     retry = read.get("retry")
     if isinstance(retry, dict):
