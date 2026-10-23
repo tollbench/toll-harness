@@ -33,6 +33,13 @@ GOAL_RUN_ID = re.compile(
 PACK_INPUT_MAX_BYTES = 10 * 1024 * 1024
 
 
+class _RefusePackInputRedirects(urllib.request.HTTPRedirectHandler):
+    """Never carry an agent bearer off the exact approved file door."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
 def _goal_check_path(run_id: str, action: str = "") -> str:
     if not isinstance(run_id, str) or GOAL_RUN_ID.fullmatch(run_id) is None:
         raise ValueError("Goal check run_id must be a UUID")
@@ -467,7 +474,9 @@ class BookOfHousesApiClient:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.build_opener(_RefusePackInputRedirects()).open(
+                request, timeout=self.timeout_seconds
+            ) as response:
                 data = response.read(PACK_INPUT_MAX_BYTES + 1)
         except urllib.error.HTTPError as error:
             raise BookOfHousesApiError(

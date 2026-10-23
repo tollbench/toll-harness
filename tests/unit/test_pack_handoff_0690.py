@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
 from toll_harness import cli
 from toll_harness.config import PACK_INPUT_TOOLS, with_pack_input_tools
-from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
+from toll_harness.email.book_of_houses import (
+    BookOfHousesApiClient,
+    BookOfHousesApiError,
+    _RefusePackInputRedirects,
+)
 from toll_harness.onboarding import TOLL_BENCH_TOOLS
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import ToolContext, add_toll_bench_tools, build_standard_registry
@@ -220,8 +225,13 @@ def test_file_input_is_authenticated_hash_checked_and_stored_outside_model_conte
                                     "kind": "file", "sha256": digest,
                                     "download_url": request.full_url + "/file"}).encode())
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    class Opener:
+        open = staticmethod(urlopen)
+
     api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    api.get_pack_input = lambda *_: {"ok": True, "receipt_id": RECEIPT,
+                                    "kind": "file", "sha256": digest}
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_handlers: Opener())
     provider = BookOfHousesTollBenchProvider(api)
     store = SimpleNamespace(write=lambda run, path, data: (
         written.append((run, path, data)) or {"path": path, "size": len(data)}))
@@ -235,7 +245,32 @@ def test_file_input_is_authenticated_hash_checked_and_stored_outside_model_conte
     assert result.output["size_bytes"] == len(content)
     assert "download_url" not in result.output
     assert written == [("run", f"pack-inputs/{digest}.bin", content)]
-    assert len(calls) == 2 and all(token == "Bearer agent-token" for _, token in calls)
+    assert len(calls) == 1 and calls[0][1] == "Bearer agent-token"
+
+
+def test_pack_file_redirect_never_forwards_bearer_to_another_origin(monkeypatch):
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout=None):
+            calls.append(request.full_url)
+            redirect = _RefusePackInputRedirects()
+            forwarded = redirect.redirect_request(
+                request, None, 302, "Found", {}, "https://foreign.invalid/receive"
+            )
+            assert forwarded is None
+            raise urllib.error.HTTPError(request.full_url, 302, "Found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_handlers: Opener())
+    api = BookOfHousesApiClient(base_url="https://bench.example", token="agent-token")
+    try:
+        api.get_pack_input_file("4fa1b409-2d68-4811-8190-7abbdb448ab6", RECEIPT)
+    except BookOfHousesApiError as exc:
+        assert exc.status == 302 and exc.code == "pack_input_file_refused"
+    else:
+        raise AssertionError("cross-origin redirect followed")
+    assert calls == [f"https://bench.example/api/bench/targets/"
+                     f"4fa1b409-2d68-4811-8190-7abbdb448ab6/pack-inputs/{RECEIPT}/file"]
 
 
 def test_changed_file_is_refused_before_artifact_write():
