@@ -1082,6 +1082,160 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ),
         get_pack_input,
     )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.get_pack_drafts",
+            ("After your approved action-pack handoff, read only connected blank slots "
+             "the owner reserved. This creates no task and never posts a card."),
+            _object_schema({"source_goal_id": {"type": "string", "format": "uuid"}},
+                           ["source_goal_id"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).get_pack_drafts(
+            arguments["source_goal_id"]
+        ),
+    )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.suggest_pack_draft",
+            ("Optionally suggest one draft for an owner-reserved connected slot after "
+             "your handoff is approved. Reuse one idempotency_key UUID for exact retries. "
+             "This does not post a card, assign an agent, or create a payment."),
+            _object_schema({
+                "source_goal_id": {"type": "string", "format": "uuid"},
+                "slot_id": {"type": "string", "format": "uuid"},
+                "idempotency_key": {"type": "string", "format": "uuid"},
+                "draft": _object_schema({
+                    "title": {"type": "string", "maxLength": 1000},
+                    "brief": {"type": "string", "maxLength": 2000},
+                    "artifacts": {"type": "array", "maxItems": 8,
+                                  "items": {"type": "string", "format": "uuid"}},
+                }, ["title", "brief", "artifacts"]),
+            }, ["source_goal_id", "slot_id", "idempotency_key", "draft"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).suggest_pack_draft(
+            arguments["source_goal_id"], arguments["slot_id"],
+            arguments["draft"], arguments["idempotency_key"]
+        ),
+    )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.paid_pack_job",
+            "Read only your current assigned paid-pack card and its approved predecessor inputs.",
+            _object_schema({"order_id": {"type": "string", "format": "uuid"}}, ["order_id"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).paid_pack_job(arguments["order_id"]),
+    )
+
+    def submit_paid_pack_result(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        provider = require_toll_bench(context)
+        path = arguments.get("file_path")
+        content = None
+        filename = None
+        if path is not None:
+            if not isinstance(path, str) or not path:
+                raise ValueError("file_path must name one local run artifact")
+            path = context.native_artifact_aliases.get(path, path)
+            content = context.artifact_store.read(context.run_id, path, _ARTIFACT_MAX_BYTES + 1)
+            if not 1 <= len(content) <= _ARTIFACT_MAX_BYTES:
+                raise ValueError("Paid-pack file must be within 50 MiB")
+            filename = path.rsplit("/", 1)[-1]
+        return provider.submit_paid_pack_result(
+            arguments["order_id"], card_number=arguments["card_number"],
+            submit_key=arguments["submit_key"], title=arguments["title"],
+            note=arguments.get("note") or "", content=content, filename=filename,
+            content_type=arguments.get("content_type"),
+        )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.submit_paid_pack_result",
+            ("Submit the result for your currently assigned paid-pack card. Use one stable "
+             "submit_key UUID for retries. For a file, give file_path from this run's "
+             "artifact folder; the harness uploads bounded bytes and never puts them in "
+             "model context. This does not accept the result for the manager or buyer."),
+            _object_schema({
+                "order_id": {"type": "string", "format": "uuid"},
+                "card_number": {"type": "integer", "minimum": 1},
+                "submit_key": {"type": "string", "format": "uuid"},
+                "title": {"type": "string"},
+                "note": {"type": "string"},
+                "file_path": {"type": "string"},
+                "content_type": {"type": "string"},
+            }, ["order_id", "card_number", "submit_key", "title"]),
+        ),
+        submit_paid_pack_result,
+    )
+
+    def paid_pack_receipt(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        provider = require_toll_bench(context)
+        result = provider.paid_pack_receipt(arguments["order_id"], arguments["receipt_id"])
+        receipt = result.get("receipt") if isinstance(result, dict) else None
+        if not isinstance(receipt, dict) or receipt.get("kind") != "file":
+            return result
+        expected = receipt.get("sha256")
+        size = receipt.get("size_bytes")
+        if (not isinstance(expected, str) or re.fullmatch(r"[0-9a-fA-F]{64}", expected) is None
+                or isinstance(size, bool) or not isinstance(size, int)
+                or not 1 <= size <= _ARTIFACT_MAX_BYTES):
+            raise ValueError("Paid-pack file receipt has invalid hash or size")
+        data = provider.paid_pack_receipt_file(arguments["order_id"], arguments["receipt_id"])
+        if len(data) != size or hashlib.sha256(data).hexdigest() != expected.lower():
+            raise ValueError("Paid-pack file differs from its approved receipt")
+        raw_name = str(receipt.get("filename") or receipt.get("title") or "result")
+        basename = raw_name.replace("\\", "/").rsplit("/", 1)[-1]
+        safe_name = re.sub(r"[^\w.() -]", "_", basename, flags=re.UNICODE).strip(" .") or "result.bin"
+        written = context.artifact_store.write(
+            context.run_id, f"paid-pack-inputs/{arguments['receipt_id']}/{safe_name}", data
+        )
+        return {**result, "receipt": {**receipt, "artifact_path": written["path"]}}
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.paid_pack_receipt",
+            ("Read one result you are allowed to review or consume. A file is downloaded "
+             "through the authenticated receipt door, checked against its SHA-256 and size, "
+             "and saved in this run's artifact directory; only its local path is returned."),
+            _object_schema({"order_id": {"type": "string", "format": "uuid"},
+                            "receipt_id": {"type": "string", "format": "uuid"}},
+                           ["order_id", "receipt_id"]),
+        ),
+        paid_pack_receipt,
+    )
+
+    for name, method, description in (
+        ("accept_paid_pack_receipt", "paid_pack_accept",
+         "Manager only: accept one submitted worker result after reviewing its receipt."),
+        ("paid_pack_handoff", "paid_pack_handoff",
+         "Manager only: file one accepted worker result through the existing buyer step."),
+    ):
+        registry.register(
+            ToolDefinition(
+                "toll_bench." + name, description,
+                _object_schema({"order_id": {"type": "string", "format": "uuid"},
+                                "receipt_id": {"type": "string", "format": "uuid"}},
+                               ["order_id", "receipt_id"]),
+            ),
+            lambda context, arguments, method=method: getattr(
+                require_toll_bench(context), method
+            )(arguments["order_id"], arguments["receipt_id"]),
+        )
+
+    registry.register(
+        ToolDefinition(
+            "toll_bench.reject_paid_pack_receipt",
+            "Manager only: reject one submitted result with a reason so its worker can correct it.",
+            _object_schema({"order_id": {"type": "string", "format": "uuid"},
+                            "receipt_id": {"type": "string", "format": "uuid"},
+                            "reason": {"type": "string"}},
+                           ["order_id", "receipt_id", "reason"]),
+        ),
+        lambda context, arguments: require_toll_bench(context).paid_pack_reject(
+            arguments["order_id"], arguments["receipt_id"], arguments["reason"]
+        ),
+    )
     registry.register(
         ToolDefinition(
             "toll_bench.list_act_kinds",
@@ -1860,6 +2014,21 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                         "description": "Already approved source-deal receipt UUIDs only.",
                         "items": {"type": "string", "format": "uuid"},
                     },
+                    "draft_suggestions": {
+                        "type": "array", "maxItems": 8,
+                        "description": (
+                            "Optional suggestions for owner-reserved blank slots shown in "
+                            "brief.action_pack.draft_suggestions. They create no task or "
+                            "payment; the server saves them only with an accepted handoff."
+                        ),
+                        "items": _object_schema({
+                            "slot_id": {"type": "string", "format": "uuid"},
+                            "title": {"type": "string"},
+                            "brief": {"type": "string"},
+                            "artifacts": {"type": "array", "maxItems": 8,
+                                          "items": {"type": "string", "format": "uuid"}},
+                        }, ["slot_id", "title", "brief", "artifacts"]),
+                    },
                 },
                 ["summary", "labels", "artifacts"],
             ),
@@ -1915,8 +2084,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "this filing is ONE round (`repeats.say` names it, `per_round` how "
                 "many pieces it hands in); send last_round: true only on the round "
                 "that finishes the step. A post-resolution action-pack handoff uses "
-                "only pack_handoff {summary, labels, artifacts}; artifacts are already "
-                "approved receipt UUIDs. It needs no note or step content. Ordinary "
+                "only pack_handoff {summary, labels, artifacts, optional draft_suggestions}; "
+                "artifacts are already approved receipt UUIDs. Optional suggestions "
+                "name owner-reserved slot IDs and create no task or payment. The handoff "
+                "needs no note or step content. Ordinary "
                 "outcomes still require note and exactly one content field."
             ),
             _object_schema(

@@ -801,6 +801,8 @@ _LOGGER = logging.getLogger("toll_harness.cli")
 # next cycle for the remaining obligations.
 _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "deal_step",
+    "paid_pack_review",
+    "paid_pack_work",
     "pack_handoff",
     "draft_sent_back",
     "file_informed_plan",
@@ -1077,6 +1079,39 @@ _DRAFT_SENT_BACK_INSTRUCTION = (
 )
 
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
+    "paid_pack_work": {
+        "instruction": (
+            "This is one assigned card inside a signed paid action pack. Read its "
+            "paid_pack_job using the attention order_id. The job names this card, "
+            "its bounded approved predecessor results, and any buyer input read calls. "
+            "Read only what this card needs. Submit one text note or one local file "
+            "with the exact card_number and a stable submit_key UUID. The manager "
+            "reviews it before any buyer handoff. Do not file a separate ordinary "
+            "deal outcome, change payment, contact the buyer, or work on a later card. "
+            "A 404 or paused job means stop."
+        ),
+        "tools": frozenset({"toll_bench.paid_pack_job",
+                              "toll_bench.paid_pack_receipt",
+                              "toll_bench.submit_paid_pack_result"})
+            | _DEAL_WORK_TOOLS | _BOOKKEEPING_TOOLS,
+    },
+    "paid_pack_review": {
+        "instruction": (
+            "You are the signed manager of one paid action pack. Read the receipt "
+            "named by this attention item and inspect any checked local file. "
+            "Accept or reject that exact receipt deliberately; a rejection needs "
+            "a useful reason for the assigned worker. After acceptance, file the "
+            "accepted receipt through paid_pack_handoff once so the existing buyer "
+            "step can review it. Keep one stable receipt ID on retries. Do not "
+            "make a new charge, reopen a deal, or invent a worker result."
+        ),
+        "tools": frozenset({"toll_bench.paid_pack_job",
+                              "toll_bench.paid_pack_receipt",
+                              "toll_bench.accept_paid_pack_receipt",
+                              "toll_bench.reject_paid_pack_receipt",
+                              "toll_bench.paid_pack_handoff",
+                              "files.list", "files.read"}) | _BOOKKEEPING_TOOLS,
+    },
     "pack_handoff": {
         "instruction": (
             "The selected action-pack card is resolved but still needs your handoff for "
@@ -1087,9 +1122,14 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             "already approved on your card. Do not refile a delivery, reopen a deal, "
             "change payment, or include private information that was not released. "
             "A 404 means the handoff is unavailable or no longer yours; stop."
+            " If the handoff succeeds and its response lists connected owner-reserved "
+            "draft slots, you may use get_pack_drafts and suggest_pack_draft in this "
+            "same task for a bounded optional suggestion, then stop. Never poll for "
+            "new slots or create a new obligation."
         ),
         "tools": frozenset({"toll_bench.read_brief", "toll_bench.get_pack_input",
-                              "toll_bench.file_outcome"})
+                              "toll_bench.file_outcome", "toll_bench.get_pack_drafts",
+                              "toll_bench.suggest_pack_draft"})
         | _BOOKKEEPING_TOOLS,
     },
     "goal_check": {
@@ -1112,7 +1152,10 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
         "instruction": _DEAL_STEP_INSTRUCTION + (
             " When brief.action_pack names a released predecessor receipt, use "
             "toll_bench.get_pack_input with this target_id and receipt_id to read "
-            "only that server-authorized input before acting."
+            "only that server-authorized input before acting. If the brief shows "
+            "owner-reserved draft_suggestions slots, you may include bounded "
+            "draft_suggestions inside the same final pack_handoff. They do not "
+            "post new work; do not start another task for them."
         ),
         "tools": frozenset(
             {
@@ -1836,6 +1879,10 @@ def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     """The one piece of work an obligation names, independent of its wording."""
     if obligation.get("kind") == "goal_check":
         return ("goal_check", str(obligation.get("id") or ""))
+    if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}:
+        return (str(obligation.get("kind")), str(obligation.get("order_id") or ""),
+                str(obligation.get("card_number") or ""),
+                str(obligation.get("receipt_id") or ""))
     return tuple(
         str(obligation.get(field) or "")
         for field in ("kind", "target_id", "proposal_id", "deal_id", "step_id")
@@ -2157,6 +2204,14 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None,
     basis: dict[str, Any] = {"work": _obligation_key(obligation),
                              "round": obligation.get("round"),
                              "message_id": obligation.get("message_id")}
+    if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}:
+        # A rejection or accepted handoff changes the work even when the card
+        # and receipt IDs stay fixed. Poll timestamps intentionally stay out.
+        basis["paid_pack_state"] = {
+            field: obligation.get(field)
+            for field in ("work_revision", "rejected_receipt_id",
+                          "receipt_status", "handoff_state")
+        }
     if isinstance(step, dict):
         basis["step"] = json.loads(_deal_step_fingerprint(step))
     elif obligation.get("kind") == "file_informed_plan":
@@ -3299,8 +3354,11 @@ def _cost_scope(
     if ledger is None:
         return contextlib.nullcontext()
     deal = (step_state.get("deal") if isinstance(step_state, dict) else None) or {}
+    parent_deal_id = (obligation.get("parent_deal_id")
+                      if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}
+                      else None)
     return ledger.deal(
-        obligation.get("deal_id") or deal.get("id"),
+        obligation.get("deal_id") or parent_deal_id or deal.get("id"),
         obligation.get("target_id") or deal.get("target_goal_id"),
     )
 

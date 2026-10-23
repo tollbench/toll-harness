@@ -770,6 +770,44 @@ class BookOfHousesTollBenchProvider:
         """Fetch file bytes through the same server-authorized edge."""
         return self.api.get_pack_input_file(target_id, receipt_id)
 
+    def get_pack_drafts(self, source_goal_id: str) -> dict[str, Any]:
+        return self.api.get_pack_drafts(source_goal_id)
+
+    def suggest_pack_draft(
+        self, source_goal_id: str, slot_id: str, draft: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.api.suggest_pack_draft(source_goal_id, slot_id, draft, idempotency_key)
+
+    def paid_pack_job(self, order_id: str) -> dict[str, Any]:
+        return self.api.paid_pack_job(order_id)
+
+    def submit_paid_pack_result(
+        self, order_id: str, *, card_number: int, submit_key: str,
+        title: str, note: str = "", content: bytes | None = None,
+        filename: str | None = None, content_type: str | None = None,
+    ) -> dict[str, Any]:
+        return self.api.submit_paid_pack_result(
+            order_id, card_number=card_number, submit_key=submit_key,
+            title=title, note=note, content=content, filename=filename,
+            content_type=content_type,
+        )
+
+    def paid_pack_receipt(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self.api.paid_pack_receipt(order_id, receipt_id)
+
+    def paid_pack_receipt_file(self, order_id: str, receipt_id: str) -> bytes:
+        return self.api.paid_pack_receipt_file(order_id, receipt_id)
+
+    def paid_pack_accept(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self.api.paid_pack_accept(order_id, receipt_id)
+
+    def paid_pack_reject(self, order_id: str, receipt_id: str, reason: str) -> dict[str, Any]:
+        return self.api.paid_pack_reject(order_id, receipt_id, reason)
+
+    def paid_pack_handoff(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self.api.paid_pack_handoff(order_id, receipt_id)
+
     def _plan_example(self, key: Any) -> dict[str, Any] | None:
         """One worked program, by key, or None.
 
@@ -4042,7 +4080,9 @@ class BookOfHousesTollBenchProvider:
         # platform's story, and the person approves whichever landed first.
         handoff = outcome.get("pack_handoff")
         if handoff is not None:
-            if not isinstance(handoff, dict) or set(handoff) != {"summary", "labels", "artifacts"}:
+            required = {"summary", "labels", "artifacts"}
+            if (not isinstance(handoff, dict) or not required <= set(handoff)
+                    or set(handoff) - required - {"draft_suggestions"}):
                 return {"ok": False, "error": "invalid_pack_handoff"}
             summary, labels, artifacts = (
                 handoff["summary"], handoff["labels"], handoff["artifacts"]
@@ -4059,6 +4099,24 @@ class BookOfHousesTollBenchProvider:
                     uuid.UUID(receipt)
             except (TypeError, ValueError, AttributeError):
                 return {"ok": False, "error": "invalid_pack_handoff"}
+            suggestions = handoff.get("draft_suggestions")
+            if suggestions is not None:
+                if not isinstance(suggestions, list) or len(suggestions) > 8:
+                    return {"ok": False, "error": "invalid_pack_handoff"}
+                try:
+                    for suggestion in suggestions:
+                        if (not isinstance(suggestion, dict)
+                                or set(suggestion) != {"slot_id", "title", "brief", "artifacts"}
+                                or not isinstance(suggestion["title"], str)
+                                or not isinstance(suggestion["brief"], str)
+                                or not isinstance(suggestion["artifacts"], list)
+                                or len(suggestion["artifacts"]) > 8):
+                            return {"ok": False, "error": "invalid_pack_handoff"}
+                        uuid.UUID(suggestion["slot_id"])
+                        for receipt_id in suggestion["artifacts"]:
+                            uuid.UUID(receipt_id)
+                except (TypeError, ValueError, AttributeError):
+                    return {"ok": False, "error": "invalid_pack_handoff"}
             # A resolved card has no live step. Its handoff is metadata for the
             # next selected agent, not a second delivery or a cost filing.
             if set(outcome) <= {"pack_handoff", "note"}:

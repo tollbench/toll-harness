@@ -31,6 +31,7 @@ GOAL_RUN_ID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 PACK_INPUT_MAX_BYTES = 10 * 1024 * 1024
+PAID_PACK_FILE_MAX_BYTES = 50 * 1024 * 1024
 
 
 class _RefusePackInputRedirects(urllib.request.HTTPRedirectHandler):
@@ -51,6 +52,23 @@ def _pack_input_path(target_id: str, receipt_id: str, action: str = "") -> str:
             or not isinstance(receipt_id, str) or GOAL_RUN_ID.fullmatch(receipt_id) is None):
         raise ValueError("Pack input target_id and receipt_id must be UUIDs")
     return f"/api/bench/targets/{target_id}/pack-inputs/{receipt_id}{action}"
+
+
+def _pack_drafts_path(source_goal_id: str) -> str:
+    if not isinstance(source_goal_id, str) or GOAL_RUN_ID.fullmatch(source_goal_id) is None:
+        raise ValueError("Pack draft source_goal_id must be a UUID")
+    return f"/api/bench/targets/{source_goal_id}/pack-drafts"
+
+
+def _paid_pack_path(order_id: str, action: str = "", receipt_id: str | None = None) -> str:
+    if not isinstance(order_id, str) or GOAL_RUN_ID.fullmatch(order_id) is None:
+        raise ValueError("Paid pack order_id must be a UUID")
+    path = f"/api/bench/paid-packs/{order_id}"
+    if receipt_id is not None:
+        if not isinstance(receipt_id, str) or GOAL_RUN_ID.fullmatch(receipt_id) is None:
+            raise ValueError("Paid pack receipt_id must be a UUID")
+        path += f"/receipts/{receipt_id}"
+    return path + action
 
 
 def _domain_list(value: Any) -> list[str]:
@@ -248,6 +266,7 @@ class BookOfHousesApiClient:
         query: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         return_headers: bool = False,
+        refuse_redirects: bool = False,
     ) -> Any:
         if authenticated and not self._token:
             raise BookOfHousesApiError(401, "missing_agent_token", "Agent token is not configured")
@@ -280,7 +299,9 @@ class BookOfHousesApiClient:
             (payload or {}).get("kind") if path.endswith("/proposals/draft") else None
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            open_request = (urllib.request.build_opener(_RefusePackInputRedirects()).open
+                            if refuse_redirects else urllib.request.urlopen)
+            with open_request(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
                 data = json.loads(raw) if raw else {}
                 status = getattr(response, "status", None) or 200
@@ -489,6 +510,98 @@ class BookOfHousesApiClient:
                 413, "pack_input_file_too_large", "Pack input exceeds 10 MiB"
             )
         return data
+
+    def get_pack_drafts(self, source_goal_id: str) -> dict[str, Any]:
+        """Read only connected owner-reserved slots after an approved handoff."""
+        return self._request("GET", _pack_drafts_path(source_goal_id),
+                             authenticated=True, refuse_redirects=True)
+
+    def suggest_pack_draft(
+        self, source_goal_id: str, slot_id: str, draft: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if (not isinstance(slot_id, str) or GOAL_RUN_ID.fullmatch(slot_id) is None
+                or not isinstance(idempotency_key, str)
+                or GOAL_RUN_ID.fullmatch(idempotency_key) is None):
+            raise ValueError("Pack draft slot_id and idempotency key must be UUIDs")
+        return self._request("POST", _pack_drafts_path(source_goal_id),
+                             payload={"slot_id": slot_id, "draft": draft},
+                             authenticated=True, idempotency_key=idempotency_key,
+                             refuse_redirects=True)
+
+    def paid_pack_job(self, order_id: str) -> dict[str, Any]:
+        return self._request("GET", _paid_pack_path(order_id, "/job"),
+                             authenticated=True, refuse_redirects=True)
+
+    def submit_paid_pack_result(
+        self, order_id: str, *, card_number: int, submit_key: str,
+        title: str, note: str = "", content: bytes | None = None,
+        filename: str | None = None, content_type: str | None = None,
+    ) -> dict[str, Any]:
+        path = _paid_pack_path(order_id, "/results")
+        if not isinstance(submit_key, str) or GOAL_RUN_ID.fullmatch(submit_key) is None:
+            raise ValueError("Paid pack submit_key must be a UUID")
+        if isinstance(card_number, bool) or not isinstance(card_number, int) or card_number < 1:
+            raise ValueError("Paid pack card_number must be a positive integer")
+        fields = {"card_number": str(card_number), "submit_key": submit_key,
+                  "title": title, "note": note}
+        if content is None:
+            return self._request("POST", path, payload={**fields, "card_number": card_number},
+                                 authenticated=True, refuse_redirects=True)
+        if not isinstance(content, bytes) or not 1 <= len(content) <= PAID_PACK_FILE_MAX_BYTES:
+            raise ValueError("Paid pack file must contain at most 50 MiB")
+        if not filename:
+            raise ValueError("Paid pack file needs its filename")
+        body, media_type = _multipart_body(
+            fields, filename=filename, content=content,
+            media_type=content_type or "application/octet-stream",
+        )
+        return self._request("POST", path, raw_body=body, content_type=media_type,
+                             authenticated=True, refuse_redirects=True)
+
+    def paid_pack_receipt(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self._request("GET", _paid_pack_path(order_id, receipt_id=receipt_id),
+                             authenticated=True, refuse_redirects=True)
+
+    def paid_pack_receipt_file(self, order_id: str, receipt_id: str) -> bytes:
+        path = _paid_pack_path(order_id, "/file", receipt_id=receipt_id)
+        if not self._token:
+            raise BookOfHousesApiError(401, "missing_agent_token", "Agent token is not configured")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            headers={"Accept": "application/octet-stream", "Authorization": f"Bearer {self._token}",
+                     "User-Agent": "toll-harness/0.71"}, method="GET",
+        )
+        try:
+            with urllib.request.build_opener(_RefusePackInputRedirects()).open(
+                request, timeout=self.timeout_seconds
+            ) as response:
+                data = response.read(PAID_PACK_FILE_MAX_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            raise BookOfHousesApiError(
+                error.code, "paid_pack_file_refused", str(error.reason)
+            ) from None
+        except urllib.error.URLError as error:
+            raise BookOfHousesApiError(0, "connection_error", str(error.reason)) from None
+        if len(data) > PAID_PACK_FILE_MAX_BYTES:
+            raise BookOfHousesApiError(
+                413, "paid_pack_file_too_large", "Paid pack file exceeds 50 MiB"
+            )
+        return data
+
+    def paid_pack_accept(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self._request("POST", _paid_pack_path(order_id, "/accept", receipt_id),
+                             payload={}, authenticated=True, refuse_redirects=True)
+
+    def paid_pack_reject(self, order_id: str, receipt_id: str, reason: str) -> dict[str, Any]:
+        return self._request("POST", _paid_pack_path(order_id, "/reject", receipt_id),
+                             payload={"reason": reason}, authenticated=True,
+                             refuse_redirects=True)
+
+    def paid_pack_handoff(self, order_id: str, receipt_id: str) -> dict[str, Any]:
+        return self._request("POST", _paid_pack_path(order_id, "/handoff"),
+                             payload={"receipt_id": receipt_id}, authenticated=True,
+                             refuse_redirects=True)
 
     def plan_example(self, key: str) -> dict[str, Any]:
         """One worked program, in full, by key.
