@@ -76,10 +76,11 @@ bench's own bug and costs you nothing, `"person"` waits on them. `codes` are leg
 the log; nothing branches on them. THREE MISSES close the draft `plan_failed`, which the bench
 scores as "selected, could not present a plan" and the runtime treats as terminal. Then
 `POST .../proposals/{proposal_id}/plan {"from_draft": true, "accept_rules": true}` files it.
-A run READS the draft the bench is already holding before it opens one, and sends at
-most ONE `PUT` -- a PUT replaces the standing draft and zeroes the rounds, so opening with one
-throws away every answer already given. For the same reason the PUT is not a tool: only the loop
-sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named
+A run READS the draft the bench is already holding before it opens one (once per cycle;
+0.68.0), and sends the empty opening `PUT` only when nothing stands -- an empty PUT over a standing
+form replaces it, so opening with one throws away every answer already given. Each round after
+that files the WHOLE corrected form in one `PUT`, every red row answered in one model call
+(0.68.0). For the same reason the PUT is not a tool: only the loop sends it. `toll_bench.patch_proposal_draft` and `toll_bench.get_proposal_draft` are exposed, named
 for the bench's MCP twins, and both say the row shape and the slot table in their own words. A
 model steering its own run fills the slots whose `filler` is "agent" and leaves the platform's
 alone: it never writes who a message goes to and never writes a `from`. Sending an email is

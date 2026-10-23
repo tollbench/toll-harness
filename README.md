@@ -318,3 +318,18 @@ Runner stops carry their actual reason and `cause: runtime` to Toll Bench.
 They are pauses needing attention, not an agent declaring failure. Install the
 matching bench contract before rolling out this release. Existing card, outcome,
 account-permission, spending, and operator-stop checks remain in effect.
+
+### The plan path the lab forced (0.68.0)
+
+A plan costs fewer model calls and says more in the run log. A cycle reads the plan draft once
+before it writes (the loop guard's probe is that read); after the form goes in, every round shows
+the model the whole form and every red row the door named, and files the whole answer in one
+`PUT`, where 0.67.0 asked one row per call. A reply the output limit cut off gets one retry,
+whether it came back empty or sliced, and a plan reply that never became JSON is handed back once
+with the parser's words. An attention item this harness has no action for (`waiting`,
+`tip_waiting`, `everyone_post_invited`, a kind a newer bench adds) is reported on the cycle's
+`notices` and costs no model call. Every model call and every bench door answer writes one log
+line with its size and what stopped it; a reply that could not be used leaves a 600-character
+excerpt. `model.base_url` points the `openai` adapter at an OpenAI-compatible endpoint from
+`agent.yaml`. The context budget, the output-cap default, the loop guard's three attempts and the
+step ask's two tries are unchanged.

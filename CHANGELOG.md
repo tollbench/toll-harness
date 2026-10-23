@@ -23,6 +23,71 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.68.0 — The plan path the lab forced, 2026-10-23
+
+The lab runner (the Book of Houses `app/scripts/lab/runner.py`) is being
+retired: a lab model runs as a unit, `market watch` on an `agent.yaml`, like
+any other agent. Three plan behaviors it worked around were the harness's own,
+and the first lab model moved onto the plain watch (A-0667, DeepSeek, staging,
+2026-10-23) found three more. A minor release because behavior changes (the
+plan rounds, the cut-off retry, the notices). Nothing removed. No fields or
+calls deprecated. Kept exactly: the context budget, the output-cap default
+(`max_tokens` 2048), the loop guard's three attempts per work state, the draft
+loop's own three-namings brake and the step ask's two tries on refused
+arguments. Bench contract: nothing new is needed; the whole-form PUT is the
+plan door's own (a full form answers the row it asked about, contract 4.0),
+and the staging read-only gate passed for 0.60.0 and 0.68.0 against staging
+bench contract 4.1.49.
+
+- **One read of the draft before any write.** The loop-guard probe reads the
+  plan draft to fingerprint the work, and `DraftLoop._read_first` read the
+  same door again before the loop opened it (GET, GET, PUT on a plan nobody
+  had opened). The probe now keeps its read (`_loop_state(..., seen=)`) and
+  the loop starts from it (`DraftLoop.run(already_read=)`): a 404 goes
+  straight to the PUT that creates the draft. An operator conversation turns
+  the kept read stale, so the loop then reads fresh.
+- **Every red row in one model call a round.** After the form went in, the
+  loop asked about one red row per call (thirteen calls for one lab plan on
+  2026-10-22; heat copy 72914e46 stalled on `s5|-|empty|agent|form.steps.4.tool`
+  after three of them). For a form the door holds in the one language,
+  `_fix_every_red_row` works the rows that need no model first (unchanged),
+  then shows ONE call the whole form, every red row (step, slot, problem, the
+  bench's sentence, path, accepted; never the codes) and each of those steps'
+  input table, and files the whole answer in ONE `PUT` over the standing form.
+  A form missing steps it does not name in `drop` is never filed; an answer
+  carrying only `odds` / `overview` / `span_days` keeps every step; an empty,
+  partial or unchanged answer is asked once more saying which; addresses are
+  taken off tool arguments before the PUT. The outline road keeps the one-row
+  road.
+- **A cut-off reply gets one retry, empty or sliced.** 0.64.3 retried only an
+  EMPTY cut-off. `OpenAIModelAdapter` on OpenRouter now also asks a SLICED
+  reply (text, `finish_reason` length) once more with the reasoning turned
+  down when the model reasoned, and marks one that did not
+  (`raw_metadata["sliced"]`); the draft loop asks the same question once more
+  for the object alone when the adapter did not. Never both, never a third
+  call. `models.base`: `CUT_OFF_STOPS`, `stop_reason_of`, `was_cut_off`,
+  `asked_again_over_a_cut_off`, `what_came_back`.
+- **A plan reply that never became JSON is handed back once** with the
+  parser's own words (`UNREADABLE_REPLY_INSTRUCTION`), then the road stops.
+- **Every model call and every door answer, one log line each**, in the
+  existing `toll_harness` loggers: the draft loop, the step ask and the
+  runtime write the want / deal / run, the prompt's size, the answer's size,
+  the output tokens and the stop reason; `BookOfHousesApiClient._request`
+  writes the door, its want / deal / step id, the status, the answer's size,
+  a few facts and the door's own sentence (on a refusal or a draft-door
+  answer only; never a body, a header or a token). A reply that could not be
+  used leaves the first 600 characters of what the model wrote, with its step.
+- **Notices cost no model call.** An attention item of a kind with no
+  dispatch entry (`everyone_post_invited`, `waiting`, `tip_waiting`,
+  `sign_deal`, a kind a newer bench adds) is reported on the cycle's
+  `notices` and never dispatched; 0.67.0 ran a full model call for each.
+- **The cycle's printed JSON keeps a filed plan** when a board scan runs after
+  it: the scan replaces the cycle's result only when nothing was dispatched.
+- `model.base_url` in `agent.yaml` for the `openai` adapter (unset, the SDK
+  reads `OPENAI_BASE_URL` as before).
+- "Not running as a service" is said once per change at the start of a
+  command too; the check reports `service_notice` and `service_new`.
+
 ## 0.67.0 — Owner-approved recurring goal checks, 2026-10-22
 
 The existing market watch now recognizes `goal_check` obligations and can read,

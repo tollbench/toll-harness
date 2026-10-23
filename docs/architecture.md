@@ -137,10 +137,23 @@ taken quietly and are no longer taught.
 
 **Bounds belong to the bench and are the only bounds**: 24 hours, three rounds per opening
 problem, ceiling 200. There is no strike count and no round ceiling in the harness; the safety net
-is the bench's own `rounds.left` reaching 0 and its `closed`. A run READS the draft the bench is
-already holding before it opens one (`GET .../proposals/draft?kind=plan` costs no round) and sends
-at most ONE `PUT` per run, because a PUT replaces the standing draft and zeroes the rounds. A
-bench that publishes no plan door falls back to the single-shot road, which is a proposal too.
+is the bench's own `rounds.left` reaching 0 and its `closed`. A cycle READS the draft the bench is
+already holding ONCE before it writes anything (`GET .../proposals/draft?kind=plan` costs no round;
+since 0.68.0 the market watch's loop-guard probe is that read and the draft loop starts from it),
+and sends the EMPTY opening `PUT` only when nothing stands, because an empty PUT over a standing form
+replaces it. A bench that publishes no plan door falls back to the single-shot road, which is a
+proposal too.
+
+**Every red row, every round (0.68.0).** Once a form stands, each round works the rows that need no
+model first (the two above, plus a key the bench says may not be there), then asks ONE model call
+with the whole form, every `who_fixes: "agent"` row (step, slot, problem, `say`, path, `accepted`;
+never the codes) and the `form_steps` entry of each of those steps, and files the whole answer back
+in ONE `PUT {"kind": "plan", "form": {...}}` over the standing form, which the bench carries its
+rounds forward on (a full form answers the row it asked about). A form missing steps it does not
+name in `drop` is never filed; an answer carrying only `odds` / `overview` / `span_days` changes
+those and keeps every step; an empty, partial or unchanged answer is asked once more saying which.
+The stall guard is unchanged: a row shown twice and still red the third time ends the draft. The
+older outline road keeps the one-row road.
 
 **The empty catalog is not the default catalog.** `tools_index` treats `tools: []` as "no tools on
 this want", never as "no index published". Reading an empty list as unpublished put a Slack row on
@@ -159,9 +172,18 @@ an Anthropic model behind it needs, OpenAI caches by itself. The default for an 
 FALSE, and there the rules and the tools ride the first call ONCE instead of every round.
 
 The tail is small by design: the form ask carries the want, the person's answers, the stance line,
-one worked example and the blank form; a fix round carries the one content question and the plan's
-shape as one line per step. Never the whole document. Each ask logs its own size and the cached
-share the provider reported.
+one worked example and the blank form; a fix round on a form carries the form and every red row
+(0.68.0), and on the older outline road the one content question and the plan's shape as one line
+per step. Never the expanded document. Each model call logs ONE line: the want, the prompt's size
+(prefix and tail), the answer's size, the output tokens and what stopped it, and what the reply read
+as; each bench door answer logs one line at the HTTP client with the want/deal id, the status, the
+answer's size and the door's own sentence. A reply that could not be used leaves the first 600
+characters of what the model wrote, with the step it was about.
+
+A reply the output limit cut off -- empty, or sliced part way through its JSON -- gets ONE retry
+(0.68.0): the OpenAI adapter on OpenRouter asks again with the reasoning turned down when the model
+reasoned; otherwise the draft loop asks the same question once more for the object alone, short.
+Never both. A plan reply that never became JSON is handed back once with the parser's own words.
 
 TWO SHELVES, AND THEY ARE NOT THE SAME SHELF. The FORM ask carries the bench's own `example_plan`
 -- one finished plan for a want like this one, chosen by the bench, in the same form being filled --
