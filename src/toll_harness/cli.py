@@ -3862,6 +3862,11 @@ def _sync_default_approach(resources: Any) -> dict[str, Any] | None:
     return outcome
 
 
+# WHAT A CYCLE WITH NO DISPATCH STILL HAS TO SAY when a board scan becomes the
+# cycle's story (0.68.0).
+_CARRIED_PAST_A_SCAN = ("notices", "loop_guard", "stalled_obligations")
+
+
 def command_market_watch(arguments: argparse.Namespace) -> int:
     proposals_only = bool(getattr(arguments, "proposals_only", False))
     if proposals_only and getattr(arguments, "no_bid", False):
@@ -3925,10 +3930,14 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                             or {"error": scan_result.get("error")}
                         )
                     )
-                    if result.get("ok") and result.get("run") is None:
+                    if (result.get("ok") and result.get("run") is None
+                            and not result.get("dispatch")):
                         # The obligation side had nothing model-worthy this
-                        # cycle; the scan is the cycle's story.
-                        result = scan_result
+                        # cycle; the scan is the cycle's story, and what the
+                        # obligation side had to say rides along.
+                        carried = {key: result[key] for key in _CARRIED_PAST_A_SCAN
+                                   if key in result}
+                        result = {**scan_result, **carried}
                     else:
                         # Obligation work (or an obligation blocker) plus a
                         # scan in one cycle: keep the obligation result as the
@@ -3955,7 +3964,8 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
             if update_check is not None:
                 result = {**result, "update_check": update_check}
             if result.get("ok"):
-                if result.get("market_scan") or result.get("run") is not None:
+                if (result.get("market_scan") or result.get("run") is not None
+                        or result.get("dispatch")):
                     previous_failure = None
             else:
                 run = result.get("run") or {}
