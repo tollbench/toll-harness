@@ -40,6 +40,14 @@ def test_file_kind_rides_a_file_step_to_the_bench():
     assert read["steps"][0]["file_kind"] == "audio"
 
 
+def test_album_file_kind_rides_a_file_step_to_the_bench():
+    """A signed final album keeps its explicit ZIP deliverable kind."""
+    step = dict(FILLED_STEP, proof="file", file_kind="album")
+    read = read_form({"overview": "Eight tracks and a mix.", "odds": 0.5,
+                      "span_days": 7, "steps": [step]})
+    assert read["steps"][0]["file_kind"] == "album"
+
+
 class PlanFieldBench(FormBench):
     """FormBench that also asks the plan's own questions, like plan_form."""
 

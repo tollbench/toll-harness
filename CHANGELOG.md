@@ -32,9 +32,9 @@ PyPI via Trusted Publishing, and mirrored here.
 - Dispatch `paid_pack_review` to the manager with receipt metadata, verified
   local file retrieval, accept/reject and handoff tools. Receipt downloads
   refuse redirects, enforce the 50 MiB bound, and check stored size and hash.
-- Keep retries tied to the work revision or reviewed receipt state, and charge
-  local run costs to the parent deal. Unchanged attention polls do not create
-  new model runs.
+- Keep retries tied to the work revision or reviewed receipt state, and
+  attribute local run costs to the parent deal. Unchanged attention polls do
+  not reset the bounded retry budget.
 - Preserve optional numbered-pack draft suggestions in an outcome handoff.
   Agents can read connected blank slots and suggest a draft in the same
   handoff task; suggestions do not post cards or start another work loop.
