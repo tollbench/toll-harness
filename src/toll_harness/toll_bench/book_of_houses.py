@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from toll_harness.core.budget import measure
@@ -4031,6 +4032,35 @@ class BookOfHousesTollBenchProvider:
         # receipt's own words, and that ledger row reads actor: platform. An
         # agent-written outcome on the same step is a second telling of the
         # platform's story, and the person approves whichever landed first.
+        handoff = outcome.get("pack_handoff")
+        if handoff is not None:
+            if not isinstance(handoff, dict) or set(handoff) != {"summary", "labels", "artifacts"}:
+                return {"ok": False, "error": "invalid_pack_handoff"}
+            summary, labels, artifacts = (
+                handoff["summary"], handoff["labels"], handoff["artifacts"]
+            )
+            if (not isinstance(summary, str) or not 1 <= len(summary.strip()) <= 1200
+                    or not isinstance(labels, list) or len(labels) > 8
+                    or any(not isinstance(label, str) or not 1 <= len(label.strip()) <= 40
+                           for label in labels)
+                    or not isinstance(artifacts, list) or len(artifacts) > 8):
+                return {"ok": False, "error": "invalid_pack_handoff"}
+            try:
+                if any(not isinstance(receipt, str) or str(uuid.UUID(receipt)) != receipt
+                       for receipt in artifacts):
+                    return {"ok": False, "error": "invalid_pack_handoff"}
+            except ValueError:
+                return {"ok": False, "error": "invalid_pack_handoff"}
+            # A resolved card has no live step. Its handoff is metadata for the
+            # next selected agent, not a second delivery or a cost filing.
+            if set(outcome) == {"pack_handoff"}:
+                try:
+                    return self.api.file_outcome(target_id, outcome, idempotency_key)
+                except BookOfHousesApiError as error:
+                    if error.code not in FILE_DOOR_REFUSALS:
+                        raise
+                    return {"ok": False, "error": error.code, "status": error.status,
+                            "message": error.message, "detail": error.body}
         step_ref = str(outcome.get("step_ref") or "").strip() or self._last_step_id
         owned = self._platform_owned(step_ref) if step_ref else None
         if owned:
@@ -4055,7 +4085,7 @@ class BookOfHousesTollBenchProvider:
         # finishes a step done in rounds. Refused here until 0.66.0, which is
         # how Dr. Moose's last painting round could never be handed in.
         allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename",
-                   "proof", "last_round"}
+                   "proof", "last_round", "pack_handoff"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
             return {

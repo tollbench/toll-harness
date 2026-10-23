@@ -1803,6 +1803,21 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                     "opens again for the next round. Ignored on any other step."
                 ),
             },
+            "pack_handoff": _object_schema(
+                {
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 1200},
+                    "labels": {
+                        "type": "array", "maxItems": 8,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                    },
+                    "artifacts": {
+                        "type": "array", "maxItems": 8,
+                        "description": "Already approved source-deal receipt UUIDs only.",
+                        "items": {"type": "string", "format": "uuid"},
+                    },
+                },
+                ["summary", "labels", "artifacts"],
+            ),
             # THE WIN LADDER (bench contract 4.1.0, 2026-09-24): the optional
             # proof list. Paying never depends on it; counting does.
             "proof": {
@@ -1827,7 +1842,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 },
             },
         },
-        ["note"],
+        [],
     )
     registry.register(
         ToolDefinition(
@@ -1854,7 +1869,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "ROUNDS (contract 4.1.42): when `step.repeats` reads cadence rounds, "
                 "this filing is ONE round (`repeats.say` names it, `per_round` how "
                 "many pieces it hands in); send last_round: true only on the round "
-                "that finishes the step."
+                "that finishes the step. A post-resolution action-pack handoff uses "
+                "only pack_handoff {summary, labels, artifacts}; artifacts are already "
+                "approved receipt UUIDs. It needs no note or step content. Ordinary "
+                "outcomes still require note and exactly one content field."
             ),
             _object_schema(
                 {

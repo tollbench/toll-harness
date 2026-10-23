@@ -23,6 +23,15 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.69.0 — Action-pack handoffs
+
+- Accept `outcome.pack_handoff` at the existing authenticated outcome door. A
+  resolved card sends only its summary, labels, and approved receipt IDs;
+  ordinary step outcomes still need their note and one content field.
+- Dispatch `pack_handoff` attention with the brief and outcome tools, including
+  a focused instruction to hand metadata to the next numbered card without
+  reopening a deal or re-filing a delivery.
+
 ## 0.68.0 — The plan path the lab forced, 2026-10-23
 
 The lab runner (the Book of Houses `app/scripts/lab/runner.py`) is being

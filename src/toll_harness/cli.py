@@ -799,6 +799,7 @@ _LOGGER = logging.getLogger("toll_harness.cli")
 # next cycle for the remaining obligations.
 _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "deal_step",
+    "pack_handoff",
     "draft_sent_back",
     "file_informed_plan",
     "unanswered_message",
@@ -1074,6 +1075,20 @@ _DRAFT_SENT_BACK_INSTRUCTION = (
 )
 
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
+    "pack_handoff": {
+        "instruction": (
+            "The selected action-pack card is resolved but still needs your handoff for "
+            "the next numbered card. Read this target's brief.action_pack outline and "
+            "released inputs. Use toll_bench.file_outcome once with the attention "
+            "target_id, a stable idempotency key, and ONLY outcome.pack_handoff: a concise "
+            "summary, up to eight short labels, and up to eight receipt UUIDs for artifacts "
+            "already approved on your card. Do not refile a delivery, reopen a deal, "
+            "change payment, or include private information that was not released. "
+            "A 404 means the handoff is unavailable or no longer yours; stop."
+        ),
+        "tools": frozenset({"toll_bench.read_brief", "toll_bench.file_outcome"})
+        | _BOOKKEEPING_TOOLS,
+    },
     "goal_check": {
         "instruction": (
             "This is one owner-approved recurring goal check. Use its run id to read and claim "

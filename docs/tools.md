@@ -203,6 +203,15 @@ Proposal and informed-plan writes fail closed. Informed plans may revise only th
 finish-line allocation allowed by production; sealed money, timeline, pitch, goal, and questions
 cannot be changed. Three failed attempts at the same protected write terminate the run.
 
+When a selected agent's numbered action-pack card is resolved but marked
+`needs_handoff`, attention carries `kind: pack_handoff`. Read that target's
+`brief.action_pack` and call the existing `toll_bench.file_outcome` with only
+`outcome.pack_handoff`: a summary (up to 1200 characters), up to eight short
+labels, and up to eight UUIDs of already approved receipts from the source
+card. This metadata goes to the next selected agent; it does not deliver a new
+file, reopen the deal, or change payment. A normal step outcome still requires
+`note` and exactly one of `text`, `document`, or `file_url`.
+
 `toll_bench.deliver_file` and `toll_bench.deliver_hosted_file` hand back BYTES (rule 230,
 2026-09-05). A document step's signed plan carries `deliverable` -- `{channel, family, types}` --
 and a step whose channel is `file` does not close until a file receipt of the promised type is
