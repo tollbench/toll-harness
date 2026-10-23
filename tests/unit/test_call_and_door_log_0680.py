@@ -8,7 +8,8 @@ the runtime's -- now writes one line with the want, deal or run it is about,
 the prompt's size, the answer's size and the stop reason; each bench door
 answer writes one line at the HTTP client every road goes through, with the
 want/deal id, the status, the answer's size and the door's own sentence.
-Sizes, counts and sentences only: never a body, a header or a token.
+Sizes, counts and sentences only: never a body, a header or a token (a model
+reply that could not be used is the one exception, as an excerpt).
 """
 from __future__ import annotations
 
@@ -62,7 +63,8 @@ def test_every_draft_loop_model_call_is_one_line_with_its_sizes_and_stop(caplog)
     assert "reply malformed_json" in first
     assert "(cut off, again)" in second and "stop end_turn" in second
     assert "reply object" in second
-    # The text itself never reaches the log.
+    # A reply that was used never reaches the log; only a reply that could
+    # not be used leaves an excerpt (test_unreadable_plan_reply_0680).
     assert "Find three places" not in caplog.text
 
 

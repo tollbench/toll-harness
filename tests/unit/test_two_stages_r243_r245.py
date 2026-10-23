@@ -1004,11 +1004,16 @@ def test_what_the_form_reply_carries_is_the_forms_own_twelve_fields():
 
 def test_a_form_that_never_came_back_gives_up_rather_than_putting_nothing():
     bench = FormBench()
-    out = DraftLoop(_model({"sorry": "no"}), bench).run(
+    model = _model({"sorry": "no"}, {"sorry": "no"})
+    out = DraftLoop(model, bench).run(
         "t-1", kind="plan", proposal_id="p-9", brief={"want": "x"}, idempotency_key="k")
 
     assert out["ok"] is False and out["error"] == "no_form"
     assert len(bench.puts) == 1  # the empty open, and nothing else
+    # 0.68.0: the parser's words went back to the model once, and only once.
+    assert len(model.invocations) == 2
+    again = model.invocations[1]["messages"][0].content[0]["text"]
+    assert "COULD NOT BE READ: the object had no `steps` list" in again
 
 
 def test_what_the_form_left_open_is_answered_in_one_whole_form():

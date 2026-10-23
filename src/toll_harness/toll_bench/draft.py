@@ -603,6 +603,20 @@ CUT_OFF_AGAIN_INSTRUCTION = (
     "and keep every line short.\n"
 )
 
+# A PLAN REPLY THAT NEVER BECAME JSON NEVER REACHES THE DOOR, SO NOTHING ELSE
+# WILL EVER SAY WHAT WAS WRONG WITH IT (0.68.0). The parser's own words go
+# back to the model ONCE, ahead of the same question; a second miss stops and
+# the log keeps an excerpt of what the model wrote. WHAT FORCED IT: DeepSeek
+# and GLM on prod heat batches (2026-10-19) answered the plan ask with
+# something that was not one JSON object, every ~75 seconds, and nothing in
+# that path told the next call why; the lab runner patched it in from
+# outside (`plan_feedback_message`), and the runner is being retired.
+UNREADABLE_REPLY_INSTRUCTION = (
+    "YOUR LAST REPLY ON THIS PLAN COULD NOT BE READ: {why}. Answer with ONE "
+    "JSON object and nothing around it (no words before or after it), in the "
+    "shape below.\n"
+)
+
 # ONE MORE ASK, SAYING WHAT WAS WRONG WITH THE LAST ONE. Asked once a round.
 WHOLE_FORM_AGAIN = {
     "empty": (
@@ -3441,6 +3455,8 @@ class DraftLoop:
         # True when the LAST ask already spent its one retry on a reply the
         # output limit cut off, so the caller does not ask a third time.
         self.cut_off_retried = False
+        # The last reply's own text, for the failure excerpt only (0.68.0).
+        self.last_text = ""
 
     # -- the model ---------------------------------------------------------
     # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER. The example goes first
@@ -3554,6 +3570,7 @@ class DraftLoop:
         """ONE model call on this tail: counted, measured, logged and read."""
         self.calls += 1
         self.prompt_chars += len(tail)
+        self.last_text = ""
         try:
             response = self.model.invoke(
                 system=self.prefix,
@@ -3576,6 +3593,7 @@ class DraftLoop:
         if cached:
             self.cached_tokens += cached
         text = str(getattr(response, "text", "") or "")
+        self.last_text = text
         parsed = read_json_object(text)
         # WHAT CAME BACK, told apart: empty, not JSON, or an object (whose
         # shape the caller judges). Lengths and key names only, never text.
@@ -3604,6 +3622,32 @@ class DraftLoop:
             what_came_back(response), self.last_reply, answer_shape(parsed),
         )
         return response, parsed
+
+    # WHAT A FAILING MODEL WROTE, kept for the log (0.68.0): Steven asked to SEE
+    # it. One line, this long, and only when the reply could not be used.
+    EXCERPT_CHARS = 600
+
+    def _excerpt(self) -> str:
+        return " ".join(str(self.last_text or "").split())[: self.EXCERPT_CHARS]
+
+    def _what_was_wrong(self, parsed: Any, needs: str) -> str:
+        """The parser's own words about the last reply: for the model's one
+        more try and for the log. Never the model's words back."""
+        text = str(self.last_text or "")
+        if not text.strip():
+            return f"nothing came back ({self.last_reply})"
+        if not parsed:
+            return (f"it was not one JSON object ({len(text)} characters, no "
+                    "readable {...} in it)")
+        return f"the object had no {needs} (it carried {answer_shape(parsed)})"
+
+    def _failed_reply(self, kind: str, target_id: str, where: str, why: str) -> None:
+        """ONE LINE: which step, what was wrong, and what the model wrote."""
+        self.log.warning(
+            "draft loop %s target=%s %s: the model's reply could not be used (%s); "
+            "it wrote: %s",
+            kind, target_id, where, why, self._excerpt() or "(nothing)",
+        )
 
     def _head(self, answer: Any = None) -> list[tuple[str, str]]:
         """THE TWO THINGS THAT GO ABOVE THE FORM, in order.
@@ -4064,16 +4108,32 @@ class DraftLoop:
                 "old form or acknowledge the request; edit the actual plan. Do not "
                 "claim abilities or deliverables you cannot perform."
             )
-        form = read_form(
-            self._ask(
-                instruction,
+        reply = self._ask(
+            instruction,
+            payload,
+            "form",
+            head=self._head(answer),
+            budget=FORM_CHAR_BUDGET,
+        )
+        form = read_form(reply)
+        if not form.get("steps") and not self.cut_off_retried:
+            why = self._what_was_wrong(reply, "`steps` list")
+            self.log.info(
+                "draft loop %s target=%s: the form reply could not be read (%s); "
+                "handing that back once",
+                kind, target_id, why,
+            )
+            reply = self._ask(
+                UNREADABLE_REPLY_INSTRUCTION.format(why=why) + instruction,
                 payload,
-                "form",
+                "form (unreadable, again)",
                 head=self._head(answer),
                 budget=FORM_CHAR_BUDGET,
             )
-        )
+            form = read_form(reply)
         if not form.get("steps"):
+            self._failed_reply(kind, target_id, "form (every step)",
+                               self._what_was_wrong(reply, "`steps` list"))
             self.log.warning(
                 "draft loop %s target=%s: the door asked for the form and the "
                 "model answered with no steps",
@@ -4628,15 +4688,18 @@ class DraftLoop:
             # LAW A: the person's words and picks ride the tail of every
             # blanks ask, so a blank is filled from them and never invented.
             instruction = with_the_person_said(BLANKS_INSTRUCTION, payload, answer)
-            patches = read_patches(
-                self._ask(
-                    instruction,
-                    payload,
-                    "blanks" if index is None else f"step {index + 1}",
-                    head=self._head(answer),
-                )
+            reply = self._ask(
+                instruction,
+                payload,
+                "blanks" if index is None else f"step {index + 1}",
+                head=self._head(answer),
             )
+            patches = read_patches(reply)
             if not patches:
+                self._failed_reply(
+                    kind, target_id, "the bid" if index is None else f"step {index + 1}",
+                    self._what_was_wrong(reply, "`patches` list"),
+                )
                 self.log.warning(
                     "draft loop %s target=%s: the model answered a step's blanks "
                     "with nothing patchable; moving to the next piece",
@@ -4770,6 +4833,11 @@ class DraftLoop:
                 entry for entry in second if entry["path"] not in have
             ]
         if not patches:
+            self._failed_reply(
+                kind, target_id,
+                "steps " + ", ".join(str(step["step_number"]) for step in needs),
+                self._what_was_wrong(again if stand_ins else reply, "`patches` list"),
+            )
             self.log.warning(
                 "draft loop %s target=%s: nothing usable came back for the "
                 "%d hole(s) the form named; the door will name them as rows",
@@ -5401,6 +5469,11 @@ class DraftLoop:
                     read_patches(reply, path), several, kind, target_id
                 )
             if not patches:
+                self._failed_reply(
+                    kind, target_id,
+                    f"step {number}" if isinstance(number, int) else "the plan",
+                    self._what_was_wrong(reply, "`patches` list"),
+                )
                 self.log.warning(
                     "draft loop %s target=%s: no patch came back for %s twice "
                     "(reply=%s, answer %s); stopping this draft",
@@ -5803,11 +5876,20 @@ class DraftLoop:
                     "(reply=%s); asking once more",
                     kind, target_id, why, self.last_reply,
                 )
-                reply = self._ask(WHOLE_FORM_AGAIN[why] + instruction, payload,
+                again = WHOLE_FORM_AGAIN[why]
+                if why == "empty":
+                    again = UNREADABLE_REPLY_INSTRUCTION.format(
+                        why=self._what_was_wrong(reply, "form")) + again
+                reply = self._ask(again + instruction, payload,
                                   f"{what} (again)", head=self._head(answer),
                                   budget=FORM_CHAR_BUDGET, shed_order=shed)
                 form, why = self._whole_form_from(reply, standing)
             if form is None:
+                self._failed_reply(
+                    kind, target_id,
+                    "steps " + ", ".join(str(n) for n in numbers) if numbers else "the plan",
+                    why if why != "empty" else self._what_was_wrong(reply, "form"),
+                )
                 self.log.warning(
                     "draft loop %s target=%s: no whole form came back for %d red "
                     "row(s) (%s, reply=%s); stopping this draft",
