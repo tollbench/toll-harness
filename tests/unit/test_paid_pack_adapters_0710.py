@@ -16,7 +16,6 @@ from toll_harness.onboarding import TOLL_BENCH_TOOLS
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import ToolContext, add_toll_bench_tools, build_standard_registry
 
-
 ORDER = "a6dd8070-7849-4dcc-a694-538e93289122"
 RECEIPT = "2b0a20a9-ccac-45a7-ab94-a0e691e928a9"
 SUBMIT = "5769e688-3c6d-4643-a513-76b26bcf53e9"
@@ -61,8 +60,8 @@ def test_paid_retry_state_changes_only_for_meaningful_rejection_or_handoff():
                                        "rejected_receipt_id": RECEIPT}) != first
     review = {"kind": "paid_pack_review", "order_id": ORDER, "card_number": 1,
               "receipt_id": RECEIPT, "receipt_status": "submitted"}
-    assert cli._loop_state(resources, {**review, "receipt_status": "accepted",
-                                       "handoff_state": "filing"}) != cli._loop_state(resources, review)
+    accepted = {**review, "receipt_status": "accepted", "handoff_state": "filing"}
+    assert cli._loop_state(resources, accepted) != cli._loop_state(resources, review)
 
 
 def test_paid_cost_scope_uses_parent_deal_without_step_probe():
@@ -318,5 +317,5 @@ def test_paid_buyer_input_pages_are_explicit_and_scoped(monkeypatch):
     except ValueError:
         pass
     else:
-        assert False, "bool index must be refused"
+        raise AssertionError("bool index must be refused")
     assert len(calls) == 1

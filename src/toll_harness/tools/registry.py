@@ -1203,7 +1203,10 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             raise ValueError("Paid-pack file differs from its approved receipt")
         raw_name = str(receipt.get("filename") or receipt.get("title") or "result")
         basename = raw_name.replace("\\", "/").rsplit("/", 1)[-1]
-        safe_name = re.sub(r"[^\w.() -]", "_", basename, flags=re.UNICODE).strip(" .") or "result.bin"
+        safe_name = (
+            re.sub(r"[^\w.() -]", "_", basename, flags=re.UNICODE).strip(" .")
+            or "result.bin"
+        )
         written = context.artifact_store.write(
             context.run_id, f"paid-pack-inputs/{arguments['receipt_id']}/{safe_name}", data
         )
