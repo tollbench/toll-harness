@@ -4068,8 +4068,6 @@ class BookOfHousesTollBenchProvider:
                         target_id, {"pack_handoff": handoff}, idempotency_key
                     )
                 except BookOfHousesApiError as error:
-                    if error.code not in FILE_DOOR_REFUSALS:
-                        raise
                     return {"ok": False, "error": error.code, "status": error.status,
                             "message": error.message, "detail": error.body}
         step_ref = str(outcome.get("step_ref") or "").strip() or self._last_step_id

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from toll_harness import cli
 from toll_harness.config import PACK_INPUT_TOOLS, with_pack_input_tools
-from toll_harness.email.book_of_houses import BookOfHousesApiClient
+from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.onboarding import TOLL_BENCH_TOOLS
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import ToolContext, add_toll_bench_tools, build_standard_registry
@@ -69,6 +69,19 @@ def test_legacy_note_on_resolved_handoff_is_ignored_without_a_second_delivery():
     payload = {"note": "This card is complete", "pack_handoff": HANDOFF}
     assert provider.file_outcome("target-1", payload, "key")["ok"]
     assert calls == [("target-1", {"pack_handoff": HANDOFF}, "key")]
+
+
+def test_revoked_handoff_refusal_is_structured_and_never_retried():
+    calls = []
+
+    def refused(*args):
+        calls.append(args)
+        raise BookOfHousesApiError(404, "not_found", "Result not found")
+
+    provider = BookOfHousesTollBenchProvider(SimpleNamespace(file_outcome=refused))
+    result = provider.file_outcome("target-1", {"pack_handoff": HANDOFF}, "key")
+    assert result["ok"] is False and result["error"] == "not_found"
+    assert result["status"] == 404 and len(calls) == 1
 
 
 def test_invalid_handoff_never_reaches_the_server():
