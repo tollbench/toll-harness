@@ -554,6 +554,57 @@ EMPTY_SEVERAL_INSTRUCTION = (
 )
 
 
+# EVERY RED ROW, EVERY ROUND (0.68.0).
+#
+# WHAT FORCED IT (lab, 2026-10-22). After the form went in, the loop asked
+# the model about ONE row, patched it, read the door's answer, and asked
+# about the next one: thirteen model calls for one lab model's plan, each
+# carrying the same prefix, while the door had named every red row at once
+# with its step and takes a whole form in one PUT ("fix what's red, as many
+# as you can, then file again"). So each round now hands the model the whole
+# form and the whole red list, and files the whole answer. Short and plain,
+# because weak models are in this fleet.
+WHOLE_FORM_FIX_INSTRUCTION = (
+    "The bench read your plan. `form` is the plan as the bench holds it and "
+    "`red` is EVERY row it marked, all at once: the `step` it is on (counted "
+    "from 1; none means the plan itself), the `slot`, what is wrong "
+    "(`problem`), the bench's own sentence (`say`), the `path` and what it "
+    "takes (`accepted`). `what_goes_in` is the bench's table of inputs for "
+    "those steps: each input, who fills it, and whether it is still needed.\n"
+    "Fix EVERY red row you can in this ONE reply, then send the WHOLE form "
+    "back: `overview`, `odds`, `span_days` and every step in order, with the "
+    "steps that were fine exactly as they are. A pick takes one of its "
+    "`accepted` words, verbatim. To take a step out, leave it out and put its "
+    "number in `drop`; to add one, put it where it goes. Fill only what is "
+    "yours: never write who a message goes to or who it comes from.\n"
+    'Answer: {"form": {"overview": "...", "odds": 0.35, "span_days": 14, '
+    '"steps": [{"verb": "...", "do_line": "...", ...}, ...]}, "drop": []}.'
+)
+
+WHOLE_FORM_STILL_RED_INSTRUCTION = (
+    "YOUR LAST FORM DID NOT CLEAR THE ROWS IN `still_red`. The same words "
+    "will not clear them a second time: change what the bench's sentence "
+    "names, or take the step out.\n"
+)
+
+# ONE MORE ASK, SAYING WHAT WAS WRONG WITH THE LAST ONE. Asked once a round.
+WHOLE_FORM_AGAIN = {
+    "empty": (
+        "NOTHING USABLE CAME BACK LAST TIME. Answer with the JSON object "
+        "alone: the whole form under `form`.\n"
+    ),
+    "partial": (
+        "YOUR LAST FORM WAS MISSING STEPS. Send EVERY step of the plan, the "
+        "ones that were fine too; a step you mean to take out goes in `drop` "
+        "by its number.\n"
+    ),
+    "unchanged": (
+        "YOUR LAST FORM CAME BACK EXACTLY AS IT WAS, and every row in `red` "
+        "is still red. Change what each row's sentence names.\n"
+    ),
+}
+
+
 # ---------------------------------------------------------------------------
 # READING THE MODEL — JSON, however it wrapped it
 # ---------------------------------------------------------------------------
@@ -959,6 +1010,46 @@ def writes_a_person(path: Any) -> bool:
         for segment in str(path or "").split(".")
         if segment.strip()
     )
+
+
+def take_off_addresses(form: Any) -> tuple[Any, list[str]]:
+    """THE SAME GATE ON THE WHOLE-FORM ROAD (0.68.0).
+
+    `_patch` refuses a patch whose path writes who a message goes to or comes
+    from. A whole form refiled in one PUT carries no paths, so the same law
+    is read off the tool arguments of every step: an argument named for an
+    address comes off before anything is sent. Returns (the form, the paths
+    taken off); the form is a copy whenever anything came off.
+    """
+    steps = form.get("steps") if isinstance(form, dict) else None
+    if not isinstance(steps, list):
+        return form, []
+    gone: list[str] = []
+    out_steps: list[Any] = []
+    for index, step in enumerate(steps):
+        tool = step.get("tool") if isinstance(step, dict) else None
+        calls = tool if isinstance(tool, list) else [tool]
+        kept_calls: list[Any] = []
+        changed = False
+        for number, call in enumerate(calls):
+            args = call.get("args") if isinstance(call, dict) else None
+            if not isinstance(args, dict):
+                kept_calls.append(call)
+                continue
+            where = f"form.steps.{index}.tool" + (f".{number}" if isinstance(tool, list) else "")
+            off = [name for name in args if _names_an_address(str(name))]
+            if not off:
+                kept_calls.append(call)
+                continue
+            gone.extend(f"{where}.args.{name}" for name in off)
+            kept_calls.append(dict(call, args={k: v for k, v in args.items() if k not in off}))
+            changed = True
+        if changed:
+            step = dict(step, tool=kept_calls if isinstance(tool, list) else kept_calls[0])
+        out_steps.append(step)
+    if not gone:
+        return form, []
+    return dict(form, steps=out_steps), gone
 
 
 # A STAND-IN IS NOT AN ANSWER. The ask already says not to write one and
@@ -3331,6 +3422,9 @@ class DraftLoop:
         # a caller that asks before `run` (the operator dialogue) sets the id.
         self.target_id: str = ""
         self.kind: str = ""
+        # True when the LAST ask already spent its one retry on a reply the
+        # output limit cut off, so the caller does not ask a third time.
+        self.cut_off_retried = False
 
     # -- the model ---------------------------------------------------------
     # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER. The example goes first
@@ -3369,10 +3463,12 @@ class DraftLoop:
         *,
         head: Sequence[tuple[str, Any]] = (),
         budget: int = PROMPT_CHAR_BUDGET,
+        shed: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """One question: the stable prefix as the system, the variable tail as
         the message. Every call is measured, and what the cache did is logged
-        where the provider reports it."""
+        where the provider reports it. `shed` names what may come off a tail
+        that runs long, in order (SHED_ORDER when not given)."""
         head = list(head)
         tail = self._tail(instruction, payload, head)
         if len(tail) > budget:
@@ -3381,7 +3477,7 @@ class DraftLoop:
             # went, rather than quietly spending a window on a prompt this
             # loop was built to keep small.
             payload = dict(payload)
-            for name in self.SHED_ORDER:
+            for name in (self.SHED_ORDER if shed is None else shed):
                 if len(tail) <= budget:
                     break
                 before = len(tail)
@@ -3412,6 +3508,7 @@ class DraftLoop:
                 len(tail),
                 budget,
             )
+        self.cut_off_retried = False
         self.calls += 1
         self.prompt_chars += len(tail)
         try:
@@ -5286,6 +5383,409 @@ class DraftLoop:
             (row or {}).get("step"),
         )
 
+    # -- every red row, every round (0.68.0) ---------------------------------
+    @staticmethod
+    def takes_the_whole_form(kind: str, answer: Any) -> bool:
+        """True when this answer is a plan form the door already holds, in
+        the one language (contract 4.0: every red row on `problems`).
+
+        That door takes the whole form back in one PUT, so every red row is
+        answered in one model call a round. Anything else -- the older
+        outline road, a bid document -- keeps the one-row road.
+        """
+        return (
+            kind == "plan"
+            and form_of(answer) is not None
+            and not the_form_is_blank(answer)
+            and isinstance((answer or {}).get("problems"), list)
+        )
+
+    def _refile(
+        self, target_id: str, kind: str, form: dict[str, Any], what: str
+    ) -> dict[str, Any]:
+        """THE WHOLE FORM BACK IN ONE PUT, over the form the door is holding.
+
+        Not the opening PUT: the door carries its rounds forward over a
+        standing form (a full form answers the row it asked about), so the
+        round count is read back off the answer rather than set to zero.
+        """
+        self._sent.append(("form", form))
+        self._last_round = [{"path": "form", "value": form}]
+        self._last_answered = None
+        answer = self.provider.put_draft(target_id, {"form": form}, kind=kind)
+        used = ((answer or {}).get("rounds") or {}).get("used")
+        if isinstance(used, int) and not isinstance(used, bool):
+            self.rounds = used
+        else:
+            self.rounds += 1
+        self._record(target_id, kind, answer, what)
+        return answer
+
+    def _red_rows(self, answer: Any) -> list[dict[str, Any]]:
+        """EVERY ROW THE AGENT OWES, as the model reads it: step, slot,
+        problem, the bench's sentence, the path and what it takes. The legacy
+        codes stay in the log and never reach the model. One fault said twice
+        is one row. A required blank the door still holds open, and a
+        `next_fix` that is the agent's and not on `problems`, are rows too.
+        """
+        rows: list[dict[str, Any]] = list(fixed_by(problems_of(answer), AGENT))
+        pointed = next_fix_of(answer)
+        if (
+            isinstance(pointed, dict)
+            and pointed.get("who_fixes", AGENT) == AGENT
+            and str(pointed.get("path") or "") not in ("", "outline")
+            and all(fix_key(pointed) != fix_key(row) for row in rows)
+        ):
+            rows.append(pointed)
+        named_paths = {str(row.get("path") or "") for row in rows}
+        for blank in (answer or {}).get("blanks") or []:
+            if not isinstance(blank, dict) or not blank.get("required"):
+                continue
+            path = str(blank.get("path") or "")
+            if not path or path in named_paths:
+                continue
+            rows.append(
+                {
+                    "step": (step_of(path) + 1) if step_of(path) is not None else None,
+                    "slot": path.rsplit(".", 1)[-1],
+                    "problem": "empty",
+                    "say": blank.get("question") or blank.get("note") or "",
+                    "path": path,
+                    "accepted": list(blank.get("choices") or []),
+                }
+            )
+        out: list[dict[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        for row in rows:
+            path = self._patch_path(answer, row) or str(row.get("path") or "")
+            entry: dict[str, Any] = {
+                "step": row.get("step"),
+                "slot": row.get("slot"),
+                "problem": row.get("problem"),
+                "say": row.get("say"),
+                "path": path or None,
+                "accepted": accepted_of(row),
+            }
+            if row.get("keys"):
+                entry["keys"] = list(row["keys"])
+            gone = self._taken_off.get(path)
+            if gone:
+                entry["the_bench_had_this_taken_off"] = gone
+            mark = (entry["step"], entry["slot"], entry["problem"], entry["path"],
+                    str(entry["say"] or ""))
+            if mark in seen:
+                continue
+            seen.add(mark)
+            entry["_key"] = fix_key(row)
+            out.append(entry)
+        return out
+
+    def _fix_without_a_model(
+        self,
+        target_id: str,
+        kind: str,
+        answer: dict[str, Any],
+        named_before: dict[str, int],
+    ) -> dict[str, Any] | None:
+        """THE THREE ROWS THAT NEED NO MODEL, worked before the model is asked.
+
+        The same three the one-row road answers with no call (see
+        `_answer_the_fixes`): a key the form has no room for comes off, a step
+        that reaches somebody with no who step above it gets the door's insert
+        call, and a key the bench says may not be there (with nothing it would
+        take instead) comes off. Each costs a door round and no model call.
+        None when none of them applies; the brake counts them the same way.
+        """
+        rows = problems_of(answer)
+        mine = fixed_by(rows, AGENT)
+        fix = next_fix_of(answer)
+        if fix is not None and fix.get("who_fixes") != AGENT:
+            fix = None
+        if fix is None:
+            fix = mine[0] if mine else None
+        if fix is None:
+            return None
+        unknown = [entry for entry in mine if entry.get("problem") == UNKNOWN_FIELD]
+        if (
+            unknown
+            and fix.get("problem") != UNKNOWN_FIELD
+            and names_a_place(self._patch_path(answer, fix))
+        ):
+            fix = unknown[0]
+        number = fix.get("step")
+        index = (
+            number - 1 if isinstance(number, int) and not isinstance(number, bool) else None
+        )
+        taken = keys_to_take_off(unknown_key_rows(rows, number), form_of(answer))
+        path = self._patch_path(answer, fix)
+        missing_who = taken is None and who_step_is_missing(answer, number)
+        comes_off = taken is None and not missing_who and can_come_off(fix, path, answer)
+        if taken is None and not missing_who and not comes_off:
+            return None
+        key = fix_key(fix)
+        named_before[key] = named_before.get(key, 0) + 1
+        if named_before[key] >= self.SAME_PROBLEM_ROUNDS:
+            return self._stalled(answer, key, fix)
+        if taken is not None:
+            extra, where, value = taken
+            self.log.info(
+                "draft loop %s target=%s: step %s has no room for %s; taking it off "
+                "and sending %s back",
+                kind, target_id, number, ", ".join(extra), where,
+            )
+            sent = [{"path": where, "value": value}]
+            answer = self._patch(target_id, kind, sent, "take off " + ", ".join(extra),
+                                 standing=answer)
+            self._note_answered(key, fix, where, sent)
+            return answer
+        if missing_who:
+            inserted = self._insert_the_who_step(
+                target_id, kind, fix, answer, index, str(fix.get("path") or "")
+            )
+            if inserted is not None:
+                self._last_answered = None
+                return inserted
+            # No insert call could be made: the model writes the who step
+            # into the whole form instead, so this row is not counted twice.
+            named_before[key] -= 1
+            return None
+        offs: dict[str, dict[str, Any]] = {path: fix}
+        for entry in mine:
+            other = self._patch_path(answer, entry)
+            if other not in offs and can_come_off(entry, other, answer):
+                offs[other] = entry
+        form = form_of(answer)
+        for where, entry in offs.items():
+            self._taken_off[where] = {
+                "was": value_in_form(form, where)[1],
+                "say": entry.get("say"),
+            }
+        self.log.info(
+            "draft loop %s target=%s: the bench says %s may not be there and names "
+            "nothing it would take instead; taking it off",
+            kind, target_id, ", ".join(offs),
+        )
+        blanks = [{"path": where, "value": None} for where in offs]
+        answer = self._patch(target_id, kind, blanks, "take off " + ", ".join(offs),
+                             standing=answer)
+        self._note_answered(key, fix, path, blanks)
+        return answer
+
+    def _stalled(self, answer: dict[str, Any], key: str, row: Any) -> dict[str, Any]:
+        return dict(
+            answer,
+            ok=False,
+            error="draft_stalled",
+            message=(
+                f"The bench named {key} three times and the patches did "
+                "not clear it; paused to avoid repeated model spending. "
+                f"It said: {self._preview((row or {}).get('say'))}"
+            ),
+        )
+
+    @staticmethod
+    def _whole_form_from(
+        reply: Any, standing: dict[str, Any] | None
+    ) -> tuple[dict[str, Any] | None, str]:
+        """(the form to file, "") or (None, why): empty, partial, unchanged.
+
+        A form with fewer steps than the plan holds is a PART of a form unless
+        the reply names the missing ones in `drop`: filing it would take out
+        steps the model never meant to touch.
+
+        THE PLAN'S OWN FIELDS ALONE ARE AN ANSWER (the 0.42.1 law, Kari): a
+        reply that carries only `odds`, `overview` or `span_days`, bare or
+        under `form`, changes those on the form the door holds and keeps
+        every step as it stands.
+        """
+        reply = reply if isinstance(reply, dict) else {}
+        holder = reply.get("form") if isinstance(reply.get("form"), dict) else reply
+        form = read_form(reply)
+        if not form.get("steps"):
+            held = read_form(standing or {})
+            fields = {
+                name: holder.get(name, reply.get(name))
+                for name in (*FORM_PLAN_FIELDS, "span_days")
+            }
+            fields = {name: value for name, value in fields.items() if value is not None}
+            span = fields.pop("span_days", None)
+            if isinstance(span, (int, float)) and not isinstance(span, bool):
+                fields["span_days"] = int(span)
+            if not fields or not held.get("steps"):
+                return None, "empty"
+            form = dict(held, **fields)
+        drops = holder.get("drop", reply.get("drop"))
+        drops = drops if isinstance(drops, list) else [drops] if drops is not None else []
+        dropped = {
+            value for value in drops if isinstance(value, int) and not isinstance(value, bool)
+        }
+        held = (standing or {}).get("steps")
+        held_steps = len(held) if isinstance(held, list) else 0
+        if len(form["steps"]) + len(dropped) < held_steps:
+            return None, "partial"
+        if standing is not None and form == read_form(standing):
+            return None, "unchanged"
+        return form, ""
+
+    def _fix_every_red_row(
+        self,
+        target_id: str,
+        kind: str,
+        answer: dict[str, Any],
+        want: Any,
+        brief: Any = None,
+    ) -> dict[str, Any]:
+        """EVERY RED ROW, EVERY ROUND (0.68.0), for a form the door holds.
+
+        Each round: the three rows that need no model are worked first (a
+        door round each, no call), then ONE model call is shown the whole
+        form and every red row the door named -- step, slot, problem, the
+        bench's sentence, path and what it takes, plus the input table of
+        each of those steps -- and answers with the whole form, which goes
+        back in ONE PUT. The door then names what is still red, and the next
+        round starts from that.
+
+        KEPT EXACTLY FROM THE ONE-ROW ROAD: a pause stops it; rows that are
+        all the bench's or all the person's stop it; and the brake is the
+        bench's own key, counted across the whole run -- a row the model has
+        been shown twice that is still red the third time ends the draft.
+        One more ask a round, saying what was wrong, when the answer was
+        empty, a part of the form, or the form unchanged -- and none when
+        that ask already spent its retry on a reply the output limit cut off.
+        """
+        named_before: dict[str, int] = {}
+        asked_last: set[str] = set()
+        while (
+            not answer.get("ready")
+            and not answer.get("closed")
+            and not _spent(answer)
+        ):
+            stopped = self._paused(target_id, kind, answer)
+            if stopped is not None:
+                return stopped
+            red = self._red_rows(answer)
+            if not red:
+                stopped = self._not_the_agents_rows(
+                    target_id, kind, answer, problems_of(answer)
+                )
+                if stopped is not None:
+                    return stopped
+                break
+            handled = self._fix_without_a_model(target_id, kind, answer, named_before)
+            if handled is not None:
+                if handled.get("error") == "draft_stalled":
+                    return handled
+                answer = handled
+                continue
+            for row in red:
+                key = row["_key"]
+                named_before[key] = named_before.get(key, 0) + 1
+                if named_before[key] >= self.SAME_PROBLEM_ROUNDS:
+                    return self._stalled(answer, key, row)
+            standing = form_of(answer) or {}
+            shown = [{k: v for k, v in row.items() if k != "_key"} for row in red]
+            still = [row for row, full in zip(shown, red, strict=True)
+                     if full["_key"] in asked_last]
+            numbers = sorted(
+                {row["step"] for row in red
+                 if isinstance(row.get("step"), int) and not isinstance(row["step"], bool)}
+                | {entry.get("step") for entry in form_steps_of(answer)
+                   if isinstance(entry.get("step"), int)
+                   and slots_the_agent_owes(answer, entry.get("step"))}
+            )
+            payload: dict[str, Any] = {
+                "want": want,
+                "form": {
+                    name: value for name, value in standing.items()
+                    if not str(name).startswith("_")
+                },
+                "red": shown,
+            }
+            tables = [step_entry(answer, number) for number in numbers]
+            tables = [entry for entry in tables if entry]
+            if tables:
+                payload["what_goes_in"] = tables
+            if still:
+                payload["still_red"] = still
+            if any(field_of(row, str(row.get("path") or "")) in ODDS_FIELDS
+                   or str(row.get("path") or "") == "form.odds" for row in red):
+                payload["the_odds_line"] = odds_line(answer, self.proposal_odds)
+            forecast = answer.get("forecast_context")
+            if isinstance(forecast, dict) and forecast:
+                payload["forecast_context"] = {
+                    key: value for key, value in forecast.items() if key != "goal"
+                }
+            if answer.get("optional_picks"):
+                payload["you_may_also_use"] = answer["optional_picks"]
+            if self._tools_ride_the_outline:
+                payload["tools_on_this_want"] = tools_index(brief)
+            instruction = WHOLE_FORM_FIX_INSTRUCTION
+            if still:
+                instruction = WHOLE_FORM_STILL_RED_INSTRUCTION + instruction
+            pointed = next_fix_of(answer)
+            used, left = attempts_on(answer, pointed)
+            if pointed is not None and used >= 1 and left == 1:
+                instruction = LAST_TRY_INSTRUCTION + instruction
+                payload["the_row_on_its_last_try"] = {
+                    "step": pointed.get("step"), "slot": pointed.get("slot"),
+                    "say": pointed.get("say"),
+                }
+            instruction = with_the_person_said(instruction, payload, answer)
+            what = f"fix {len(red)} red row(s)"
+            self.log.info(
+                "draft loop %s target=%s round=%d: %d red row(s) on %d step(s), "
+                "asked in one call: %s",
+                kind, target_id, self.rounds + 1, len(red),
+                len({row.get('step') for row in red}),
+                "; ".join(row["_key"] for row in red),
+            )
+            shed = ("example", "tools_on_this_want", "what_goes_in", "forecast_context")
+            reply = self._ask(instruction, payload, what, head=self._head(answer),
+                              budget=FORM_CHAR_BUDGET, shed=shed)
+            form, why = self._whole_form_from(reply, standing)
+            if form is None and not self.cut_off_retried:
+                self.log.info(
+                    "draft loop %s target=%s: the whole-form answer was %s "
+                    "(reply=%s); asking once more",
+                    kind, target_id, why, self.last_reply,
+                )
+                reply = self._ask(WHOLE_FORM_AGAIN[why] + instruction, payload,
+                                  f"{what} (again)", head=self._head(answer),
+                                  budget=FORM_CHAR_BUDGET, shed=shed)
+                form, why = self._whole_form_from(reply, standing)
+            if form is None:
+                self.log.warning(
+                    "draft loop %s target=%s: no whole form came back for %d red "
+                    "row(s) (%s, reply=%s); stopping this draft",
+                    kind, target_id, len(red), why, self.last_reply,
+                )
+                break
+            form, kept_yours = own_means_stay_yours(form, self.own_means)
+            if kept_yours:
+                self.log.info(
+                    "draft loop %s target=%s: %d step(s) named the agent's own "
+                    "means and stay its own (%s)",
+                    kind, target_id, len(kept_yours), ", ".join(kept_yours),
+                )
+            form, handed_over = person_does_what_the_agent_cannot(form, brief)
+            if handed_over:
+                self.log.warning(
+                    "draft loop %s target=%s: %d step(s) named a service this want "
+                    "offers no tool for and are now the person's own DO step (%s)",
+                    kind, target_id, len(handed_over), ", ".join(handed_over),
+                )
+            form, addresses = take_off_addresses(form)
+            for where in addresses:
+                self.log.warning(
+                    "draft loop %s target=%s: %s says who something goes to or "
+                    "comes from; that is the person's pick and never the agent's "
+                    "to write, so it was not sent",
+                    kind, target_id, where,
+                )
+            asked_last = {row["_key"] for row in red}
+            answer = self._refile(target_id, kind, form, what)
+        return self._paused(target_id, kind, answer) or answer
+
     def _what_lands(
         self,
         patches: Sequence[dict[str, Any]],
@@ -5587,10 +6087,15 @@ class DraftLoop:
                 str(answer.get("message") or answer.get("error") or ""),
                 answer,
             )
-        if not answer.get("closed"):
-            answer = self._fill_the_blanks(target_id, kind, answer, want)
-        if not answer.get("closed"):
-            answer = self._answer_the_fixes(target_id, kind, answer, want)
+        if not answer.get("closed") and self.takes_the_whole_form(kind, answer):
+            # EVERY RED ROW, EVERY ROUND (0.68.0): the whole form and the whole
+            # red list in one call, the whole answer back in one PUT.
+            answer = self._fix_every_red_row(target_id, kind, answer, want, brief)
+        else:
+            if not answer.get("closed"):
+                answer = self._fill_the_blanks(target_id, kind, answer, want)
+            if not answer.get("closed"):
+                answer = self._answer_the_fixes(target_id, kind, answer, want)
         stopped = str(answer.get("error") or "")
         if stopped in ("draft_stalled", DRAFT_PAUSED, self.BENCH_MUST_FIX,
                        self.WAITING_ON_THE_PERSON):

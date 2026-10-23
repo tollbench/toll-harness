@@ -1011,22 +1011,25 @@ def test_a_form_that_never_came_back_gives_up_rather_than_putting_nothing():
     assert len(bench.puts) == 1  # the empty open, and nothing else
 
 
-def test_what_the_form_left_open_is_answered_a_step_at_a_time():
+def test_what_the_form_left_open_is_answered_in_one_whole_form():
     """A reply that leaves a blank is not a failed reply: what is still open
-    comes back as that step's own question, at the FORM's own path."""
+    comes back on the next ask, every open blank at once with its step, and
+    the answer goes back as the whole form in one PUT (0.68.0; until then one
+    patch per blank, one model call each)."""
     bench = FormBench(steps=2)
-    model = _model(
-        _filled(2, do_line=""),
-        {"patches": [{"path": "form.steps.0.do_line", "value": "Find the shows"}]},
-        {"patches": [{"path": "form.steps.1.do_line", "value": "Send the pitch"}]},
-    )
+    whole = _filled(2)
+    whole["steps"][0]["do_line"] = "Find the shows"
+    whole["steps"][1]["do_line"] = "Send the pitch"
+    model = _model(_filled(2, do_line=""), whole)
 
     out = DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
                                       brief={"want": "x"}, idempotency_key="k")
 
     assert out["ok"] is True, out
-    assert [call[0]["path"] for call in bench.patches] == [
-        "form.steps.0.do_line", "form.steps.1.do_line"
+    assert len(model.invocations) == 2
+    assert bench.patches == []
+    assert [step["do_line"] for step in bench.puts[-1]["form"]["steps"]] == [
+        "Find the shows", "Send the pitch"
     ]
 
 
@@ -1054,17 +1057,14 @@ def test_a_blanks_round_is_asked_about_the_forms_step_not_the_expanded_one():
     agent wrote, so `steps.3` of the document and step 4 of the form are not
     the same step."""
     bench = FormBench(steps=2)
-    model = _model(
-        _filled(2, do_line=""),
-        {"patches": [{"path": "form.steps.0.do_line", "value": "Find the shows"}]},
-        {"patches": [{"path": "form.steps.1.do_line", "value": "Send the pitch"}]},
-    )
+    model = _model(_filled(2, do_line=""), _filled(2))
 
     DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
                                 brief={"want": "x"}, idempotency_key="k")
 
     ask = model.invocations[1]["messages"][0].content[0]["text"]
-    assert '"step_number":1' in ask
+    assert '"path":"form.steps.0.do_line"' in ask and '"step":1' in ask
+    assert '"path":"form.steps.1.do_line"' in ask and '"step":2' in ask
     assert "hand_over_line" in ask       # the form's step
     assert "outcome_promise" not in ask  # not the expanded document's
 
@@ -1096,8 +1096,8 @@ def test_three_content_misses_close_the_plan_and_that_is_the_end_of_it():
         say="This plan does not answer the want.", codes=["does_not_address"])])
     model = _model(
         _filled(2),
-        {"patches": [{"path": "form.steps.0.do_line", "value": "Something else"}]},
-        {"patches": [{"path": "form.steps.0.do_line", "value": "Something else again"}]},
+        _filled(2, do_line="Something else"),
+        _filled(2, do_line="Something else again"),
     )
 
     out = DraftLoop(model, bench).run(

@@ -128,12 +128,14 @@ def test_a_multi_step_plan_is_corrected_then_filed():
     assert bench.form["odds"] == 0.6
     assert bench.form["overview"] == "Four steps to a booked show."
     assert len(bench.form["steps"]) == 4
-    assert bench.patches == [[{"path": "form.odds", "value": 0.6}],
-                             [{"path": "form.overview",
-                               "value": "Four steps to a booked show."}]]
-    # The plan-level fix saw the plan-level fields.
+    # 0.68.0: each answer goes back as the whole form, in one PUT, with every
+    # step kept: the open, the form, then one refile per answer.
+    assert bench.patches == []
+    assert len(bench.puts) == 4
+    assert [len(put["form"]["steps"]) for put in bench.puts[1:]] == [4, 4, 4]
+    # The plan-level fix saw the plan-level fields and the row it was asked.
     ask = model.invocations[1]["messages"][0].content[0]["text"]
-    assert "the_plan" in ask and "span_days" in ask
+    assert '"path":"form.odds"' in ask and "span_days" in ask
 
 
 def test_no_answer_files_nothing_and_stops_after_one_more_ask():
