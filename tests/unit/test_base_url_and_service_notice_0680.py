@@ -3,17 +3,19 @@
 1. `model.base_url` in agent.yaml for the openai adapter. A lab model on
    OpenRouter could only be pointed there by an OPENAI_BASE_URL riding an env
    file beside the unit; the endpoint belongs in the agent's own config.
-2. "Your market watch is not running as a service" is said once per change,
-   as the module always said: it rode every unthrottled check, so a watch
-   restarted by its own unit printed it on every start.
+2. "Your market watch is not running as a service" is said once per change
+   at the start of a command too: the start printed every notice it was
+   handed, so a watch restarted by its own unit printed it on every start
+   (the watch loop itself already printed only news).
 """
 from __future__ import annotations
 
 import sys
+from argparse import Namespace
 from types import SimpleNamespace
 
 from tests.unit.test_update_check import FakeBench, _config, pypi  # noqa: F401
-from toll_harness import updates
+from toll_harness import cli, updates
 from toll_harness.config import build_model_adapter
 from toll_harness.models.openai import OpenAIModelAdapter
 
@@ -45,19 +47,34 @@ def test_without_base_url_the_sdk_reads_its_environment_as_before(monkeypatch, t
     assert made == [{}]
 
 
-def test_not_running_as_a_service_is_said_once_per_change(tmp_path, pypi, monkeypatch):  # noqa: F811
+def test_the_check_says_whether_the_service_line_is_news(tmp_path, pypi, monkeypatch):  # noqa: F811
     path = _config(tmp_path, connected=True)
     state = {"state": "not installed"}
     monkeypatch.setattr(updates, "_service_check", lambda _path, _config: dict(state))
 
-    def lines(check):
-        return [line for line in check["notices"] if "service" in line]
-
     first = updates.check_for_updates(path, api=FakeBench(), force=True)
     again = updates.check_for_updates(path, api=FakeBench(), force=True)
-    assert len(lines(first)) == 1 and first["new"] is True
-    assert lines(again) == []
-    assert again["service"]["state"] == "not installed"  # still reported, just not said
     state["state"] = "installed"
     moved = updates.check_for_updates(path, api=FakeBench(), force=True)
-    assert len(lines(moved)) == 1 and "installed but not running" in lines(moved)[0]
+
+    assert first["service_new"] is True and first["service_notice"] in first["notices"]
+    # Still on the list and still reported; it is just not news.
+    assert again["service_new"] is False and again["service_notice"] in again["notices"]
+    assert moved["service_new"] is True and "installed but not running" in (
+        moved["service_notice"])
+
+
+def test_the_start_of_a_command_leaves_an_unchanged_service_line_out(monkeypatch, capsys):
+    harness = "toll-harness 0.67.0 installed, 0.68.0 available: pip install -U toll-harness"
+    service = "Your market watch is not running as a service, so ..."
+    check = {"notices": [harness, service], "new": True, "service_notice": service,
+             "service_new": False}
+    monkeypatch.setattr(cli, "check_for_updates", lambda config: dict(check))
+    arguments = Namespace(handler=lambda arguments: 0, config="agent.yaml")
+
+    cli._startup_update_check(arguments)
+    assert capsys.readouterr().err.splitlines() == [harness]
+
+    check["service_new"] = True
+    cli._startup_update_check(arguments)
+    assert capsys.readouterr().err.splitlines() == [harness, service]

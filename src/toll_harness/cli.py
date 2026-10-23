@@ -4520,7 +4520,13 @@ def _startup_update_check(arguments: argparse.Namespace) -> None:
     if not config:
         return
     try:
-        _print_update_notices(check_for_updates(config))
+        check = check_for_updates(config)
+        if check.get("service_notice") and not check.get("service_new"):
+            # SAID ONCE PER CHANGE (0.68.0): a watch its own unit restarts
+            # printed "not running as a service" on every start.
+            check = dict(check, notices=[line for line in check.get("notices") or []
+                                         if line != check["service_notice"]])
+        _print_update_notices(check)
     except Exception:  # noqa: BLE001 - never block a command on an update check
         _LOGGER.debug("update check failed", exc_info=True)
 

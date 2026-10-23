@@ -322,14 +322,13 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
     harness = _harness_check(protocol)
     service = _service_check(path, config)
     service_line = service_notice(service, path)
-    # ONCE PER CHANGE, as the module says (0.68.0). The line rode every
-    # unthrottled check, so a watch restarted by its unit printed "not
-    # running as a service" on every start; now it is said when the state
-    # changes and recorded either way.
+    # ONCE PER CHANGE (0.68.0): `service_new` says whether the service line is
+    # news, so a caller that prints every notice it is handed (the start of
+    # every command) can leave an unchanged one out.
     service_changed = service_line is not None and service["state"] != previous.get(
         "service_state"
     )
-    notices = _notices(harness, bench, service_line if service_changed else None)
+    notices = _notices(harness, bench, service_line)
     latest = harness.get("latest")
     new = (
         bool((bench or {}).get("changed"))
@@ -367,6 +366,8 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
         "harness": harness,
         "bench": bench,
         "service": service,
+        "service_notice": service_line,
+        "service_new": service_changed,
         "notices": notices,
         "new": new,
     }
