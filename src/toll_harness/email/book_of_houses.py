@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -145,6 +146,64 @@ class BookOfHousesApiError(RuntimeError):
         self.plan_template = template if isinstance(template, list) else []
 
 
+# EVERY DOOR ANSWER, ONE LINE (0.68.0). Every road -- the draft loop, the step
+# ask, the runtime's tools, the market watch's own polls -- reaches the bench
+# through `_request`, so the line is written there once: the door, the want /
+# deal / step it is about, the status, the answer's size, a few facts read off
+# it and the door's own sentence. Never the body, never a header, never a
+# token.
+_DOOR_LOG = logging.getLogger("toll_harness.door")
+_DOOR_IDS = re.compile(r"/(targets|goals|deals|steps|proposals)/([0-9a-fA-F][0-9a-fA-F-]{7,})")
+_DOOR_ID_NAMES = {"targets": "want", "goals": "want", "deals": "deal", "steps": "step",
+                  "proposals": "proposal"}
+DOOR_WORDS_CHARS = 200
+
+
+def door_words(body: Any) -> str:
+    """The door's own sentence on an answer, on one line, or ""."""
+    if not isinstance(body, dict):
+        return ""
+    fix = body.get("next_fix") if isinstance(body.get("next_fix"), dict) else {}
+    for value in (body.get("message"), body.get("closed"), fix.get("say"),
+                  body.get("detail"), body.get("error")):
+        if isinstance(value, str) and value.strip():
+            text = " ".join(value.split())
+            if len(text) > DOOR_WORDS_CHARS:
+                text = text[: DOOR_WORDS_CHARS - 1] + "\u2026"
+            return text
+    return ""
+
+
+def door_line(method: str, path: str, status: int, size: int, body: Any,
+              kind: Any = None) -> str:
+    """One door answer, as the run log reads it."""
+    parts = [f"door answer {method} {path} -> {status} ({size} chars)"]
+    parts.extend(f"{_DOOR_ID_NAMES[name]}={value}" for name, value in _DOOR_IDS.findall(path))
+    if kind:
+        parts.append(f"kind={kind}")
+    if isinstance(body, dict):
+        for key in ("ok", "ready", "remaining", "error", "code"):
+            value = body.get(key)
+            if isinstance(value, (bool, int, str)) and value != "":
+                parts.append(f"{key}={value}")
+        rows = body.get("problems")
+        if isinstance(rows, list):
+            mine = sum(1 for row in rows if isinstance(row, dict)
+                       and row.get("who_fixes") == "agent")
+            parts.append(f"red={mine}/{len(rows)}")
+    # The door's sentence rides a refusal and a draft-door answer (its next
+    # row, or why it closed). A plain read's body is the data it was asked
+    # for, and that never goes to the log.
+    speaks = isinstance(body, dict) and (
+        status >= 400 or status == 0 or body.get("ok") is False
+        or "next_fix" in body or bool(body.get("closed"))
+    )
+    words = door_words(body) if speaks else ""
+    if words:
+        parts.append(f'says "{words}"')
+    return " ".join(parts)
+
+
 class BookOfHousesApiClient:
     """Narrow HTTP client for public onboarding and one agent's authenticated APIs."""
 
@@ -200,18 +259,28 @@ class BookOfHousesApiClient:
         if extra_headers:
             headers.update(extra_headers)
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        # Which draft a draft-door call is about: the query on a read, the
+        # body on a write.
+        kind = (query or {}).get("kind") or (
+            (payload or {}).get("kind") if path.endswith("/proposals/draft") else None
+        )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
                 data = json.loads(raw) if raw else {}
+                status = getattr(response, "status", None) or 200
+                _DOOR_LOG.info("%s", door_line(method, path, status, len(raw or b""),
+                                               data, kind))
                 if return_headers:
                     return data, dict(response.headers)
                 return data
         except urllib.error.HTTPError as error:
+            raw = error.read() or b""
             try:
-                detail = json.loads(error.read())
+                detail = json.loads(raw)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 detail = {}
+            _DOOR_LOG.info("%s", door_line(method, path, error.code, len(raw), detail, kind))
             # The act doors (acts, evidence) answer {ok, code, error} where
             # `code` is the word and `error` is the sentence (ActError.as_body);
             # the identity envelope puts the word in `error`; a bid refusal
@@ -227,6 +296,8 @@ class BookOfHousesApiClient:
                 body=detail if isinstance(detail, dict) else {},
             ) from None
         except urllib.error.URLError as error:
+            _DOOR_LOG.warning("%s", door_line(method, path, 0, 0,
+                                              {"error": "connection_error"}, kind))
             raise BookOfHousesApiError(0, "connection_error", str(error.reason)) from None
 
     def _request_text(self, path: str) -> str:

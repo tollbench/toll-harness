@@ -18,7 +18,7 @@ from toll_harness.core.types import (
     RunStatus,
 )
 from toll_harness.email.base import EmailProvider
-from toll_harness.models.base import ModelAdapter
+from toll_harness.models.base import ModelAdapter, what_came_back
 from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools.registry import ToolContext, ToolRegistry
@@ -516,7 +516,19 @@ class HarnessRuntime:
 
             usage = self._add_usage(usage, response.usage)
             budget.record(response.usage, conversation_chars)
-            _LOGGER.info("%s", budget.line())
+            # ONE LINE PER MODEL CALL (0.68.0): the budget's own line, then
+            # the run and the work it holds, the prompt's size, the answer's
+            # size and what stopped it.
+            held = " ".join(
+                f"{name}={budget.place[name]}"
+                for name in ("target_id", "deal_id", "step_id")
+                if budget.place.get(name)
+            )
+            _LOGGER.info(
+                "%s; run %s%s, prompt %d chars; %s",
+                budget.line(), run_id, f" {held}" if held else "",
+                conversation_chars, what_came_back(response),
+            )
             self.event_store.append_event(
                 run_id,
                 "model.response",

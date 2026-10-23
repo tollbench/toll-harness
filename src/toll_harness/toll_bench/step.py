@@ -54,6 +54,7 @@ from toll_harness.core.budget import ContextBudget
 from toll_harness.core.operator_block import with_operator_block
 from toll_harness.core.own_means import OwnMeans, with_own_means
 from toll_harness.core.types import ModelMessage, ToolDefinition
+from toll_harness.models.base import what_came_back
 from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
     PERSON_SAID_KEY,
@@ -1230,6 +1231,8 @@ class StepAsk:
         # The same line the runtime writes, so a step reads off the log the
         # same way a run does: "model call N: prompt X input tokens ...".
         self.budget = ContextBudget(limit=0)
+        # The deal and step this ask is on, for its log lines (0.68.0).
+        self.ids: dict[str, Any] = {}
         # What the agent does by its own means (0.58.0); empty changes nothing.
         self.own_means: tuple[OwnMeans, ...] = ()
         # The operator's standing instructions (0.59.0): one labeled block,
@@ -1255,27 +1258,42 @@ class StepAsk:
             )
         self.calls += 1
         self.prompt_chars += len(text)
-        response = self.model.invoke(
-            system=self.prefix,
-            messages=[ModelMessage.text("user", text)],
-            tools=tools,
-        )
+        deal = str(self.ids.get("deal_id") or "?")
+        step = str(self.ids.get("step_id") or "?")
+        try:
+            response = self.model.invoke(
+                system=self.prefix,
+                messages=[ModelMessage.text("user", text)],
+                tools=tools,
+            )
+        except Exception as exc:
+            # The exception CLASS only: provider messages can echo headers.
+            self.log.warning(
+                "step ask %s deal=%s step=%s: model call %d: prompt %d chars "
+                "(prefix %d, tail %d), no answer: api_error %s",
+                what, deal, step, self.calls, len(self.prefix) + len(text),
+                len(self.prefix), len(text), type(exc).__name__,
+            )
+            raise
         usage = getattr(response, "usage", None)
+        measured = f"model call {self.calls}: prompt input tokens unreported"
         if usage is not None:
             self.budget.record(usage, len(self.prefix) + len(text))
             self.input_tokens += max(0, int(getattr(usage, "input_tokens", 0) or 0))
-            self.log.info("%s", self.budget.line())
+            measured = self.budget.line()
         cached = cached_input_tokens(usage)
         if cached:
             self.cached_tokens += cached
+        # ONE LINE PER MODEL CALL (0.68.0): the deal and step, the prompt's
+        # size, the answer's size and what stopped it.
         self.log.info(
-            "step ask %s: prefix=%d chars (cacheable) tail=%d chars (~%d tokens) "
-            "cached_in=%s",
-            what,
-            len(self.prefix),
-            len(text),
+            "step ask %s deal=%s step=%s: %s; prompt %d chars (prefix %d "
+            "cacheable, tail %d, ~%d tokens; cached %s); %s",
+            what, deal, step, measured,
+            len(self.prefix) + len(text), len(self.prefix), len(text),
             (len(self.prefix) + len(text)) // 4,
             "unreported" if cached is None else cached,
+            what_came_back(response),
         )
         return response
 
@@ -1540,6 +1558,7 @@ class StepAsk:
             payload, obligation, move, changed or [], pulse_due=pulse_due, refused=refused
         )
         ids = dict(tail["ids"])
+        self.ids = ids
         tools = step_tools(move, payload)
         if not tools:
             return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,

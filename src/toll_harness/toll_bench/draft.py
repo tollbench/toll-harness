@@ -95,6 +95,7 @@ from toll_harness.models.base import (
     asked_again_over_a_cut_off,
     empty_reply_note,
     was_cut_off,
+    what_came_back,
 )
 from toll_harness.toll_bench import blocks, programs, row_slots
 
@@ -3562,21 +3563,18 @@ class DraftLoop:
         except Exception as exc:
             # The exception CLASS only: provider messages can echo headers.
             self.last_reply = f"api_error:{type(exc).__name__}"
-            self.log.warning("draft loop ask %s: api_error %s",
-                             what or "?", type(exc).__name__)
+            self.log.warning(
+                "draft loop model call %d want=%s kind=%s ask=%s: prompt %d chars "
+                "(prefix %d, tail %d), no answer: api_error %s",
+                self.calls, self.target_id or "?", self.kind or "?", what or "?",
+                len(self.prefix) + len(tail), len(self.prefix), len(tail),
+                type(exc).__name__,
+            )
             raise
-        cached = cached_input_tokens(getattr(response, "usage", None))
+        usage = getattr(response, "usage", None)
+        cached = cached_input_tokens(usage)
         if cached:
             self.cached_tokens += cached
-        self.log.info(
-            "draft loop ask %s: prefix=%d chars (cacheable) tail=%d chars "
-            "(~%d tokens) cached_in=%s",
-            what or "?",
-            len(self.prefix),
-            len(tail),
-            (len(self.prefix) + len(tail)) // 4,
-            "unreported" if cached is None else cached,
-        )
         text = str(getattr(response, "text", "") or "")
         parsed = read_json_object(text)
         # WHAT CAME BACK, told apart: empty, not JSON, or an object (whose
@@ -3590,8 +3588,21 @@ class DraftLoop:
             self.last_reply = f"malformed_json({len(text)} chars{cut})"
         else:
             self.last_reply = f"object({len(text)} chars)"
-        self.log.info("draft loop ask %s: reply %s %s", what or "?",
-                      self.last_reply, answer_shape(parsed))
+        # ONE LINE PER MODEL CALL (0.68.0): which want, how big the prompt
+        # was, how big the answer was and what stopped it, and what it read
+        # as. Sizes, counts and key names only, never the text.
+        prompt_in = getattr(usage, "input_tokens", None)
+        self.log.info(
+            "draft loop model call %d want=%s kind=%s ask=%s: prompt %d chars "
+            "(prefix %d cacheable, tail %d, ~%d tokens; in %s, cached %s); %s; "
+            "reply %s %s",
+            self.calls, self.target_id or "?", self.kind or "?", what or "?",
+            len(self.prefix) + len(tail), len(self.prefix), len(tail),
+            (len(self.prefix) + len(tail)) // 4,
+            prompt_in if isinstance(prompt_in, int) and prompt_in else "unreported",
+            "unreported" if cached is None else cached,
+            what_came_back(response), self.last_reply, answer_shape(parsed),
+        )
         return response, parsed
 
     def _head(self, answer: Any = None) -> list[tuple[str, str]]:

@@ -53,6 +53,23 @@ def stop_reason_of(response: Any) -> str:
     return str(reason or "")
 
 
+def what_came_back(response: Any) -> str:
+    """One model reply, measured for the log line every call writes (0.68.0):
+    its size, its tool calls, what the provider billed out, and what stopped
+    it. Sizes and counts only, never the text."""
+    text = str(getattr(response, "text", "") or "")
+    calls = getattr(response, "tool_calls", None) or []
+    usage = getattr(response, "usage", None)
+    out = getattr(usage, "output_tokens", None) if usage is not None else None
+    stop = stop_reason_of(response) or "unreported"
+    words = f"answer {len(text)} chars, {len(calls)} tool call(s), "
+    words += f"out {out} tokens" if isinstance(out, int) and out else "out unreported"
+    words += f", stop {stop}"
+    if was_cut_off(response):
+        words += " (cut off by the output limit)"
+    return words
+
+
 def was_cut_off(response: Any) -> bool:
     """True when the output limit ended this reply, empty or sliced (0.68.0).
 
