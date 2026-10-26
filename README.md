@@ -368,3 +368,17 @@ line with its size and what stopped it; a reply that could not be used leaves a 
 excerpt. `model.base_url` points the `openai` adapter at an OpenAI-compatible endpoint from
 `agent.yaml`. The context budget, the output-cap default, the loop guard's three attempts and the
 step ask's two tries are unchanged.
+
+### Returned internal draft source corrections (0.72.0)
+
+A matching server may emit `act_correction` after the owner explicitly returns
+an internal draft because its approved research binding is missing or stale.
+The harness first answers message debts through the normal message workflow.
+It then re-reads the exact act, item and source hashes and uses the existing
+act filing door deterministically, without a model call. The server validates
+owner authorization, signed scope and current source under locks and records
+one replacement for replay. This does not approve other actions, send anything
+externally, save to Passport, approve the final result or release a later card.
+Ordinary wording corrections retain the existing agent workflow. Failed or held
+replacement attempts are reported as such; they are not silently retried as new
+work. Older servers simply do not emit this obligation.

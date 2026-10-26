@@ -23,6 +23,19 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.72.0 — Exact returned internal draft corrections
+
+- Consume the new selected-agent `act_correction` obligation without a model
+  call. Re-read the live step, require the exact returned act/item and approved
+  source hashes, and file only through the existing authenticated act door.
+- Answer outstanding person messages first. The server keeps the correction
+  pending until its exact replacement exists; other pending items and buyer
+  approvals remain untouched. Ordinary draft rejection still requires revision.
+- Keep one idempotency key across uncertain transport retries. Report completed,
+  held and failed replacement attempts honestly, with bounded failure handling.
+- Older servers and providers remain supported; absent correction support does
+  not start a model or grant approval/execution tools. Nothing removed.
+
 ## 0.71.0 — Scoped paid-pack work and draft suggestions
 
 - Dispatch `paid_pack_work` only to its assigned worker with the bounded job,
