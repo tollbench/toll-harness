@@ -807,6 +807,7 @@ _OBLIGATION_PRIORITY: tuple[str, ...] = (
     "draft_sent_back",
     "file_informed_plan",
     "unanswered_message",
+    "act_correction",
     "goal_check",
 )
 
@@ -1079,6 +1080,8 @@ _DRAFT_SENT_BACK_INSTRUCTION = (
 )
 
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
+    # Handled deterministically before model dispatch, after message debt.
+    "act_correction": {"instruction": "", "tools": frozenset()},
     "paid_pack_work": {
         "instruction": (
             "This is one assigned card inside a signed paid action pack. Read its "
@@ -1881,6 +1884,10 @@ def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     """The one piece of work an obligation names, independent of its wording."""
     if obligation.get("kind") == "goal_check":
         return ("goal_check", str(obligation.get("id") or ""))
+    if obligation.get("kind") == "act_correction":
+        return ("act_correction", str(obligation.get("deal_id") or ""),
+                str(obligation.get("step_id") or ""), str(obligation.get("act_id") or ""),
+                str(obligation.get("repeat_item") or ""))
     if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}:
         return (str(obligation.get("kind")), str(obligation.get("order_id") or ""),
                 str(obligation.get("card_number") or ""),
@@ -2206,6 +2213,8 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None,
     basis: dict[str, Any] = {"work": _obligation_key(obligation),
                              "round": obligation.get("round"),
                              "message_id": obligation.get("message_id")}
+    if obligation.get("kind") == "act_correction":
+        basis["correction"] = obligation.get("correction")
     if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}:
         # A rejection or accepted handoff changes the work even when the card
         # and receipt IDs stay fixed. Poll timestamps intentionally stay out.
@@ -2243,6 +2252,8 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None,
 def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str,
                           snapshot: Any = None, *, reason: str | None = None) -> None:
     """Best-effort visibility; reporting failure must never restart model retries."""
+    if obligation.get("kind") == "act_correction":
+        return  # mechanical correction has no worker pulse or step-state write
     report = getattr(resources.toll_bench, "report_worker_status", None)
     deal_id, step_id = obligation.get("deal_id"), obligation.get("step_id")
     if not callable(report) or not deal_id or not step_id:
@@ -2613,6 +2624,28 @@ def _attention_cycle(
             prefetched_steps.get(str(obligation.get("deal_id") or "")),
         )
         kind = str(obligation.get("kind") or "")
+        if kind == "act_correction":
+            from .toll_bench.corrections import dispatch as correct_source
+
+            if not (_tool_enabled(resources, "toll_bench.current_step")
+                    and _tool_enabled(resources, "toll_bench.propose_act")):
+                correction_result = {"ok": False, "error": "source_correction_tools_disabled"}
+            else:
+                correction_result = correct_source(resources, obligation)
+            ok = correction_result.get("ok") is True
+            payload = {"ok": ok, "reachability": reachability,
+                       "attention_count": len(obligations), "run": None,
+                       "dispatch": {"kind": kind, "model_calls": 0},
+                       "source_correction": correction_result}
+            if ok or correction_result.get("terminal"):
+                _breaker_reset(obligation)
+            else:
+                breaker = _breaker_record_failure(resources, obligation,
+                                                   _failure_signature(correction_result),
+                                                   threshold=threshold)
+                payload["breaker"] = breaker
+                payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+            return payload
         # RULE 241: the informed plan is built up in pieces too, at the same door.
         if kind == "file_informed_plan" and _draft_door_available(resources):
             planned = _file_the_informed_plan_from_draft(

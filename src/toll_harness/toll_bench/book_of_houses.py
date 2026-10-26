@@ -3896,6 +3896,22 @@ class BookOfHousesTollBenchProvider:
         "attendees", "purpose",
     })
 
+    def refile_source_correction(
+        self, deal_id: str, step_id: str, correction: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """One explicitly returned internal draft; no generic owned-block bypass."""
+        from .corrections import matches_current
+
+        # Validate the full authenticated snapshot, before model-view whitelisting
+        # and history trimming can omit an older exact returned item.
+        current = self.api.current_step(deal_id)
+        if not matches_current(current, deal_id, step_id, correction):
+            return {"ok": False, "error": "source_correction_changed",
+                    "message": "Read attention again; this exact correction is no longer ready."}
+        return self._file_act(deal_id, step_id,
+                              {"kind": "calls", "source_correction": dict(correction)},
+                              idempotency_key)
+
     def propose_act(
         self, deal_id: str, step_id: str, act: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
