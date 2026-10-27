@@ -1,13 +1,16 @@
-"""Build hook: refuse to build a stale or already-taken toll-harness version from a git checkout.
+"""Build hook: warn when a git checkout builds a stale or already-taken toll-harness version.
 
 What forced it: on 2026-10-26 a build started from a stale local copy at 0.68.0 while 0.69.0
 through 0.72.0 were already on PyPI, and named itself "0.69.0". Nothing caught it.
 
+It only WARNS, loudly, and never fails a build: this is a public package, and an old tag
+(``pip install git+...@v0.70.0``) must keep building for whoever wants it. The gates are the
+publish workflow and scripts/install_on_agent.sh, which fail closed.
+
 It runs only when the project root holds a .git (a git checkout). A build from an sdist or any
-other archive skips it, so offline user builds keep working, and an editable install
-(``pip install -e .``) skips it. The checks live in src/toll_harness/freshness.py, loaded by path
-so the build environment needs nothing but hatchling. A network failure here is a warning; the
-publish workflow and the lab install helper check again and fail closed.
+other archive skips it, and an editable install (``pip install -e .``) skips it. The checks live
+in src/toll_harness/freshness.py, loaded by path so the build environment needs nothing but
+hatchling.
 """
 
 from __future__ import annotations

@@ -59,11 +59,11 @@ The public harness is always backward compatible.
 
 ## How releases are cut (maintainers)
 
-Start every release from an up-to-date `origin/main`; the freshness check
+Start every release from an up-to-date `origin/main`. The freshness check
 (`python -m toll_harness.freshness`) refuses a checkout behind `origin/main` or a
-version not newer than PyPI's newest, and it runs on every build from a git
-checkout, in the publish workflow, and in the lab install helper
-(`scripts/install_on_agent.sh`). What forced it: on 2026-10-26 a build from a stale
+version not newer than PyPI's newest in the publish workflow and in the lab install
+helper (`scripts/install_on_agent.sh`), and warns loudly (never fails) on every
+build from a git checkout. What forced it: on 2026-10-26 a build from a stale
 0.68.0 copy, with 0.69.0-0.72.0 already published, named itself 0.69.0 (taken), and
 nothing caught it.
 

@@ -18,16 +18,18 @@ Where they run (each is a subcommand of ``python -m toll_harness.freshness``):
 
 - ``release``: checkout + version. Run it before cutting a release.
 - ``build``: what the build hook (``hatch_build.py``) runs on a build from a git checkout.
-  Like ``release``, except that a rebuild of PyPI's newest version passes with a note, a
-  checkout sitting on its own release tag passes, and a network failure is a warning:
-  the publish step and the lab install check again and fail closed.
+  It only WARNS and never stops a build: this is a public package, and an old tag must keep
+  building for whoever wants it. A rebuild of PyPI's newest version and a checkout sitting
+  on its own release tag pass quietly. The gates are ``publish`` and ``wheel``, which fail
+  closed.
 - ``publish``: what .github/workflows/publish.yml runs before building a tag: the tag
   matches pyproject.toml, the version is newer than PyPI's newest, and the tagged commit
   is on origin/main.
 - ``wheel``: what scripts/install_on_agent.sh runs before it touches an agent.
 
-Every check prints one plain line, and any failure exits 1. ``TOLL_HARNESS_FRESHNESS_OVERRIDE=
-<reason>`` turns a failure into a pass and prints the reason loudly.
+Every check prints one plain line, and any failure exits 1 (``build`` always exits 0).
+``TOLL_HARNESS_FRESHNESS_OVERRIDE=<reason>`` turns a failure into a pass and prints the reason
+loudly.
 
 This file uses only the standard library and never imports toll_harness, so the build
 hook can load it by path inside a bare build environment.
@@ -454,11 +456,32 @@ def report(title: str, results: list[Result], *, stream: TextIO | None = None) -
     return 1
 
 
+def warn_only(title: str, results: list[Result], *, stream: TextIO | None = None) -> int:
+    """The build's report: every failure is printed as a loud WARN, and it always returns 0."""
+    out = stream or sys.stderr
+    print(f"toll-harness freshness: {title}", file=out)
+    stale = 0
+    for status, line in results:
+        if status == FAIL:
+            stale += 1
+        print(f"  {'WARN' if status in (FAIL, WARN) else status:<4}  {line}", file=out)
+    if not stale:
+        print("Fresh.", file=out)
+        return 0
+    bar = "!" * 78
+    print(bar, file=out)
+    print("!! WARNING: this build is stale or reuses a taken version (see above). It still",
+          file=out)
+    print("!! builds, but it is not a release: the publish workflow refuses it, and",
+          file=out)
+    print("!! scripts/install_on_agent.sh will not put it on an agent.", file=out)
+    print(bar, file=out)
+    return 0
+
+
 def build_hook(root: Path, version: str, target: str) -> None:
-    """Called by hatch_build.py on a build from a git checkout; raises SystemExit to stop it."""
-    results = run_build(Path(root), version)
-    if report(f"build {target} {version} from {root}", results, stream=sys.stderr):
-        raise SystemExit(1)
+    """Called by hatch_build.py on a build from a git checkout. Warns; never stops the build."""
+    warn_only(f"build {target} {version} from {root}", run_build(Path(root), version))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -469,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="mode", required=True)
     for mode, text in (
         ("release", "checkout contains origin/main, and its version is newer than PyPI's newest"),
-        ("build", "what the build hook runs (a rebuild of PyPI's newest passes with a note)"),
+        ("build", "what the build hook runs: warnings only, always exits 0"),
     ):
         one = sub.add_parser(mode, help=text)
         one.add_argument("--repo", type=Path, default=Path.cwd())
@@ -485,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "release":
         return report(f"release from {args.repo}", run_release(args.repo))
     if args.mode == "build":
-        return report(f"build from {args.repo}", run_build(args.repo))
+        return warn_only(f"build from {args.repo}", run_build(args.repo), stream=sys.stdout)
     if args.mode == "publish":
         return report(f"publish {args.tag} from {args.repo}", run_publish(args.repo, args.tag))
     return report(f"install {args.target}", run_wheel(args.target, args.checkout))

@@ -224,7 +224,7 @@ def test_build_only_warns_when_pypi_is_down(upstream, pypi):
     results = freshness.run_build(upstream.clone)
     assert statuses(results) == ["ok", "warn"]
     assert "check it again and fail closed" in text(results)
-    assert freshness.report("build", results) == 0
+    assert freshness.warn_only("build", results) == 0
 
 
 def test_fetch_pypi_turns_any_failure_into_a_plain_network_error(monkeypatch):
@@ -355,12 +355,29 @@ def test_cli_exit_codes(pypi, capsys):
     assert "0.74.0 is not on PyPI" in capsys.readouterr().out
 
 
-def test_build_hook_stops_the_build_only_on_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(freshness, "run_build", lambda root, version: [("ok", "fine")])
-    freshness.build_hook(tmp_path, "0.74.0", "wheel")
-    monkeypatch.setattr(freshness, "run_build", lambda root, version: [("FAIL", "stale")])
-    with pytest.raises(SystemExit):
-        freshness.build_hook(tmp_path, "0.74.0", "wheel")
+def test_build_hook_warns_loudly_on_the_incident_and_never_stops_the_build(upstream, pypi, capsys):
+    # A public package: an old tag must keep building. The gates are publish and install.
+    upstream.moves_on("0.73.0")
+    commit_version(upstream.clone, "0.69.0")  # the 2026-10-26 shape: stale base, taken name
+    assert freshness.build_hook(upstream.clone, "0.69.0", "wheel") is None
+    err = capsys.readouterr().err
+    assert "WARN  checkout: HEAD" in err and "missing 1 commit(s)" in err
+    assert "WARN  version: 0.69.0 is already on PyPI" in err
+    assert "WARNING: this build is stale or reuses a taken version" in err
+    assert "FAIL" not in err
+
+
+def test_build_hook_is_quiet_on_a_fresh_checkout(upstream, pypi, capsys):
+    pypi.releases = {"0.68.0": [], "0.72.0": []}  # main sits on the newest release
+    freshness.build_hook(upstream.clone, "0.72.0", "sdist")
+    err = capsys.readouterr().err
+    assert "Fresh." in err and "WARNING" not in err
+
+
+def test_build_cli_always_exits_zero(upstream, pypi):
+    upstream.moves_on("0.73.0")
+    assert freshness.main(["build", "--repo", str(upstream.clone)]) == 0
+    assert freshness.main(["release", "--repo", str(upstream.clone)]) == 1
 
 
 def test_the_module_loads_by_path_with_only_the_standard_library():
