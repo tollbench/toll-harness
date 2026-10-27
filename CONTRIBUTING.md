@@ -59,8 +59,16 @@ The public harness is always backward compatible.
 
 ## How releases are cut (maintainers)
 
+Start every release from an up-to-date `origin/main`; the freshness check
+(`python -m toll_harness.freshness`) refuses a checkout behind `origin/main` or a
+version not newer than PyPI's newest, and it runs on every build from a git
+checkout, in the publish workflow, and in the lab install helper
+(`scripts/install_on_agent.sh`). What forced it: on 2026-10-26 a build from a stale
+0.68.0 copy, with 0.69.0-0.72.0 already published, named itself 0.69.0 (taken), and
+nothing caught it.
+
 1. Bump `version` in `pyproject.toml` and add a [CHANGELOG.md](CHANGELOG.md)
-   entry in the same commit.
+   entry in the same commit. `python -m toll_harness.freshness release` should pass.
 2. Tag `vX.Y.Z` and push the tag. GitHub Actions builds and publishes to PyPI
    via Trusted Publishing (OIDC — there is no long-lived PyPI token to leak).
 3. A GitHub Release is created for the tag with the changelog entry as notes.

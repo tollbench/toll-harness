@@ -21,6 +21,31 @@ PyPI via Trusted Publishing, and mirrored here.
 
 ## [Unreleased]
 
+What forced it: on 2026-10-26 a harness build started from a stale local copy at 0.68.0 while
+0.69.0-0.72.0 were already on PyPI, and named itself "0.69.0" (taken). Nothing caught it: PyPI
+would only have refused at upload, and a wheel built locally could have been installed onto a
+live agent with no check at all.
+
+- Added: a freshness check, `python -m toll_harness.freshness release | build | publish | wheel`.
+  It refuses a git checkout whose HEAD does not contain `origin/main` after a fetch, a version
+  not strictly newer than PyPI's newest, and a wheel to install that is neither PyPI's own file
+  for its version (same sha256) nor newer than PyPI's newest and built from a checkout that is
+  not behind. Every check prints one plain line. A network failure fails closed, except on a
+  plain build, where it warns. `TOLL_HARNESS_FRESHNESS_OVERRIDE=<reason>` lets a failure through
+  and prints the reason loudly.
+- Added: a build hook (`hatch_build.py`) runs the check on a build from a git checkout. It is
+  skipped without `.git` and for editable installs, so sdist and offline user builds are
+  unchanged; a rebuild of PyPI's newest version passes with a note. Changed: a build from a
+  git checkout behind `origin/main` (including `pip install git+...@<old tag>`) is now refused;
+  install older releases from PyPI.
+- Added: `.github/workflows/publish.yml` checks the tag before building: the tag matches
+  `pyproject.toml`, its version is newer than PyPI's newest, and the tagged commit is on
+  `origin/main`. Both workflows' build jobs fetch full history for the check.
+- Added: `scripts/install_on_agent.sh <agent-dir> <unit> <wheel-or-version>` for lab agents:
+  the wheel check, `<agent-dir>/venv-<version>`, a `zzz-harness-<NNNN>.conf` systemd user
+  drop-in that copies the unit's winning ExecStart onto the new venv's python, a restart, a wait
+  for the first `attention -> 200` in the agent's market.log, and the one-line rollback.
+  `--dry-run` changes nothing.
 - Nothing removed. No fields or calls deprecated.
 
 ## 0.73.0 — The room follows the model's window, 2026-10-26

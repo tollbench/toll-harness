@@ -63,6 +63,10 @@ Paper = "https://tollbench.com/static/toll-bench-paper-iaeval.pdf"
 [tool.hatch.build.targets.wheel]
 packages = ["src/toll_harness"]
 
+# Freshness check on a build from a git checkout (see hatch_build.py); skipped without .git.
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
