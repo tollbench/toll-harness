@@ -21,6 +21,7 @@ from toll_harness.core.types import (
     AutonomyMode,
     EmailProvisioningStatus,
 )
+from toll_harness.core.window import resolve_context_window
 from toll_harness.email.book_of_houses import (
     BookOfHousesApiClient,
     BookOfHousesEmailProvider,
@@ -217,6 +218,26 @@ def _resolve_model_api_key(config: dict, *, root: Path, data_dir: Path) -> str |
 
 
 def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
+    """The adapter, carrying the model's context window (0.73.0).
+
+    `model.context_window_tokens` wins, then TOLL_HARNESS_CONTEXT_WINDOW_TOKENS,
+    then the window core/window.py can source for the model id, then 131,072.
+    Every prompt budget the harness keeps is sized from it.
+    """
+    model_config = config.get("model", {}) or {}
+    configured = model_config.get("context_window_tokens")
+    if configured is not None and (
+        isinstance(configured, bool) or not isinstance(configured, int) or configured <= 0
+    ):
+        raise ValueError("model.context_window_tokens must be a positive whole number of tokens")
+    adapter = _construct_model(config, root=root, data_dir=data_dir)
+    adapter.context_window_tokens = resolve_context_window(
+        configured, model_config.get("model_id") or adapter.model_id
+    )
+    return adapter
+
+
+def _construct_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
     model_config = config.get("model", {})
     # Configurations that predate the adapter field are Bedrock ones.
     adapter_name = model_config.get("adapter") or "bedrock"
@@ -462,6 +483,8 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     model.cost_ledger = cost_ledger
     if toll_bench_provider is not None:
         toll_bench_provider.cost_ledger = cost_ledger
+        # 0.73.0: the brief a tool hands back is sized from the same window.
+        toll_bench_provider.context_window_tokens = getattr(model, "context_window_tokens", None)
     approach_default, approach_notes = configured_approach(config)
     for note in approach_notes:
         # A word that is not a stop is dropped and said, never a load error:
@@ -487,6 +510,9 @@ model:
   profile: null
   model_id: null  # Set from `toll-harness bedrock probe` output.
   max_tokens: 2048
+  # The model's context window in tokens; every prompt the harness builds is
+  # sized from it. Unset: the window known for model_id, else 131072.
+  # context_window_tokens: 1000000
   temperature: 0
 runtime:
   autonomy: autonomous

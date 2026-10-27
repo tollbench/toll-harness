@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from toll_harness.core.budget import measure
+from toll_harness.core.window import room
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, draft, programs, row_slots
@@ -246,7 +247,39 @@ MAX_DELIVERABLE_WARNINGS = 1
 # The brief, after the programs are shelved. Roughly 15,000 tokens -- a real
 # brief off the live bench runs to about 48,000 characters and passes whole;
 # this is the backstop for the outlier, not a diet for every want.
+#
+# 0.73.0: THIS IS THE NUMBER FOR A 131,072-TOKEN WINDOW, the one it was set
+# against, and it grows with the model's own (core/window.py): 91,552 characters
+# on a 200,000-token window, 457,763 on 1,000,000. A brief of 61-64k characters
+# on Nia's claude-opus-5-5 shed the block menu and the bid template to fit a
+# budget set for a window smaller than her model's.
 BRIEF_CHAR_BUDGET = 60_000
+# WHAT COMES OFF A BRIEF STILL TOO BIG FOR ITS WINDOW, FIRST TO LAST (0.73.0).
+# The brief's own copies and indexes go first. The four things a plan is BUILT
+# from -- the example, the bid template, the tools and the block menu -- are
+# the LAST things ever shed, and the block menu is the very last: the workflow
+# builder is "the system sets up the blocks", so a menu that comes off is a
+# plan written blind. Before 0.73.0 the bid template went first and the block
+# menu second, and nothing else ever came off.
+BRIEF_SHED_ORDER: tuple[str, ...] = (
+    # An index of the other worked programs; the bench serves them by key.
+    "plan_examples",
+    # The public outcome of every earlier deal on this want, whole;
+    # `prior_attempts` is the summary of the same deals and stays.
+    "past_attempts",
+    # THE EXAMPLE: its proposal comes off, its key and title stay.
+    "nearest_program",
+    # `plan_template` inside the whole bid; `bid_template_notes` names every
+    # blank it carries.
+    "bid_template",
+    # Every tool narrowed to its name, its service and one line. Never removed.
+    "tools",
+    # THE BLOCK MENU, last of all: the kinds and their step counts stay.
+    "block_templates",
+)
+BRIEF_LAST_TO_SHED: tuple[str, ...] = (
+    "nearest_program", "bid_template", "tools", "block_templates",
+)
 # THE DOOR LOOP. Three answers is a compile, four is a loop: on 2026-09-09 a
 # run called the validate door fourteen times in three minutes, never filed,
 # and each answer re-entered the conversation whole.
@@ -532,6 +565,10 @@ class BookOfHousesTollBenchProvider:
         open_bid_limit: int | None = None,
     ):
         self.api = api
+        # 0.73.0: the model's context window in tokens, set by build_runtime
+        # off the model adapter. The brief a tool hands back is sized from it;
+        # None is the 131,072 the brief budget was set against.
+        self.context_window_tokens: int | None = None
         self.fleet = fleet
         self.fleet_agent_id = fleet_agent_id
         self.fleet_proposal_limit = fleet_proposal_limit
@@ -729,6 +766,25 @@ class BookOfHousesTollBenchProvider:
         return self.api.operator_reply(target_id, message_id, reply, revise_plan)
 
     def read_brief(self, target_id: str) -> dict[str, Any]:
+        """The brief as a tool hands it to the model: sized to its window.
+
+        What `_read_brief` says, then `_fit_the_brief`. This is the read that
+        enters a conversation and stays there, so it is the one that fits.
+        """
+        return self._read_brief(target_id, fit=True)
+
+    def read_whole_brief(self, target_id: str) -> dict[str, Any]:
+        """The same brief, never fitted (0.73.0).
+
+        For the harness's own reads -- the draft loop builds every prompt it
+        sends from pieces of the brief, each ask under its own budget, and
+        never hands the brief over whole, so cutting it here only took the
+        block menu and the bid template out of the loop's hands (Nia,
+        2026-10-26).
+        """
+        return self._read_brief(target_id, fit=False)
+
+    def _read_brief(self, target_id: str, *, fit: bool) -> dict[str, Any]:
         """The want, and the whole legal FORM to bid with.
 
         RULE 231 (2026-09-05): the brief carries `person_connected`, the
@@ -759,7 +815,8 @@ class BookOfHousesTollBenchProvider:
                 if blocks.contact_research_of(brief)
                 else ""
             )
-            self._fit_the_brief(target_id, brief)
+            if fit:
+                self._fit_the_brief(target_id, brief)
         return response
 
     def get_pack_input(self, target_id: str, receipt_id: str) -> dict[str, Any]:
@@ -892,54 +949,131 @@ class BookOfHousesTollBenchProvider:
             before,
         )
 
+    def brief_char_budget(self) -> int:
+        """The characters a brief may run to on this model's window (0.73.0)."""
+        return room(BRIEF_CHAR_BUDGET, self.context_window_tokens)
+
     def _fit_the_brief(self, target_id: str, brief: dict[str, Any]) -> None:
-        """Shed the brief's duplicates until it fits, loudest thing last.
+        """Shed the brief's copies until it fits its window, the menu last.
 
         Nothing here is a judgement about what a plan needs: it is the order
-        in which a brief's own copies of itself come off. `bid_template` is
-        `plan_template` inside the whole bid payload and `bid_template_notes`
-        already names every blank in it; `block_templates` is the catalog, and
-        the one block this want needs is in the program that rides the brief
-        in full. Both are still whole on the brief the harness reads at filing
-        time, so a plan is still repaired from the real form.
+        in which a brief's own copies of itself come off (BRIEF_SHED_ORDER),
+        and the four things a plan is built from come off last, the block menu
+        last of all. Each one leaves a note saying what came off. All of them
+        are still whole on the brief the harness reads at filing time, so a
+        plan is still repaired from the real form.
         """
-        if measure(brief) <= BRIEF_CHAR_BUDGET:
+        budget = self.brief_char_budget()
+        if measure(brief) <= budget:
             return
         shed: list[str] = []
-        if isinstance(brief.get("bid_template"), (dict, list)):
-            brief["bid_template"] = None
-            brief["bid_template_note"] = (
-                "The whole-bid template was left off this brief to keep it "
-                "readable. `bid_template_notes` names every blank it carries, "
-                "and `nearest_program.proposal` is a filled bid of the same "
-                "shape -- copy that."
-            )
-            shed.append("bid_template")
-        catalog = brief.get("block_templates")
-        if measure(brief) > BRIEF_CHAR_BUDGET and isinstance(catalog, dict) and catalog:
-            brief["block_templates"] = {
-                str(kind): (len(steps) if isinstance(steps, list) else 1)
-                for kind, steps in catalog.items()
-            }
-            brief["block_templates_note"] = (
-                "The block catalog was too big to hand over whole, so this is "
-                "the kinds it holds and how many steps each block is. The "
-                "block this want needs is already written out inside "
-                "`nearest_program.proposal`: pull it from there, in full and "
-                "in its order (rule 236). The harness still reads the real "
-                "catalog when it files, so a block you get wrong is repaired "
-                "rather than refused."
-            )
-            shed.append("block_templates")
+        for name in BRIEF_SHED_ORDER:
+            if measure(brief) <= budget:
+                break
+            if self._shed_from_brief(brief, name):
+                shed.append(name)
         if shed:
             _LOGGER.warning(
                 "Brief for target %s ran to %d characters; shed %s to fit the "
-                "window (budget %d)",
+                "window (budget %d, window %d tokens)",
                 target_id,
                 measure(brief),
                 ", ".join(shed),
-                BRIEF_CHAR_BUDGET,
+                budget,
+                self.context_window_tokens or 0,
             )
+
+    @staticmethod
+    def _shed_from_brief(brief: dict[str, Any], name: str) -> bool:
+        """Take one thing off the brief, leaving a note. True when it did."""
+        value = brief.get(name)
+        if name == "plan_examples":
+            if not value:
+                return False
+            brief["plan_examples"] = None
+            brief["program_shelf"] = (
+                "The index of worked programs was left off this brief to fit "
+                "the model's window; GET /api/bench/plan-examples lists them."
+            )
+            return True
+        if name == "past_attempts":
+            if not isinstance(value, list) or not value:
+                return False
+            brief["past_attempts"] = None
+            brief["past_attempts_note"] = (
+                f"{len(value)} earlier attempt(s) on this want were left off this "
+                "brief to fit the model's window; `prior_attempts` summarises the "
+                "same deals."
+            )
+            return True
+        if name == "nearest_program":
+            if not isinstance(value, dict) or not isinstance(value.get("proposal"), dict):
+                return False
+            brief["nearest_program"] = {
+                key: item for key, item in value.items() if key != "proposal"
+            }
+            brief["nearest_program_note"] = (
+                "The worked program's own proposal was left off this brief to fit "
+                "the model's window; its key is above and the bench serves it at "
+                "GET /api/bench/plan-examples/<key>."
+            )
+            return True
+        if name == "bid_template":
+            if not isinstance(value, (dict, list)):
+                return False
+            brief["bid_template"] = None
+            example = brief.get("nearest_program")
+            copy_from = (
+                " `nearest_program.proposal` is a filled bid of the same shape -- "
+                "copy that."
+                if isinstance(example, dict) and isinstance(example.get("proposal"), dict)
+                else " The harness still reads the real template when it files."
+            )
+            brief["bid_template_note"] = (
+                "The whole-bid template was left off this brief to fit the "
+                "model's window. `bid_template_notes` names every blank it "
+                "carries." + copy_from
+            )
+            return True
+        if name == "tools":
+            if not isinstance(value, list) or not value:
+                return False
+            narrowed = draft.tools_index({"tools": value}, budget=measure(value))
+            if not narrowed or measure(narrowed) >= measure(value):
+                return False
+            brief["tools"] = narrowed
+            brief["tools_note"] = (
+                "Every tool on this want is still listed, each by its name, the "
+                "service it runs `on` and what it does; the arguments were left "
+                "off to fit the model's window. The bench writes a call's "
+                "required arguments into the plan and hands back the ones that "
+                "are yours as blanks."
+            )
+            return True
+        if name == "block_templates":
+            if not isinstance(value, dict) or not value:
+                return False
+            brief["block_templates"] = {
+                str(kind): (len(steps) if isinstance(steps, list) else 1)
+                for kind, steps in value.items()
+            }
+            example = brief.get("nearest_program")
+            pull_from = (
+                " The block this want needs is already written out inside "
+                "`nearest_program.proposal`: pull it from there, in full and in "
+                "its order (rule 236)."
+                if isinstance(example, dict) and isinstance(example.get("proposal"), dict)
+                else ""
+            )
+            brief["block_templates_note"] = (
+                "The block catalog was too big to hand over whole on this "
+                "model's window, so this is the kinds it holds and how many "
+                "steps each block is." + pull_from + " The harness still reads "
+                "the real catalog when it files, so a block you get wrong is "
+                "repaired rather than refused."
+            )
+            return True
+        return False
 
     def list_act_kinds(self) -> dict[str, Any]:
         """The act registry (contract 2.44). Each kind publishes `wanted_when`

@@ -52,6 +52,23 @@ context. A run that stops itself leaves a record and an honest failure; a run th
 leaves a stack trace. The budget is a floor under a bug, not a fix for one -- when a run hits it,
 the thing to shrink is what the tools hand back.
 
+THE ROOM A PROMPT GETS FOLLOWS THE MODEL'S WINDOW (0.73.0). Every model adapter carries
+`context_window_tokens`: `model.context_window_tokens` in `agent.yaml`, else
+`TOLL_HARNESS_CONTEXT_WINDOW_TOKENS`, else the window `core/window.py` knows for the model id, else
+131,072. The table is conservative: a plain Claude id is 200,000 and only an id carrying `[1m]` is
+1,000,000; Gemini 2/3 is 1,048,576. Every character budget the harness keeps for a
+prompt it builds -- the brief a tool hands back, each draft-loop ask, the step ask, the tools index,
+what the person said, the operator's materials, one step -- is the number written for a
+131,072-token window, times the model's window over 131,072, and never less than that number.
+What still has to come off comes off in a fixed order: on the brief, the program index and the
+earlier attempts first, then the example's proposal, the bid template, the tools' arguments and,
+last of all, the block catalog (to its kinds and step counts); in the draft loop, the outline lines
+and the forecast numbers first, then the slot tables, then the example, then the tools. The draft
+loop reads the brief whole (`read_whole_brief`): it never sends the brief in one piece, so the fit
+belongs to the tool result alone. WHAT FORCED IT: lab agent Nia (claude-opus-5-5), 2026-10-26, bid
+and planned a song workflow without the block menu, the bid template, the example, her tools and
+the forecast context, every one shed to fit a budget set for a 131,072-token window.
+
 ## Two stages: the proposal, then the plan form
 
 There are three words and the runtime keeps them apart. A WANT is what the person asked for. A

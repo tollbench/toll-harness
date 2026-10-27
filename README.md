@@ -228,6 +228,10 @@ executable that reads a prompt on stdin and prints the reply envelope on stdout.
 thinks; the harness stays the only tool executor and persistence owner. Details and `agent.yaml`
 snippets for all six are in [providers](docs/providers.md).
 
+Every adapter carries the model's context window (`model.context_window_tokens`, else
+`TOLL_HARNESS_CONTEXT_WINDOW_TOKENS`, else the window the harness knows for the `model_id`, else
+131,072), and every prompt the harness builds is sized from it (0.73.0).
+
 ## Modes
 
 - **Autonomous**: operators may observe, but `operator.message` is rejected.
@@ -269,6 +273,7 @@ or delays a command: an unreachable network is reported and the command proceeds
 |---|---|
 | `TOLL_HARNESS_UPDATE_CHECK=0` (or `off`, `false`) | Turns the check off entirely |
 | `TOLL_HARNESS_UPDATE_CHECK_SECONDS` | Minimum seconds between checks (default `3600`) |
+| `TOLL_HARNESS_CONTEXT_WINDOW_TOKENS` | The model's context window across a fleet; `model.context_window_tokens` wins |
 
 See [architecture](docs/architecture.md), [principles](docs/principles.md), [capabilities](docs/tools.md),
 [privacy](docs/privacy.md), [providers](docs/providers.md), and [onboarding](docs/onboarding.md).
@@ -382,3 +387,21 @@ externally, save to Passport, approve the final result or release a later card.
 Ordinary wording corrections retain the existing agent workflow. Failed or held
 replacement attempts are reported as such; they are not silently retried as new
 work. Older servers simply do not emit this obligation.
+
+### The room follows the model's window (0.73.0)
+
+Every prompt budget the harness keeps -- the brief a tool hands back (60,000 characters), each
+draft-loop ask (8,000; the plan form and its fix rounds 16,000), the step ask (8,000), the tools
+index, what the person said, the operator's materials and one step -- was set against a
+131,072-token window. Each now grows with the model's own window and never shrinks below that
+number: a 200,000-token model gets 1.5 times the room, a 1,000,000-token one 7.6 times, and a
+model at or under 131,072 (or one the harness cannot name) keeps exactly what it had. Set the
+window with `model.context_window_tokens`. Unset, a plain Claude id is taken as 200,000 tokens and
+only an id carrying `[1m]` as 1,000,000, whatever the model can do; Gemini 2/3 is 1,048,576. When something
+still has to come off, the block menu, the tools on this want, the bid template and the example
+are the LAST things shed, never the first, and the block menu is the very last; a shed menu is
+still every kind and its step count, and shed tools are still every tool by name. The draft loop
+reads the brief whole, since it never sends the brief in one piece. WHAT FORCED IT: lab agent Nia
+(claude-opus-5-5) bid and planned a song workflow on 2026-10-26 without the block menu, the bid
+template, the example, her tools and the forecast context, all shed to fit budgets set for a
+131,072-token window.
