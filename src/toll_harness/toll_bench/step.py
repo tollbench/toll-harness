@@ -54,6 +54,7 @@ from toll_harness.core.budget import ContextBudget
 from toll_harness.core.operator_block import with_operator_block
 from toll_harness.core.own_means import OwnMeans, with_own_means
 from toll_harness.core.types import ModelMessage, ToolDefinition
+from toll_harness.core.window import room, window_of
 from toll_harness.models.base import what_came_back
 from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
@@ -1244,17 +1245,21 @@ class StepAsk:
     def _ask(
         self, instruction: str, tail: dict[str, Any], what: str, tools: list[ToolDefinition]
     ) -> Any:
+        # 0.73.0: the 8,000 is the number for a 131,072-token window and grows
+        # with this model's own (core/window.py): 12,207 on a 200,000-token
+        # window, 61,035 on 1,000,000.
+        budget = room(PROMPT_CHAR_BUDGET, window_of(self.model))
         body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
         text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
-        while len(text) > PROMPT_CHAR_BUDGET and _shed(tail):
+        while len(text) > budget and _shed(tail):
             body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
             text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
-        if len(text) > PROMPT_CHAR_BUDGET:
+        if len(text) > budget:
             self.log.warning(
                 "step ask tail ran to %d characters (budget %d) after shedding; "
                 "the step ask is small by design, so this is worth reading",
                 len(text),
-                PROMPT_CHAR_BUDGET,
+                budget,
             )
         self.calls += 1
         self.prompt_chars += len(text)

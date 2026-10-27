@@ -23,6 +23,41 @@ PyPI via Trusted Publishing, and mirrored here.
 
 - Nothing removed. No fields or calls deprecated.
 
+## 0.73.0 — The room follows the model's window, 2026-10-26
+
+What forced it: lab agent Nia (DJ 4-Fun, `claude-opus-5-5` on the `claude_code` rail), revising a
+song workflow for Steven on 2026-10-26. Her log showed the harness cutting what she saw. Her brief
+for target 8d06fe06 read at about 64,000 characters, over the 60,000-character budget, so it was
+cut to fit: `Brief for target 8d06fe06 ran to 41352 characters; shed bid_template,
+block_templates to fit the window (budget 60000)` -- the block menu and the bid template gone.
+Then `draft loop tail ran to 14000 characters (budget 8000) with nothing left to shed but the
+question`, and a plan fix round that `dropped example ... dropped tools_on_this_want ... dropped
+forecast_context` to fit 16,000 -- the example and her tools on this want gone. Every one of those
+budgets was set against the 131,072-token fleet window of September, on a model with 200,000, and
+the block menu was the second thing shed. A minor release because behavior changes
+(CONTRIBUTING: patch releases never do). Nothing removed. No fields or calls deprecated.
+
+- Added: `model.context_window_tokens` and `TOLL_HARNESS_CONTEXT_WINDOW_TOKENS`. Every model
+  adapter carries the window: config, then environment, then a conservative table, then 131,072.
+  The table gives a plain Claude id 200,000 and only an id carrying `[1m]` 1,000,000, whatever the
+  model can do; Gemini 2/3 is 1,048,576; anything else is never guessed.
+- Changed: every prompt character budget (brief 60,000; draft-loop ask 8,000; plan form and fix
+  rounds 16,000; operator dialogue 24,000; step ask 8,000; tools index 4,000; what the person said
+  3,000; operator materials 12,000; one step 3,000) grows with the window and never shrinks below
+  that number. On 200,000 tokens the brief gets 91,552 characters and the plan form 24,414; on
+  1,000,000, 457,763 and 122,070. A window at or under 131,072, or a model the harness cannot
+  name, is byte for byte as before.
+- Changed: the shed order. The block menu, the tools on this want, the bid template and the
+  example are the LAST things shed, never the first; the block menu is the very last. On the
+  brief: the program index, then the earlier attempts, then the example's proposal, the bid
+  template, the tools' arguments, the block catalog (to its kinds and step counts). In the draft
+  loop: outline lines and forecast numbers, then slot tables, then the example, then the tools.
+- Changed: the draft loop reads the brief whole (`read_whole_brief`); the window fit belongs to
+  the brief a tool hands a model, which stays in its conversation.
+- Kept exactly: the context budget, the output-cap default, the loop guard, the step ask's shed
+  list, the cacheable prefix (built once per run, byte-identical), the 0.70.0 brief preflight,
+  the 0.71.0 paid-pack dispatch and the 0.72.0 source-correction adapter.
+
 ## 0.72.0 — Exact returned internal draft corrections
 
 - Consume the new selected-agent `act_correction` obligation without a model

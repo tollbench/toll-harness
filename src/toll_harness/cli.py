@@ -2876,7 +2876,12 @@ def _market_scan_candidates(
     # A cached board can briefly list a card whose direct brief has closed.
     # Confirm the door before handing any candidate to a model, and continue
     # past a refused newest card instead of starving the rest of the board.
-    reader = getattr(provider, "read_brief", None)
+    # 0.73.0: the brief this read confirms is the one the draft loop works
+    # from, so it is read WHOLE (`read_whole_brief`, same door, same 404),
+    # never the copy fitted to a model's window for a tool result.
+    reader = getattr(provider, "read_whole_brief", None)
+    if not callable(reader):
+        reader = getattr(provider, "read_brief", None)
     selected = []
     offset = _MARKET_BRIEF_OFFSET % len(eligible) if eligible else 0
     ordered = eligible[offset:] + eligible[:offset]
@@ -2982,8 +2987,17 @@ def _door_is_missing(outcome: dict[str, Any]) -> bool:
 
 def _brief_for_the_loop(resources: Any, target_id: str, want: Any = None) -> dict[str, Any]:
     brief: dict[str, Any] = {}
+    # THE LOOP READS THE BRIEF WHOLE (0.73.0). It never hands the brief to a
+    # model in one piece -- every ask is built from pieces of it under its own
+    # budget -- so the window fit on `read_brief`, which is for a tool result
+    # that stays in a conversation, only took the block menu and the bid
+    # template out of the loop's hands (Nia, 2026-10-26).
+    provider = resources.toll_bench
+    read = getattr(provider, "read_whole_brief", None)
+    if not callable(read):
+        read = provider.read_brief
     try:
-        brief = (resources.toll_bench.read_brief(target_id) or {}).get("brief") or {}
+        brief = (read(target_id) or {}).get("brief") or {}
     except Exception as error:  # noqa: BLE001 - a brief that will not read is not the end
         _LOGGER.warning("Brief for target %s could not be read (%s)", target_id, error)
         brief = {}
