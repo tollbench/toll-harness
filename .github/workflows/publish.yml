@@ -13,9 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history and every branch, so origin/main is here on a tag push
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Refuse a stale or taken version before anything is built: the tag must match
+      # pyproject.toml, its version must be newer than PyPI's newest, and the tagged commit
+      # must be on origin/main. Forced by 2026-10-26, when a build from a stale 0.68.0 copy
+      # named itself 0.69.0 (taken) and nothing caught it. A network failure fails closed;
+      # re-run the workflow once PyPI answers. The first two lines make sure the history and
+      # origin/main are here even if the checkout above ever goes back to its shallow default.
+      - name: Freshness check (tag newer than PyPI, commit on main)
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch --quiet --unshallow origin; fi
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          PYTHONPATH=src python -m toll_harness.freshness publish --tag "$GITHUB_REF_NAME"
       - name: Build sdist + wheel
         run: |
           python -m pip install --upgrade pip build
