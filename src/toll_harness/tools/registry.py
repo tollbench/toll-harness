@@ -334,10 +334,7 @@ def build_standard_registry() -> ToolRegistry:
     registry = ToolRegistry()
 
     def send_email(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        result = require_email(context).send(**arguments)
-        if result.get("status") == "pending_human_approval":
-            context.wait_requested = True
-        return result
+        return require_email(context).send(**arguments)
 
     registry.register(
         ToolDefinition(
@@ -680,11 +677,8 @@ def build_standard_registry() -> ToolRegistry:
     registry.register(
         ToolDefinition(
             "email.send",
-            "Send a plain-text message from the agent's scoped mailbox. "
-            "Optional attachment_file_ids attaches files the deal released "
-            "to this agent (file_id values from released_materials, up to 5, "
-            "8MB total); the person approves the attachment set with the "
-            "draft and only the approved set can send.",
+            "Deprecated 2026-10-31: a new email is the deal step's email act "
+            "(toll_bench.propose_act). This answers with the bench's own words.",
             _object_schema(
                 {
                     "to": {"type": "array", "items": {"type": "string"}, "minItems": 1},

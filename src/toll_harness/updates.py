@@ -305,7 +305,7 @@ def _check(config_path: Any, api: Any, *, force: bool) -> dict[str, Any]:
     if toll_bench.get("connected") or api is not None:
         try:
             if api is None:
-                from toll_harness.email.book_of_houses import BookOfHousesApiClient
+                from toll_harness.toll_bench.api import BookOfHousesApiClient
 
                 api = BookOfHousesApiClient(
                     base_url=toll_bench.get("base_url") or "https://bookofhouses.com",

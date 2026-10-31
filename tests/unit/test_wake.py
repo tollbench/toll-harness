@@ -120,34 +120,16 @@ def test_future_timer_is_left_parked_and_bounds_the_sleep(tmp_path):
     assert cli._earliest_wake_at(resources) == wake_at
 
 
-def test_new_inbound_email_wakes_parked_runs_early(tmp_path):
-    inbox = {"threads": [{"thread_id": "t1", "last_inbound_at": "2026-08-27T00:00:00+00:00"}]}
-    provider = SimpleNamespace(list=lambda limit=50: inbox["threads"])
+def test_inbound_mail_wakes_nothing_and_is_never_polled(tmp_path):
+    """0.74.0: a reply owed on a deal reaches the agent on its step, so the
+    watch no longer lists the mailbox every cycle to wake parked runs."""
+    listed = []
+    provider = SimpleNamespace(list=lambda limit=50: listed.append(limit) or [])
     resources, resumed = _resources(tmp_path, email_provider=provider)
     resources.store.save_knowledge(
-        WAKE_TIMERS_NAMESPACE,
-        {"run-1": {"wake_at": time.time() + 3600, "note": "waiting on a reply"}},
-    )
-
-    # First observation baselines the cursor: history never wakes anything.
+        WAKE_TIMERS_NAMESPACE, {"run-1": {"wake_at": time.time() + 3600}})
     assert cli._process_wakes(resources) == []
-    assert resumed == []
-
-    # New mail lands; the parked run wakes before its timer, cause inbound_email.
-    inbox["threads"] = [{"thread_id": "t1", "last_inbound_at": "2026-08-28T09:00:00+00:00"}]
-    woken = cli._process_wakes(resources)
-
-    assert resumed == [
-        {"run_id": "run-1", "cause": "inbound_email", "note": "waiting on a reply"}
-    ]
-    assert woken[0]["cause"] == "inbound_email"
-    assert cli._pending_wake_timers(resources.store) == {}
-
-    # The cursor advanced: the same mail wakes nothing twice.
-    resources.store.save_knowledge(
-        WAKE_TIMERS_NAMESPACE, {"run-2": {"wake_at": time.time() + 3600}}
-    )
-    assert cli._process_wakes(resources) == []
+    assert resumed == [] and listed == []
 
 
 def test_email_check_failure_does_not_kill_the_cycle(tmp_path):

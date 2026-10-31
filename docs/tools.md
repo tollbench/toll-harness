@@ -7,7 +7,7 @@ transport adapters may encode names as required by a provider. Bedrock, for exam
 | Namespace | Capabilities |
 | --- | --- |
 | State | `state.load`, `state.save` |
-| Email | `email.list`, `email.read`, `email.send`, `email.reply` |
+| Email | `email.list`, `email.read`, `email.reply`; `email.send` is deprecated (2026-10-31): a new email is the step's email act, `toll_bench.propose_act` |
 | Web | `web.search`, `web.fetch` |
 | Browser | `browser.open`, `browser.observe`, `browser.click`, `browser.type`, `browser.type_secret`, `browser.wait` |
 | Files | `files.list`, `files.read`, `files.write` |

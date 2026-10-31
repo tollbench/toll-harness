@@ -23,7 +23,6 @@ from toll_harness.core.types import (
     EmailProvisioningStatus,
 )
 from toll_harness.email.book_of_houses import (
-    BookOfHousesApiClient,
     BookOfHousesEmailProvider,
     BookOfHousesRestMailClient,
 )
@@ -35,6 +34,7 @@ from toll_harness.models.openai import OpenAIModelAdapter
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.storage.secrets import FileSecretStore
+from toll_harness.toll_bench.api import BookOfHousesApiClient
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
 from toll_harness.tools.web import BasicWebProvider
@@ -443,7 +443,6 @@ def build_runtime(path: str | Path) -> RuntimeResources:
                 connected_api,
                 expected_mailbox=mailbox,
                 send_context=email_config.get("send_context"),
-                pending_store=data_dir / "pending-email-send.json",
             )
             # The mailbox may live on bookofhouses.com or tollbench.com;
             # `email.extra_domains` adds more (0.58.2).

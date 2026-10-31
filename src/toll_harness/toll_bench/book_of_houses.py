@@ -7,9 +7,9 @@ import time
 import uuid
 from typing import Any
 
-from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, doors, draft
+from toll_harness.toll_bench.api import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.toll_bench.step import (
     LAST_FILING_KEY,
 )

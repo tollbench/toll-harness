@@ -29,7 +29,6 @@ from toll_harness.config import (
 )
 from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
-from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.fleet import market_target_key
 from toll_harness.loop_guard import LoopGuard
 from toll_harness.loop_guard import fingerprint as loop_fingerprint
@@ -68,6 +67,7 @@ from toll_harness.service import (
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft
+from toll_harness.toll_bench.api import BookOfHousesApiError
 from toll_harness.toll_bench.draft import APPROACH_DIALS, DraftLoop
 from toll_harness.toll_bench.step import (
     FORMS_TURNED_OFF,
@@ -865,10 +865,8 @@ _DEAL_STEP_INSTRUCTION = (
     "reason (toll_bench.withdraw_act_declaration). If the person sends it back, "
     "read their note on the step thread and file a corrected act. Never write "
     "'click Approve to send' or 'from your mailbox' to the person: Approve on a "
-    "document does not send anything. If confirmed_email_send_receipt is present "
-    "below, the platform sent it already: file that receipt as evidence and do not "
-    "send again. Do not call it inbox delivery unless the receipt explicitly "
-    "confirms inbox delivery. WAIT (rule 216): once the act has gone out -- or "
+    "document does not send anything. Do not call it inbox delivery unless the "
+    "receipt explicitly confirms inbox delivery. WAIT (rule 216): once the act has gone out -- or "
     "once you have asked any outside person or provider for something -- and "
     "nothing can move until they answer, call toll_bench.wait_outside with on, "
     "who, and what in one plain sentence. Never sit silent at agent_working "
@@ -1171,7 +1169,6 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.post_check_in",
                 "toll_bench.reply_step_message",
                 "toll_bench.read_finalist_answers",
-                "email.send",
                 "email.reply",
             }
         )
@@ -1870,44 +1867,6 @@ def _attention_cycle(
                 continue
         _remaining.append(item)
     obligations = _remaining
-    deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
-    email_provider = resources.runtime.email_provider
-    mail_client = getattr(email_provider, "client", None)
-    if deal_obligation and hasattr(mail_client, "configure_send_context"):
-        try:
-            mail_client.configure_send_context(
-                proposal_id=str(deal_obligation.get("proposal_id") or ""),
-                step_id=str(deal_obligation.get("step_id") or ""),
-            )
-        except RuntimeError:
-            # A pending email approval parked on a *different* deal step must not
-            # freeze work on this one. Resolving the parked send is the person's
-            # move; defer this deal step for this cycle instead of crashing the
-            # whole watch iteration.
-            _LOGGER.warning(
-                "Deferring deal step %s: another step has a pending email approval",
-                deal_obligation.get("step_id"),
-            )
-            obligations = [item for item in obligations if item is not deal_obligation]
-            deal_obligation = None
-    has_unanswered_message = any(item.get("kind") == "unanswered_message" for item in obligations)
-    resumed_email = (
-        mail_client.resume_pending_send()
-        if (not has_unanswered_message and _tool_enabled(resources, "email.send")
-            and hasattr(mail_client, "resume_pending_send"))
-        else None
-    )
-    if resumed_email and resumed_email.get("status") == "pending_human_approval":
-        # Parked on a human: nothing changes at machine speed. Slow the loop
-        # instead of spinning the attention/resume pair every interval.
-        return {
-            "ok": True,
-            "reachability": reachability,
-            "attention_count": len(obligations),
-            "email": resumed_email,
-            "retry_after_seconds": 60.0,
-            "run": None,
-        }
     # Per-obligation dispatch: hand the model ONE obligation with only the
     # instruction and tools that obligation needs. The watch loop returns for
     # the next obligation on its next cycle.
@@ -2037,7 +1996,6 @@ def _attention_cycle(
                 {
                     "obligation": obligation,
                     "current_step": step_state,
-                    "confirmed_email_send_receipt": resumed_email,
                     "previous_attempt_failure": previous_failure,
                     "the_bench_refused": refused_before,
                 },
@@ -2986,9 +2944,10 @@ def _process_market_opportunities(
 
 
 # Worker-side wake state. Timers live in WAKE_TIMERS_NAMESPACE (written by the
-# wake.set_timer tool); the inbound-mail cursor lives here. Both ride the same
-# knowledge table as everything else, so they survive worker restarts.
-_EMAIL_WAKE_NAMESPACE = "__email_wake__"
+# wake.set_timer tool), in the same knowledge table as everything else, so
+# they survive worker restarts. 0.74.0: new inbound mail no longer wakes a
+# parked run; a reply owed on a deal reaches the agent on its step
+# (`owed_replies`), through the attention feed.
 
 
 def _pending_wake_timers(store: Any) -> dict[str, Any]:
@@ -3021,58 +2980,14 @@ def _earliest_wake_at(resources: Any) -> float | None:
     return min(values) if values else None
 
 
-def _new_inbound_email_marker(resources: Any) -> str | None:
-    """Return a marker when mail arrived since the last cycle, else None.
-
-    Poll-bound, not push: this piggybacks on the existing watch cadence (one
-    check per cycle through the provider's thread listing, which itself rides
-    the ETag-cached proposals call), so a new message is noticed at most one
-    poll interval after it lands. The cursor is the newest last_inbound_at
-    seen; the first observation only baselines it so history never wakes
-    anything.
-    """
-    store = getattr(resources, "store", None)
-    provider = getattr(getattr(resources, "runtime", None), "email_provider", None)
-    if store is None or provider is None:
-        return None
-    try:
-        threads = provider.list(limit=50)
-    except Exception:  # noqa: BLE001 - a mail hiccup must not kill the watch
-        _LOGGER.warning("Inbound email check failed", exc_info=True)
-        return None
-    latest = max(
-        (
-            str(thread.get("last_inbound_at") or "")
-            for thread in threads
-            if isinstance(thread, dict)
-        ),
-        default="",
-    )
-    state = store.load_knowledge(_EMAIL_WAKE_NAMESPACE)
-    cursor = state.get("cursor") if isinstance(state, dict) else None
-    if cursor is None:
-        store.save_knowledge(_EMAIL_WAKE_NAMESPACE, {"cursor": latest})
-        return None
-    if latest and latest > str(cursor):
-        store.save_knowledge(_EMAIL_WAKE_NAMESPACE, {"cursor": latest})
-        return latest
-    return None
-
-
 def _process_wakes(resources: Any) -> list[dict[str, Any]]:
-    """Resume parked runs: due wake.set_timer timers, or new inbound mail.
-
-    New inbound mail wakes every parked run (cause inbound_email) because a
-    parked run is one that chose to wait, and the mail may be the reply it is
-    waiting for; a due timer wakes only its own run (cause timer). A timer is
+    """Resume parked runs whose wake.set_timer timer is due. A timer is
     cleared before its run is resumed, so a run that parks itself again keeps
-    its fresh timer.
-    """
+    its fresh timer."""
     store = getattr(resources, "store", None)
     runtime = getattr(resources, "runtime", None)
     if store is None or runtime is None:
         return []
-    inbound_marker = _new_inbound_email_marker(resources)
     timers = _pending_wake_timers(store)
     now = time.time()
     woken: list[dict[str, Any]] = []
@@ -3080,9 +2995,7 @@ def _process_wakes(resources: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             _clear_wake_timer(store, run_id)
             continue
-        if inbound_marker is not None:
-            cause = "inbound_email"
-        elif entry.get("wake_at") is not None and now >= float(entry["wake_at"]):
+        if entry.get("wake_at") is not None and now >= float(entry["wake_at"]):
             cause = "timer"
         else:
             continue
@@ -3273,8 +3186,8 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
             cycle += 1
             woken: list[dict[str, Any]] = []
             try:
-                # Wake parked runs first: due timers and new inbound mail are
-                # obligations of this worker, checked on the same poll cadence.
+                # Wake parked runs first: due timers are obligations of this
+                # worker, checked on the same poll cadence.
                 woken = _process_wakes(resources)
                 result = _process_market_attention(
                     resources,

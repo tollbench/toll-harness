@@ -362,7 +362,6 @@ _BROAD_PATHS = (
     "_process_wakes",
     "_process_market_attention",
     "_report_worker_status",
-    "_new_inbound_email_marker",
     "_earliest_wake_at",
 )
 
@@ -726,52 +725,6 @@ def test_unanswered_step_message_runs_before_pending_email_resume():
 
     assert result["ok"] is True
     assert resumed == []
-
-
-@pytest.mark.parametrize(("enabled", "expect_resume"), [([], False), (["email.send"], True)])
-def test_pending_email_on_other_step_defers_instead_of_crashing(enabled, expect_resume):
-    # A pending email approval parked on another step does not crash this cycle.
-    # It may resume only while email.send is configured.
-    resumed = []
-
-    class MailClient:
-        def configure_send_context(self, **_kwargs):
-            raise RuntimeError("A different deal step has an unresolved pending email send")
-
-        def resume_pending_send(self):
-            resumed.append(True)
-            return {"status": "pending_human_approval"}
-
-    toll_bench = SimpleNamespace(
-        ensure_reachable=lambda: {"ok": True},
-        attention=lambda wait: {
-            "attention": [
-                {
-                    "kind": "deal_step",
-                    "deal_id": "d1",
-                    "proposal_id": "p1",
-                    "step_id": "step-B",
-                }
-            ]
-        },
-    )
-    runtime = SimpleNamespace(
-        email_provider=SimpleNamespace(client=MailClient()),
-        enabled_tools=enabled,
-        start=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("must not invoke model")
-        ),
-    )
-    resources = SimpleNamespace(
-        toll_bench=toll_bench, runtime=runtime, agent_identity=None
-    )
-
-    result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    # The blocked deal step is deferred and no model run is triggered.
-    assert resumed == ([True] if expect_resume else [])
-    assert (result.get("email", {}).get("status") == "pending_human_approval") is expect_resume
 
 
 def test_idle_market_scan_exposes_only_bidding_tools_and_one_bounded_set():

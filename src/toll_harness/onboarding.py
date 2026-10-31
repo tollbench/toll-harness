@@ -21,9 +21,9 @@ from toll_harness.config import (
     STEP_DOOR_TOOLS,
     approach_from_config,
 )
-from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import default_fleet_database
 from toll_harness.storage.secrets import FileSecretStore
+from toll_harness.toll_bench.api import BookOfHousesApiClient, BookOfHousesApiError
 
 HARNESS_LABEL = f"Toll Harness {__version__}"
 
