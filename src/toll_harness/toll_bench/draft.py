@@ -930,6 +930,17 @@ def example_plan(answer: Any) -> Any:
 # is said in the ask as guidance only and is never enforced or cut here.
 PROPOSAL_TITLE_MAX = 120
 PROPOSAL_BODY_MAX = 600
+# What the bench says the paragraph takes since contract 4.1.55: up to 400
+# characters, longer TRIMMED at a word (never refused). The 600 above stays as
+# the cut for an older bench that still refuses past it.
+PROPOSAL_BODY_SAID = 400
+# A PASS IS AN ANSWER (contract 4.1.55): {"decline": "<one line>"} on the
+# proposal door answers 200, and the want leaves this agent's open list. The
+# line is trimmed at a word by the bench past this.
+DECLINE_MAX = 280
+# The provider's answer when the free validate door refused and nothing was
+# filed (0.74.0: no "filing anyway").
+REFUSED_AT_VALIDATE = "proposal_refused_at_validate"
 PROPOSAL_LINKS_MIN = 1
 PROPOSAL_LINKS_MAX = 3
 PROPOSAL_QUESTIONS_MAX = 3
@@ -1102,11 +1113,11 @@ PROPOSAL_INSTRUCTION = (
     "again: the title says what you offer, the headline is the few words on "
     "their card. Longer is trimmed at a word and the answer says what was "
     "cut; an empty one is refused.\n"
-    f"`pitch_body` -- ONE paragraph, up to {PROPOSAL_BODY_MAX} characters: "
+    f"`pitch_body` -- ONE paragraph, up to {PROPOSAL_BODY_SAID} characters: "
     "what they get and roughly how, the way your approach does it. THIS IS "
     "YOUR STRATEGY; there is no other place for it.\n"
-    "`odds` -- your honest chance this person ends up with the thing, between "
-    "0 and 1.\n"
+    "`odds` -- your honest chance this person ends up with the thing, a "
+    "fraction strictly between 0 and 1 (0.35, never 35, never 0).\n"
     "`total_ask_cents` -- what you charge, in whole cents, inside the want's "
     "budget.\n"
     f"`research_links` -- REQUIRED, {PROPOSAL_LINKS_MIN} to "
@@ -1148,8 +1159,11 @@ PROPOSAL_INSTRUCTION = (
     "`step_estimate` -- your first guess at the plan you would write if "
     'picked: {"total": 7, "you": 2}, how many steps in all and how many of '
     "them need the person (0 up to total). It follows your approach too.\n"
-    f"A paragraph over {PROPOSAL_BODY_MAX} characters is REFUSED by the bench, "
-    "not trimmed, so count and stay inside it; do not pad it.\n"
+    f"A paragraph over {PROPOSAL_BODY_SAID} characters is trimmed at a word by "
+    "the bench; do not pad it.\n"
+    "A PASS IS AN ANSWER: if this want is not one you can deliver or should "
+    'bid on, answer only {"decline": "<one line: why>"} -- no other field, '
+    "no penalty.\n"
     'Answer, approach first: {"approach": {"risk": "...", "finish": "...", '
     '"path": "..."}, "pitch_title": "...", "headline": "...", '
     '"pitch_body": "...", "odds": <your honest chance, more than 0 and less '
@@ -1179,6 +1193,48 @@ HEADLINE_INSTRUCTION = (
     "you offer, the headline is the few words on their card. "
     'Answer with nothing else: {"headline": "..."}'
 )
+
+
+UNREADABLE_AGAIN = (
+    "Your last reply could not be read: {why}. Answer with ONE JSON object "
+    "and nothing else.\n"
+)
+
+PROPOSAL_REPAIR_INSTRUCTION = (
+    "The bench's free validate door read your proposal and filed nothing. "
+    "`the_bench_refused` is its own words, row by row. Answer with the whole "
+    "proposal again, the same fields as JSON, changing only what those rows "
+    "name. If this want is not one you should bid on after all, answer only "
+    '{"decline": "<one line: why>"}.'
+)
+# The keys of a refusal row the repair ask carries: the door's own words.
+REFUSAL_ROW_KEYS = ("code", "rej", "field", "path", "detail", "message", "fix",
+                    "say", "accepted", "example")
+
+
+def decline_of(answer: Any) -> str | None:
+    """The one line of a pass, or None. `{"decline": "why"}`, or the older
+    `{"decline": true, "reason": "why"}` / `{"no_bid": ...}` shapes."""
+    if not isinstance(answer, dict):
+        return None
+    value = answer.get("decline", answer.get("no_bid"))
+    if value in (None, False, "", [], {}):
+        return None
+    reason = value if isinstance(value, str) else answer.get("reason")
+    line = " ".join(str(reason or "").split())
+    return line[:DECLINE_MAX] or "No reason given."
+
+
+def refusal_rows(refusal: Any) -> list[dict[str, Any]]:
+    """The door's rows on a refused proposal, each in its own words."""
+    rows: list[dict[str, Any]] = []
+    problems = refusal.get("problems") if isinstance(refusal, dict) else None
+    for row in problems or []:
+        if isinstance(row, dict):
+            kept = {key: row[key] for key in REFUSAL_ROW_KEYS if row.get(key) not in (None, "")}
+            if kept:
+                rows.append(kept)
+    return rows
 
 
 def headline_length(proposal: Any) -> int:
@@ -1859,7 +1915,19 @@ def rounds_left(answer: dict[str, Any]) -> int | None:
     return int(left) if isinstance(left, (int, float)) else None
 
 
+def heat_filings_of(answer: Any) -> dict[str, Any] | None:
+    """`heat_filings` {used, left, cap} on a heat copy's plan door answer
+    (contract 4.1.50), else None."""
+    value = answer.get("heat_filings") if isinstance(answer, dict) else None
+    return value if isinstance(value, dict) else None
+
+
 def _spent(answer: dict[str, Any]) -> bool:
+    """No more writes: the bench's rounds are used up, or on a heat copy its
+    plan filings are (0.74.0)."""
+    heat = heat_filings_of(answer)
+    if heat is not None and isinstance(heat.get("left"), (int, float)) and heat["left"] <= 0:
+        return True
     return rounds_left(answer) == 0
 
 
@@ -2142,6 +2210,7 @@ class DraftLoop:
             "ready": bool(answer.get("ready")),
             "used": rounds.get("used"),
             "left": rounds.get("left"),
+            "heat_filings": heat_filings_of(answer),
             "next_fix": fix.get("path"),
             # THE LEGACY CODES LIVE HERE AND NOWHERE ELSE (contract 4.0): a
             # log line is where a person looks a fault up, and a prompt is not.
@@ -2155,16 +2224,20 @@ class DraftLoop:
         if fixed:
             line["bench_fixed"] = fixed
         self.trail.append(line)
+        heat = line["heat_filings"]
+        # On a heat copy the budget that matters is the plan filings, not the
+        # rounds (the board's "rounds=1/63" told nobody anything).
+        budget = (f"heat filings {heat.get('used')}/{heat.get('cap')} ({heat.get('left')} left)"
+                  if heat else f"rounds={line['used']}/{rounds.get('cap')}")
         self.log.info(
-            "draft loop %s target=%s round=%d on=%s remaining=%s rounds=%s/%s "
+            "draft loop %s target=%s round=%d on=%s remaining=%s %s "
             "next_fix=%s (%s)%s",
             kind,
             target_id,
             self.rounds,
             what,
             line["remaining"],
-            line["used"],
-            rounds.get("cap"),
+            budget,
             line["next_fix"],
             line["problem"],
             " CLOSED" if line["closed"] else (" READY" if line["ready"] else ""),
@@ -2483,15 +2556,20 @@ class DraftLoop:
             # the choice rather than a prefix nobody is charged less for.
             payload["the_rules"] = SHORT_FRONT_DOOR
         slot_notes: list[str] = []
-        proposal = read_proposal(
-            self._ask(
-                with_own_means(PROPOSAL_INSTRUCTION, self.own_means),
-                payload,
-                "proposal",
-                head=self._head(),
-            ),
-            slot_notes,
-        )
+        instruction = with_own_means(PROPOSAL_INSTRUCTION, self.own_means)
+        answer = self._ask(instruction, payload, "proposal", head=self._head())
+        proposal = read_proposal(answer, slot_notes)
+        if (decline_of(answer) is None and not proposal.get("pitch_title")
+                and not proposal.get("pitch_body")):
+            # ONE MORE TRY WITH THE PARSER'S WORDS (0.74.0): an unreadable
+            # reply is asked once more, saying what could not be read.
+            why = self._what_was_wrong(answer, "pitch_title or pitch_body")
+            answer = self._ask(UNREADABLE_AGAIN.format(why=why) + instruction, payload,
+                               "proposal (unreadable, again)", head=self._head())
+            proposal = read_proposal(answer, slot_notes)
+        declined = decline_of(answer)
+        if declined is not None:
+            return self._decline(target_id, declined, file)
         if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
             return self._gave_up(
                 target_id,
@@ -2581,6 +2659,22 @@ class DraftLoop:
             }
         filed = self.provider.submit_proposal(target_id, proposal, idempotency_key)
         filed = filed if isinstance(filed, dict) else {}
+        if not filed.get("ok") and filed.get("error") == REFUSED_AT_VALIDATE:
+            repaired = self._repair(target_id, brief, proposal, filed)
+            if isinstance(repaired, str):
+                return self._decline(target_id, repaired, file)
+            if repaired is not None:
+                proposal = repaired
+                filed = self.provider.submit_proposal(target_id, proposal, idempotency_key)
+                filed = filed if isinstance(filed, dict) else {}
+                if not filed.get("ok") and filed.get("error") == REFUSED_AT_VALIDATE:
+                    self.log.warning(
+                        "proposal for target=%s: the door refused the repaired proposal "
+                        "too; nothing filed, recorded here (%s)",
+                        target_id,
+                        "; ".join(str(row.get("code") or row.get("rej") or "?")
+                                  for row in refusal_rows(filed)),
+                    )
         fixed = self._note_bench_fixed(target_id, "bid", filed)
         out: dict[str, Any] = {
             "ok": bool(filed.get("ok")),
@@ -2622,6 +2716,66 @@ class DraftLoop:
                 out["error"],
                 self._preview(out["message"]),
             )
+        return out
+
+    def _repair(
+        self, target_id: str, brief: Any, proposal: dict[str, Any], refusal: dict[str, Any]
+    ) -> dict[str, Any] | str | None:
+        """ONE small repair ask carrying the door's own rows (H3, 0.74.0).
+
+        The validate door is free and files nothing, so its words ride one
+        more ask and the answer goes back to it; only what passes is filed.
+        A string back is a pass (the model declined); None is no usable
+        answer, and the refusal stands as the record."""
+        rows = refusal_rows(refusal)
+        if not rows:
+            return None
+        payload: dict[str, Any] = {
+            "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
+            "your_proposal": proposal,
+            "the_bench_refused": rows,
+        }
+        if refusal.get("bench_fixed"):
+            payload["bench_fixed"] = refusal["bench_fixed"]
+        answer = self._ask(PROPOSAL_REPAIR_INSTRUCTION, payload, "proposal repair",
+                           head=self._head())
+        declined = decline_of(answer)
+        if declined is not None:
+            return declined
+        fixed = read_proposal(answer)
+        if not fixed.get("pitch_title") and not fixed.get("pitch_body"):
+            self.log.warning("proposal for target=%s: the repair ask came back unreadable "
+                             "(%s); nothing filed", target_id, self.last_reply)
+            return None
+        merged = {**proposal, **fixed}
+        self.log.info("proposal for target=%s: one repair ask on the door's %d row(s)",
+                      target_id, len(rows))
+        return self._fit_the_body(target_id, merged)
+
+    def _decline(self, target_id: str, reason: str, file: bool) -> dict[str, Any]:
+        """A PASS IS AN ANSWER (contract 4.1.55). The bench is told, and the
+        caller marks the want reviewed so nothing more is asked on it. A bench
+        without the decline door still gets the local record."""
+        out: dict[str, Any] = {
+            "ok": True,
+            "filed": False,
+            "declined": True,
+            "reason": reason,
+            "kind": "bid",
+            "rounds": 0,
+            "model_calls": self.calls,
+            "trail": self.trail,
+        }
+        sender = getattr(self.provider, "decline_target", None)
+        if file and callable(sender):
+            answer = sender(target_id, reason)
+            out["response"] = answer
+            if not (isinstance(answer, dict) and answer.get("declined")):
+                out["declined_locally"] = True
+        else:
+            out["declined_locally"] = True
+        self.log.info("proposal for target=%s: declined (%s)%s", target_id, reason,
+                      " -- recorded here only" if out.get("declined_locally") else "")
         return out
 
     def _the_row_slots(

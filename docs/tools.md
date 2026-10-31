@@ -47,6 +47,17 @@ tools never covered are reached: the named question, operator help, a failed ste
 repeat item, a flow material, a connector's tools. Every onboarded tool list carries both tools;
 a hand-cut list is left as written.
 
+THE BID ROAD RELAYS THE BENCH (0.74.0). A pass is an answer: a model that answers
+`{"decline": "<one line>"}` is sent to the bench's decline door (contract 4.1.55) and the want is
+marked reviewed, so nothing more is asked on it; a bench without that door keeps the local record.
+The free validate door is asked before filing, and only what passes is filed: when it names a
+problem, its rows ride ONE repair ask, the answer goes back to the free door, and a proposal it
+still refuses is recorded and never filed. An unreadable reply gets one more ask carrying the
+parser's words. A want whose brief says it is not open (`bidding.state`, or a closed brief, contract
+4.1.60) ends before any model call, a heat invitation (`everyone_post_invited`) is bid on that
+cycle and first, a bench 5xx never rides the next ask as the model's failure, and a step ask reply
+that writes its one tool call as JSON text is read as that call.
+
 A PROPOSAL IS EIGHT FIELDS AND ONE CALL (rule 243, bench contract 3.15; `headline` added in
 4.0.12): `pitch_title`, `headline` (up to 40 characters, the short title the person's card wears
 once you are picked; longer is trimmed at a word, empty is refused), `pitch_body`, `odds`,

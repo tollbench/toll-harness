@@ -1901,7 +1901,10 @@ def _market_freshness(target: dict[str, Any]) -> str:
 
 def _market_scan_candidates(
     resources: Any,
+    invited: Any = (),
 ) -> tuple[int, list[dict[str, Any]], list[tuple[str, str, str | None]]]:
+    """The wants to bid on this scan. `invited` (H3, 0.74.0) are the targets a
+    heat invitation names this cycle: they go first, past the rotation."""
     global _MARKET_BRIEF_OFFSET
     response = resources.toll_bench.list_targets()
     targets = list(response.get("targets") or [])
@@ -1933,6 +1936,9 @@ def _market_scan_candidates(
             continue
         eligible.append(target)
     eligible.sort(key=_market_freshness, reverse=True)
+    invited = {str(target_id) for target_id in invited or () if target_id}
+    if invited:
+        eligible.sort(key=lambda target: str(target.get("target_id") or "") not in invited)
     # A cached board can briefly list a card whose direct brief has closed.
     # Confirm the door before handing any candidate to a model, and continue
     # past a refused newest card instead of starving the rest of the board.
@@ -1943,7 +1949,7 @@ def _market_scan_candidates(
     if not callable(reader):
         reader = getattr(provider, "read_brief", None)
     selected = []
-    offset = _MARKET_BRIEF_OFFSET % len(eligible) if eligible else 0
+    offset = _MARKET_BRIEF_OFFSET % len(eligible) if eligible and not invited else 0
     ordered = eligible[offset:] + eligible[:offset]
     inspected = 0
     for target in ordered[:MARKET_SCAN_BRIEF_CHECK_LIMIT]:
@@ -1959,8 +1965,17 @@ def _market_scan_candidates(
                 # do not put this read refusal in the permanent round memo.
                 _LOGGER.info("Skipped closed board candidate %s before bidding", target_id)
                 continue
-            if not isinstance(answer, dict) or not isinstance(answer.get("brief"), dict):
-                raise ValueError(f"Brief for board candidate {target_id} was not a brief")
+            # THE BRIEF SAYS ITS OWN STATE (contract 4.1.60): a want closed to
+            # this agent answers 200 with `brief: null` and `bidding` naming
+            # why. Either way it ends here, before any model call (H3).
+            bidding = answer.get("bidding") if isinstance(answer, dict) else None
+            closed = (isinstance(bidding, dict)
+                      and str(bidding.get("state") or "open") != "open")
+            if closed or not isinstance(answer, dict) or not isinstance(answer.get("brief"), dict):
+                _LOGGER.info("Skipped board candidate %s before bidding: %s", target_id,
+                             (bidding or {}).get("reason") if isinstance(bidding, dict)
+                             else "no brief")
+                continue
             target = {**target, "_verified_brief": answer["brief"]}
         selected.append(target)
         if len(selected) >= MARKET_SCAN_CANDIDATE_LIMIT:
@@ -2110,7 +2125,8 @@ def _bid_through_the_draft_loop(
         idempotency_key=f"draft-bid-{target_id}-{brief.get('round') or target.get('round') or 1}",
         file=not dry_run,
     )
-    closed = isinstance(outcome, dict) and outcome.get("error") in _CLOSED_DOOR_ERRORS
+    closed = isinstance(outcome, dict) and (
+        outcome.get("error") in _CLOSED_DOOR_ERRORS or bool(outcome.get("declined")))
     if closed:
         _LOGGER.info(
             "the door closed want %s for this round (%s); not asked again "
@@ -2579,6 +2595,7 @@ def _process_market_opportunities(
     reachability: dict[str, Any],
     previous_failure: dict[str, Any] | None = None,
     dry_run: bool = False,
+    invited: Any = (),
 ) -> dict[str, Any]:
     """One model-powered pass over the open board.
 
@@ -2601,7 +2618,9 @@ def _process_market_opportunities(
             "proposal_tool_disabled": True,
             "run": None,
         }
-    target_count, candidates, review_targets = _market_scan_candidates(resources)
+    target_count, candidates, review_targets = (
+        _market_scan_candidates(resources, invited) if invited
+        else _market_scan_candidates(resources))
     guard = _loop_guard(resources)
     parked = []
     if guard is not None:
@@ -2998,6 +3017,26 @@ def _sync_default_approach(resources: Any) -> dict[str, Any] | None:
 _CARRIED_PAST_A_SCAN = ("notices", "loop_guard")
 
 
+def _invited_targets(result: Any) -> list[str]:
+    """The wants a heat invitation names on this cycle's notices (H3): the
+    bench's own `everyone_post_invited` items, which it already spreads one
+    free copy of a line per invited agent."""
+    notices = result.get("notices") if isinstance(result, dict) else None
+    return [str(item["target_id"]) for item in notices or []
+            if isinstance(item, dict) and item.get("kind") == "everyone_post_invited"
+            and item.get("target_id")]
+
+
+def _bench_was_down(result: Any) -> bool:
+    """A 5xx or no answer at all: the bench's trouble, never the model's
+    (H3). It does not ride previous_attempt_failure; the loop backs off."""
+    if not isinstance(result, dict) or result.get("ok"):
+        return False
+    status = result.get("status")
+    return (result.get("error") == "book_of_houses_api_error"
+            and isinstance(status, int) and (status == 0 or status >= 500))
+
+
 def command_market_watch(arguments: argparse.Namespace) -> int:
     proposals_only = bool(getattr(arguments, "proposals_only", False))
     if proposals_only and getattr(arguments, "no_bid", False):
@@ -3039,21 +3078,25 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                 # human action (payout onboarding, an email approval) or just
                 # finished a deal step. The only requirement is that the bench
                 # answered this cycle (reachability present).
+                # A HEAT INVITATION IS A BID THIS CYCLE (H3): an invited want
+                # does not wait for the scan's own cadence, and goes first.
+                invited = _invited_targets(result)
                 if (
                     bidding_enabled
                     and result.get("reachability")
-                    and time.monotonic() >= next_market_scan
+                    and (time.monotonic() >= next_market_scan or invited)
                 ):
                     scan_result = _process_market_opportunities(
                         resources,
                         result.get("reachability") or {},
                         previous_failure=previous_scan_failure,
                         dry_run=dry_run,
+                        **({"invited": invited} if invited else {}),
                     )
                     next_market_scan = time.monotonic() + scan_interval
                     previous_scan_failure = (
                         None
-                        if scan_result.get("ok")
+                        if scan_result.get("ok") or _bench_was_down(scan_result)
                         else (
                             (scan_result.get("run") or {}).get("result")
                             or {"error": scan_result.get("error")}
@@ -3096,6 +3139,10 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                 if (result.get("market_scan") or result.get("run") is not None
                         or result.get("dispatch")):
                     previous_failure = None
+            elif _bench_was_down(result):
+                # The bench's 5xx is nobody's attempt: no blame line rides the
+                # next dispatch, and the loop waits a minute before asking again.
+                result = {**result, "retry_after_seconds": 60.0}
             else:
                 run = result.get("run") or {}
                 previous_failure = run.get("result") or {

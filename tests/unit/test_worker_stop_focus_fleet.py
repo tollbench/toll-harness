@@ -200,7 +200,7 @@ def test_draft_loop_payload_carries_the_direction_only_when_set():
         loop._ask = ask.__get__(loop)
         loop.run("target-1", kind="bid", brief={"want": "a want"}, file=False)
     assert payloads[0]["lab_lead_standing_direction"] == "Only music wants."
-    assert "lab_lead_standing_direction" not in payloads[1]
+    assert "lab_lead_standing_direction" not in payloads[-1]
 
 
 # -- fleet registration ----------------------------------------------------------

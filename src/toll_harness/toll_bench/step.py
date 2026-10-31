@@ -48,6 +48,7 @@ from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
     PERSON_SAID_KEY,
     cached_input_tokens,
+    read_json_object,
     stable_prefix,
 )
 
@@ -263,6 +264,32 @@ def _definition(name: str, tool: dict[str, Any]) -> ToolDefinition:
     else:
         words = _form_words(tool["form"])
     return ToolDefinition(name, words, tool["schema"])
+
+
+_CALL_NAME_KEYS = ("name", "tool", "call", "function")
+_CALL_ARGUMENT_KEYS = ("arguments", "args", "input", "parameters")
+
+
+def tool_call_in_text(text: Any, tools: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """(name, arguments) when the text holds one JSON tool call naming a
+    tool on offer: {"name": t, "arguments": {...}}, {"tool": t, ...the
+    arguments...}, or {t: {...}}. None otherwise."""
+    parsed = read_json_object(text)
+    if not parsed:
+        return None
+    name = next((parsed[key] for key in _CALL_NAME_KEYS
+                 if isinstance(parsed.get(key), str)), None)
+    if name in tools:
+        arguments = next((parsed[key] for key in _CALL_ARGUMENT_KEYS
+                          if isinstance(parsed.get(key), dict)), None)
+        if arguments is None:
+            arguments = {k: v for k, v in parsed.items() if k not in _CALL_NAME_KEYS}
+        return str(name), arguments
+    if len(parsed) == 1:
+        ((only, value),) = parsed.items()
+        if only in tools and isinstance(value, dict):
+            return only, value
+    return None
 
 
 def _schema_problem(arguments: Any, schema: dict[str, Any]) -> str | None:
@@ -495,6 +522,18 @@ class StepAsk:
         named for what was wrong. Nothing runs before this says yes."""
         allowed = sorted(tools)
         calls = list(getattr(response, "tool_calls", None) or [])
+        if not calls:
+            # A JSON TOOL CALL WRITTEN AS PLAIN TEXT is read before the reply
+            # is called malformed (H3, 0.74.0): some models answer a tool
+            # schema with {"name": ..., "arguments": {...}} in the text.
+            found = tool_call_in_text(getattr(response, "text", ""), tools)
+            if found is not None:
+                name, arguments = found
+                problem = _schema_problem(arguments, tools[name]["schema"])
+                if problem:
+                    return {"ok": False, "error": "invalid_arguments",
+                            "failure": "invalid_arguments", "call": name, "message": problem}
+                return name, dict(arguments)
         if len(calls) != 1:
             empty = not calls and not str(getattr(response, "text", "") or "").strip()
             failure = "empty_response" if empty else "malformed_response"

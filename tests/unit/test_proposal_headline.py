@@ -24,9 +24,6 @@ from tests.unit.test_two_stages_r243_r245 import (
     _DoorApi,
     _FilingBench,
 )
-from toll_harness.toll_bench.book_of_houses import (
-    _is_a_missing_field,
-)
 from toll_harness.toll_bench.draft import (
     HEADLINE_EMPTY_PROBLEM,
     HEADLINE_EXAMPLE,
@@ -235,20 +232,17 @@ def test_the_small_road_sends_the_headline_to_both_doors():
     assert api.filed[0][1]["headline"] == SMALL["headline"]
 
 
-def test_the_doors_empty_headline_problem_is_a_missing_field_and_files_nothing():
+def test_the_doors_empty_headline_problem_files_nothing_and_says_it_in_its_own_words():
+    # 0.74.0: every problem the free door names stops the filing, and the
+    # rows come back as the door wrote them.
     row = {"code": "REJ-21", "field": "headline", "detail": HEADLINE_EMPTY_PROBLEM,
            "fix": "Write a headline."}
-    assert _is_a_missing_field(row) is True
-    # The pitch problem on the same code is not about a missing field.
-    assert _is_a_missing_field({"code": "REJ-21", "field": "pitch_body",
-                                "detail": "pitch_body is 617 characters"}) is False
-
     api = _DoorApi({"ok": False, "problems": [row], "trimmed": []})
     bare = {k: v for k, v in SMALL.items() if k != "headline"}
     out = _door_provider(api).submit_proposal("t-1", bare, "k-1")
 
-    assert out["ok"] is False and out["error"] == "proposal_incomplete"
-    assert HEADLINE_EMPTY_PROBLEM in out["message"]
+    assert out["ok"] is False and out["error"] == "proposal_refused_at_validate"
+    assert out["problems"] == [row]
     assert api.filed == []
 
 

@@ -239,21 +239,6 @@ HAR_FORMAT_SLUGS = frozenset(
 _MISSING_FIELD_CODES = frozenset({"REJ-31"})
 
 
-def _is_a_missing_field(problem: Any) -> bool:
-    if not isinstance(problem, dict):
-        return False
-    if str(problem.get("code") or "").strip() in _MISSING_FIELD_CODES:
-        return True
-    # THE HEADLINE (contract 4.0.12): the door raises one problem on it and
-    # only one, the empty hole (REJ-21, field `headline`); its length is a
-    # trim, never a problem. Nothing here writes the agent's words for it.
-    if str(problem.get("field") or problem.get("path") or "").strip() == "headline" and (
-        str(problem.get("code") or "").strip() == "REJ-21"
-        or "headline is empty" in str(problem.get("detail") or "")
-    ):
-        return True
-    return " is required" in str(problem.get("detail") or "")
-
 
 def _door_rows(problems: Any) -> list[dict[str, Any]]:
     """The door's own rows, whole (0.74.0: nothing capped or cut here)."""
@@ -566,7 +551,13 @@ class BookOfHousesTollBenchProvider:
         except Exception as error:  # noqa: BLE001 - a brief read never blocks a bid
             _LOGGER.warning("Brief read failed for target %s: %s", target_id, error)
             return {}
-        return response.get("brief") or {}
+        brief = response.get("brief") if isinstance(response, dict) else None
+        if not isinstance(brief, dict):
+            # Contract 4.1.60: a closed want answers 200, brief null, and says
+            # why on `bidding`; carried under a key no door reads.
+            bidding = response.get("bidding") if isinstance(response, dict) else None
+            return {"_bidding": bidding} if isinstance(bidding, dict) else {}
+        return brief
 
     def _door_is_published(self) -> bool:
         """Whether this bench publishes the free validate door. Probed once.
@@ -1157,6 +1148,23 @@ class BookOfHousesTollBenchProvider:
                 "message": error.message,
             }
 
+    def decline_target(
+        self, target_id: str, reason: str, idempotency_key: str = ""
+    ) -> dict[str, Any]:
+        """A PASS IS AN ANSWER (contract 4.1.55): `{"decline": "<one line>"}`
+        on the proposal door answers 200 {declined: true}, and the want leaves
+        this agent's open list. A bench without the door refuses it; that
+        answer comes back in its own words and the caller keeps the local
+        record."""
+        key = idempotency_key or "decline-" + hashlib.sha256(
+            f"{target_id}|{reason}".encode()).hexdigest()[:24]
+        try:
+            return self.api.submit_proposal(target_id, {"decline": str(reason)}, key)
+        except BookOfHousesApiError as error:
+            if 400 <= int(error.status or 0) < 500:
+                return self._door_refused(error)
+            raise
+
     def _the_small_proposal_at_the_door(
         self, target_id: str, proposal: dict[str, Any], brief: Any
     ) -> tuple[dict[str, Any], list[Any], dict[str, Any] | None]:
@@ -1209,39 +1217,30 @@ class BookOfHousesTollBenchProvider:
                 target_id,
                 ", ".join(str(row.get("path") or "?") for row in trims),
             )
-        missing = [row for row in problems if _is_a_missing_field(row)]
-        if missing:
-            _LOGGER.warning(
-                "Target %s: the door refuses this proposal for a required "
-                "field nothing here can fill in (%s); NOT filed -- a bid spent "
-                "on a certain refusal is the round",
-                target_id,
-                "; ".join(str(row.get("code") or "?") for row in missing),
-            )
-            return proposal, trims, {
-                "ok": False,
-                "error": "proposal_incomplete",
-                "terminal": False,
-                "problems": problems,
-                "message": (
-                    "Nothing was filed. The free validate door -- the same "
-                    "pipeline the filing door runs -- refuses this proposal "
-                    "for a required field: "
-                    + "; ".join(
-                        str(row.get("detail") or row.get("code") or "")
-                        for row in missing
-                    )[:600]
-                ),
-            }
         if problems:
+            # FILE ONLY WHAT PASSES (H3, 0.74.0). The validate door and the
+            # filing door run one pipeline, so a problem left here is a
+            # refusal there; nothing is filed "anyway". The rows go back in
+            # the door's own words, and the draft loop asks once to repair.
             _LOGGER.warning(
-                "Target %s: %d problem(s) left that this package cannot "
-                "change (%s); filing anyway so the door's own answer is the "
-                "record",
+                "Target %s: the free door still names %d problem(s) (%s); "
+                "nothing filed",
                 target_id,
                 len(problems),
                 ", ".join(str(row.get("code") or "?") for row in problems),
             )
+            return proposal, trims, {
+                "ok": False,
+                "error": draft.REFUSED_AT_VALIDATE,
+                "terminal": False,
+                "problems": problems,
+                "bench_fixed": door.get("bench_fixed") or [],
+                "message": (
+                    "Nothing was filed. The free validate door -- the same "
+                    "pipeline the filing door runs -- named what to change; its "
+                    "own words are on `problems`."
+                ),
+            }
         return proposal, trims, None
 
     def _one_fix_round(
@@ -1305,6 +1304,17 @@ class BookOfHousesTollBenchProvider:
                     ),
                 }
             raise
+        bidding = brief.get("_bidding") if isinstance(brief, dict) else None
+        if isinstance(bidding, dict) and str(bidding.get("state") or "open") != "open":
+            # Contract 4.1.60: a closed want's brief answers 200 with its reason.
+            return {
+                "ok": False,
+                "error": "target_not_open",
+                "terminal": True,
+                "bidding": bidding,
+                "message": str(bidding.get("message") or "This want is not open to this "
+                               "agent. No proposal was filed; do not retry it."),
+            }
         if draft.is_small_proposal(proposal):
             # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
             # There are no steps to repair and no blocks to merge -- but the

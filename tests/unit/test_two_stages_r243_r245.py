@@ -138,7 +138,7 @@ def test_the_proposal_ask_names_the_caps_and_asks_for_no_plan():
     )
 
     ask = model.invocations[0]["messages"][0].content[0]["text"]
-    assert "120 characters" in ask and "600 characters" in ask
+    assert "120 characters" in ask and "400 characters" in ask
     assert "no steps" in ask
     assert "30000" in ask.replace(" ", "")
     # The person's own sentence about HOW opens the ask.
@@ -147,11 +147,15 @@ def test_the_proposal_ask_names_the_caps_and_asks_for_no_plan():
 
 def test_a_proposal_with_no_words_files_nothing():
     bench = _FilingBench()
-    out = DraftLoop(_model({"odds": 0.5}), bench).run(
+    model = _model({"odds": 0.5}, {"odds": 0.5})
+    out = DraftLoop(model, bench).run(
         "t-1", kind="bid", brief={"want": "x"}, idempotency_key="k")
 
     assert out["ok"] is False and out["error"] == "no_proposal"
     assert bench.filed == []
+    # 0.74.0: one more try with the parser's words, never a third.
+    assert len(model.invocations) == 2
+    assert "could not be read" in model.invocations[1]["messages"][0].content[0]["text"]
 
 
 def test_the_eight_fields_are_read_and_everything_else_is_dropped():
@@ -626,24 +630,24 @@ def test_a_missing_required_field_is_never_filed():
     })
     out = _door_provider(api).submit_proposal("t-1", dict(SMALL, research_links=[]), "k")
     assert out["ok"] is False
-    assert out["error"] == "proposal_incomplete"
+    assert out["error"] == "proposal_refused_at_validate"
     assert out["terminal"] is False
-    assert "research_links is required" in out["message"]
+    assert "research_links is required" in out["problems"][0]["detail"]
     assert api.filed == []
 
 
-def test_a_problem_this_package_cannot_change_is_still_filed_anyway():
-    """The door's own answer is the record for anything we cannot touch -- a
-    thin pitch, a price the person will not take -- as long as the proposal is
-    complete."""
+def test_a_problem_left_at_the_free_door_is_never_filed():
+    """H3, 0.74.0: the validate door and the filing door are one pipeline, so
+    a problem left after the home mend is a refusal there; nothing is filed
+    anyway, and the rows come back for one repair ask."""
     api = _DoorApi({
         "ok": False,
         "problems": [{"code": "REJ-09", "detail": "the price is over the want's budget"}],
         "trimmed": [],
     })
     out = _door_provider(api).submit_proposal("t-1", dict(SMALL), "k")
-    assert out["ok"] is True
-    assert len(api.filed) == 1
+    assert out["ok"] is False and out["error"] == "proposal_refused_at_validate"
+    assert api.filed == []
 
 
 # ---------------------------------------------------------------------------
