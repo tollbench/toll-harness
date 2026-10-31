@@ -21,7 +21,6 @@ from toll_harness.onboarding import (
     load_config,
     registration_payload,
     secret_store,
-    suggest_intelligence_brand,
 )
 
 PROTOCOL = {"rules_version_hash": "rules-hash"}
@@ -42,29 +41,6 @@ class CapturingApi(FakeBookOfHousesApi):
         return super().register(payload, idempotency_key)
 
 
-@pytest.mark.parametrize(
-    ("model_id", "expected"),
-    [
-        ("claude-fable-5-1", ("Fable", "Anthropic")),
-        ("us.anthropic.claude-fable-5", ("Fable", "Anthropic")),
-        ("gpt-6-astra", ("Astra", "OpenAI")),
-        ("gpt-5.6-sol", ("Sol", "OpenAI")),
-        ("gpt-5.6-luna", ("Luna", "OpenAI")),
-        ("muse-spark", ("Muse", "Meta")),
-        ("grok-4.7", ("Grok", "xAI")),
-        ("grok4", ("Grok", "xAI")),
-        ("gemini-3-pro", ("Gemini", "Google")),
-        ("mistral.mistral-large-3-675b-instruct", None),
-        ("opus", None),
-        ("console-model", None),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_the_suggestion_is_read_off_the_model_id(model_id, expected):
-    assert suggest_intelligence_brand(model_id) == expected
-
-
 def _scripted_input(monkeypatch, answers):
     queue = list(answers)
     asked = []
@@ -80,7 +56,7 @@ def _scripted_input(monkeypatch, answers):
     return asked
 
 
-def test_plain_init_asks_the_brand_after_the_rail_with_the_suggestion_and_sends_it(
+def test_plain_init_asks_the_brand_after_the_rail_and_sends_it(
     tmp_path, monkeypatch
 ):
     api = CapturingApi()
@@ -99,10 +75,9 @@ def test_plain_init_asks_the_brand_after_the_rail_with_the_suggestion_and_sends_
             "Oak",  # agent name
             "C",  # Anthropic API key rail
             "claude-fable-5-1",  # model id
-            "",  # brand: take the suggestion
+            "Fable",  # brand, typed (0.74.0: no suggestion)
             "Oak Works",  # company
             "",  # mode
-            "",  # default approach (0.57.0, optional): Enter skips it
             "",  # connect
             "",  # agent email
             "https://example.com",
@@ -118,19 +93,19 @@ def test_plain_init_asks_the_brand_after_the_rail_with_the_suggestion_and_sends_
     assert cli.command_init(arguments) == 0
 
     brand_prompts = [p for p in asked if p.startswith(cli.INTELLIGENCE_BRAND_QUESTION)]
-    assert brand_prompts == [f"{cli.INTELLIGENCE_BRAND_QUESTION} [Fable]:\n> "]
+    assert brand_prompts == [f"{cli.INTELLIGENCE_BRAND_QUESTION}:\n> "]
     # Right after the rail's last question, before the company.
     assert asked.index(brand_prompts[0]) == 3
     assert "Company" in asked[4]
 
     config = load_config(finished["config_path"])
     assert config["agent"]["intelligence_brand"] == "Fable"
-    assert config["agent"]["intelligence_maker"] == "Anthropic"
+    assert config["agent"]["intelligence_maker"] is None
     for payload in (api.validated[0], api.registered[0]):
-        assert payload["intelligence"] == {"brand": "Fable", "maker": "Anthropic"}
+        assert payload["intelligence"] == {"brand": "Fable"}
         base_model = payload["system_record"]["base_models"][0]
         assert base_model["brand"] == "Fable"
-        assert base_model["maker"] == "Anthropic"
+        assert "maker" not in base_model
         assert base_model["model"] == "claude-fable-5-1"
     assert finished["result"]["status"] == WAITING_FOR_COMPANY_VERIFICATION
 
@@ -148,7 +123,7 @@ def test_plain_init_takes_a_typed_brand_as_given(tmp_path, monkeypatch):
     )
     asked = _scripted_input(
         monkeypatch,
-        ["Oak", "D", "gpt-5.2", "Nemotron", "Oak Works", "", "", "n"],
+        ["Oak", "D", "gpt-5.2", "Nemotron", "Oak Works", "", "n"],
     )
     arguments = cli.build_parser().parse_args(["init", str(tmp_path / "agent")])
 
@@ -243,13 +218,14 @@ def test_an_old_config_without_the_brand_still_loads_and_runs(tmp_path, monkeypa
     assert "brand" not in payload["system_record"]["base_models"][0]
 
 
-def test_an_old_config_registers_with_the_brand_its_model_id_names(tmp_path):
+def test_an_old_config_registers_with_no_guessed_brand(tmp_path):
+    # 0.74.0: nothing is read off the model id; the bench names the slot.
     config_path = _old_config(tmp_path, model_id="gpt-5.6-sol")
     api = CapturingApi()
 
     result = advance_connected_onboarding(config_path, approve_registration=True, api=api)
 
     assert result["status"] == WAITING_FOR_COMPANY_VERIFICATION
-    assert api.registered[0]["intelligence"] == {"brand": "Sol", "maker": "OpenAI"}
+    assert "intelligence" not in api.registered[0]
     # The stored config is left as it was; nothing is rewritten behind the operator.
     assert "intelligence_brand" not in load_config(config_path)["agent"]

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 import uuid
 from collections.abc import Callable
@@ -42,53 +41,18 @@ MODEL_ADAPTERS = ("bedrock", "anthropic", "openai", "claude_code", "codex", "ext
 # exact model version and the harness are recorded on the system record and
 # never ranked. The brand is free text, 1 to 40 characters.
 INTELLIGENCE_BRAND_MAX = 40
-# Suggestions only, read off the model id's words: (word, brand, maker). A
-# model id that names none of these gets no suggestion, never a guess.
-_BRAND_SUGGESTIONS = (
-    ("fable", "Fable", "Anthropic"),
-    ("astra", "Astra", "OpenAI"),
-    ("sol", "Sol", "OpenAI"),
-    ("luna", "Luna", "OpenAI"),
-    ("muse", "Muse", "Meta"),
-    ("grok", "Grok", "xAI"),
-    ("gemini", "Gemini", "Google"),
-)
-
-
-def suggest_intelligence_brand(model_id: str | None) -> tuple[str, str] | None:
-    """(brand, maker) the model id names, or None; `claude-fable-5-1` -> Fable."""
-    words = set(re.findall(r"[a-z]+", str(model_id or "").lower()))
-    for word, brand, maker in _BRAND_SUGGESTIONS:
-        if word in words:
-            return brand, maker
-    return None
-
-
-def intelligence_maker_for(brand: str | None) -> str | None:
-    """The maker of a brand the harness knows (case-insensitive), else None."""
-    wanted = str(brand or "").strip().lower()
-    for _word, known, maker in _BRAND_SUGGESTIONS:
-        if known.lower() == wanted:
-            return maker
-    return None
-
-
 def stated_intelligence(config: dict[str, Any]) -> tuple[str, str | None] | None:
-    """The agent's (brand, maker), or None when it has none.
+    """The agent's (brand, maker) as agent.yaml states them, or None.
 
     An agent.yaml written before the brand question has no
-    `agent.intelligence_brand`; it still loads and runs, and its brand is read
-    off the model id when the harness recognizes it.
+    `agent.intelligence_brand`; it still loads and runs, and registers with
+    no brand for the bench's validation to name (0.74.0: no guessing from
+    the model id).
     """
     agent = config.get("agent") or {}
     brand = str(agent.get("intelligence_brand") or "").strip()
     maker = str(agent.get("intelligence_maker") or "").strip() or None
-    if not brand:
-        suggestion = suggest_intelligence_brand((config.get("model") or {}).get("model_id"))
-        if suggestion is None:
-            return None
-        brand, maker = suggestion[0], maker or suggestion[1]
-    return brand, maker or intelligence_maker_for(brand)
+    return (brand, maker) if brand else None
 
 STANDARD_TOOLS = [
     "state.load",
@@ -312,7 +276,7 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         raise ValueError(
             f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer"
         )
-    maker = (answers.intelligence_maker or "").strip() or intelligence_maker_for(brand)
+    maker = (answers.intelligence_maker or "").strip() or None
     # The default approach is written as given; the bench judges its words.
     approach = approach_from_config({"strategy": {"approach": answers.approach}})
     agent_id = str(uuid.uuid4())

@@ -44,10 +44,8 @@ from toll_harness.onboarding import (
     advance_connected_onboarding,
     connect_registered_agent,
     create_configuration,
-    intelligence_maker_for,
     load_onboarding,
     save_onboarding,
-    suggest_intelligence_brand,
 )
 from toll_harness.onboarding import (
     load_config as load_onboarding_config,
@@ -458,35 +456,22 @@ INTELLIGENCE_BRAND_MISSING = (
 
 
 def _ask_intelligence_brand(model_id: str | None, *, required: bool) -> dict[str, str | None]:
-    """The one question after the model rail, pre-filled from the model id.
-
-    The bench ranks the company fielding the agent together with this brand;
-    the model version and the harness are recorded, never ranked. Only a new
-    registration needs it; an agent that already registered may leave it blank.
-    """
-    suggestion = suggest_intelligence_brand(model_id)
-    brand = _prompt(INTELLIGENCE_BRAND_QUESTION, default=suggestion[0] if suggestion else "")
+    """The one question after the model rail, answered as typed (0.74.0: no
+    guess from the model id). The bench ranks the company fielding the agent
+    together with this brand; only a new registration needs it."""
+    brand = _prompt(INTELLIGENCE_BRAND_QUESTION, default="")
     if not brand:
         if required:
             raise ValueError(INTELLIGENCE_BRAND_MISSING)
         return {"intelligence_brand": None, "intelligence_maker": None}
     if len(brand) > INTELLIGENCE_BRAND_MAX:
         raise ValueError(f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer")
-    return {"intelligence_brand": brand, "intelligence_maker": intelligence_maker_for(brand)}
+    return {"intelligence_brand": brand, "intelligence_maker": None}
 
 
-# THE DEFAULT APPROACH (0.57.0, optional). Steven, 2026-09-29: "we need to get
-# them to choose a strategy then design it based on that ... add that to the
-# onboarding process (optional)". One question after the operating mode; each
-# dial may be skipped, and skipping all three (the default) means no default:
-# the model picks per want. `--approach-risk/--approach-finish/--approach-path`
-# answer it without a prompt.
-APPROACH_QUESTION = (
-    "Give this agent a default approach for its proposals? (optional; it still "
-    "picks what fits each want)"
-)
-
-
+# THE DEFAULT APPROACH (0.57.0, optional): `--approach-risk/--approach-finish/
+# --approach-path` or agent.yaml `strategy.approach`. 0.74.0: init no longer
+# asks; skipping all three means the model picks per want.
 def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None:
     """The dials the init flags set, as written; None when no flag.
 
@@ -502,24 +487,6 @@ def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None
         given = True
         out[dial] = str(raw).strip()
     return out if given else None
-
-
-def _ask_default_approach(flagged: dict[str, str] | None) -> dict[str, str] | None:
-    """The flags' answer when there is one, else the one optional question."""
-    if flagged is not None:
-        return flagged or None
-    if not _yes_no(APPROACH_QUESTION, default=False):
-        return None
-    out: dict[str, str] = {}
-    for dial, words in APPROACH_DIALS.items():
-        pick = _choose(
-            f"Default {dial}",
-            [("", f"No default {dial} (picked per want)"), *((word, word) for word in words)],
-            default_key="",
-        )
-        if pick:
-            out[dial] = pick
-    return out or None
 
 
 def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
@@ -542,7 +509,7 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
     mode = _prompt("Operating mode", default="Autonomous").title()
     # Kept locally too: the bench registered this agent already, so the
     # default is the model's starting point on every proposal.
-    approach = _ask_default_approach(flagged)
+    approach = flagged
     answers = InitAnswers(
         # /me names the agent and the attribution its company once the token
         # is stored; these are placeholders until then.
@@ -609,7 +576,7 @@ def command_init(arguments: argparse.Namespace) -> int:
     brand = _ask_intelligence_brand(rail["model_id"], required=True)
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
-    approach = _ask_default_approach(flagged)
+    approach = flagged
     connect = _yes_no("Connect to Toll Bench / Book of Houses?", default=True)
     use_email = _yes_no("Use Book of Houses agent email?", default=True) if connect else False
     company_url = responsible_name = jurisdiction = verification_recipient = None
@@ -3486,8 +3453,7 @@ def build_parser() -> argparse.ArgumentParser:
             f"--approach-{dial}",
             metavar="WORD",
             help=(
-                f"Optional default approach, {dial} dial: {', '.join(words)}. "
-                "Any of the three approach flags skips the approach question."
+                f"Optional default approach, {dial} dial: {', '.join(words)}."
             ),
         )
     initialize.set_defaults(handler=command_init)

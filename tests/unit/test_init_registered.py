@@ -149,8 +149,8 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        # mode, then the optional default approach (0.57.0): Enter skips it.
-        ["F", "my-wrapper --flag 'two words'", "", "", "Grok", "", "", "Oak Works"],
+        # 0.74.0: no approach question; the mode is the last prompt before the company.
+        ["F", "my-wrapper --flag 'two words'", "", "", "Grok", "", "Oak Works"],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]
@@ -170,7 +170,7 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     # The brand question follows the rail; a registered agent keeps it locally.
     assert any(prompt.startswith(cli.INTELLIGENCE_BRAND_QUESTION) for prompt in asked)
     assert config["agent"]["intelligence_brand"] == "Grok"
-    assert config["agent"]["intelligence_maker"] == "xAI"
+    assert config["agent"]["intelligence_maker"] is None  # 0.74.0: no maker guessed
     # /me names no company, so init asked once, with no default.
     assert f"{onboarding_module.COMPANY_QUESTION}:\n> " in asked
     assert config["agent"]["company"] == "Oak Works"
@@ -326,7 +326,7 @@ def test_cli_registered_end_to_end_loads_through_the_identity_loader(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        ["F", "my-wrapper", "", "", "Grok", "", "", *answers],
+        ["F", "my-wrapper", "", "", "Grok", "", *answers],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]

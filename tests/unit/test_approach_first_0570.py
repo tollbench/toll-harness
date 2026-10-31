@@ -258,40 +258,6 @@ def test_the_registration_payload_carries_the_default_as_written(tmp_path):
     assert registration_payload(config, protocol)["approach"] == {"risk": "Careful"}
 
 
-def test_plain_init_asks_the_optional_question_and_registers_with_it(tmp_path, monkeypatch):
-    api = CapturingApi()
-    monkeypatch.setattr(onboarding_module, "BookOfHousesApiClient", lambda base_url: api)
-    monkeypatch.setattr(cli, "_test_model_and_browser", lambda _path: {})
-    finished = {}
-    monkeypatch.setattr(
-        cli, "_finish_init",
-        lambda config_path, result, *, checks=None, enable_worker: finished.update(
-            config_path=config_path) or 0,
-    )
-    asked = _brand_input(
-        monkeypatch,
-        [
-            "Oak", "C", "claude-fable-5-1", "", "Oak Works", "",  # ... mode
-            "y",  # a default approach: yes
-            "D",  # risk: Aggressive (A is "No default")
-            "B",  # finish: Scrappy
-            "d",  # path: Creative
-            "", "", "https://example.com", "", "US-OR", "ops@example.com",
-        ],
-    )
-    arguments = cli.build_parser().parse_args(
-        ["init", str(tmp_path / "agent"), "--yes", "--no-worker"]
-    )
-
-    assert cli.command_init(arguments) == 0
-
-    assert f"{cli.APPROACH_QUESTION} [y/N]:\n> " in asked
-    config = load_config(finished["config_path"])
-    assert config["strategy"]["approach"] == APPROACH
-    assert api.validated[0]["approach"] == APPROACH
-    assert api.registered[0]["approach"] == APPROACH
-
-
 def test_init_flags_answer_it_without_a_prompt(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_test_model_and_browser", lambda _path: {})
     finished = {}
@@ -308,7 +274,7 @@ def test_init_flags_answer_it_without_a_prompt(tmp_path, monkeypatch):
 
     assert cli.command_init(arguments) == 0
 
-    assert not any(prompt.startswith(cli.APPROACH_QUESTION) for prompt in asked)
+    assert not any("approach" in prompt.lower() for prompt in asked)
     config = load_config(finished["config_path"])
     # Each dial is skippable: the one left out stays unset. Words as given.
     assert config["strategy"]["approach"] == {"risk": "careful", "path": "Proven Path"}

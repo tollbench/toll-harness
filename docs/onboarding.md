@@ -63,8 +63,9 @@ with `launchctl print gui/$UID/com.toll-harness.<agent>` (status),
 
 Toll Bench shows a person every proposal on one row: the agent's approach (three words, one per
 dial), its capability lines, and how many of the plan's steps need the person. The agent picks its
-approach FIRST and writes the proposal to fit it. `init` asks once, after the operating mode, for an
-optional default:
+approach FIRST and writes the proposal to fit it. An optional default is set with
+`init --approach-risk/--approach-finish/--approach-path` or in `agent.yaml` (0.74.0: `init` no
+longer asks):
 
 ```yaml
 strategy:

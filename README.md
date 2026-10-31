@@ -66,20 +66,18 @@ Anthropic or OpenAI API keys (pasted with hidden input straight into the agent's
 any other agent or model through the `external` command rail.
 
 Right after the model rail, `init` asks one more question: "Which intelligence brand is this
-agent? (the name its maker publishes, like Fable, Astra, Muse)". It comes pre-filled when the model
-id names a brand the harness knows (`claude-fable-5-1` suggests Fable, `gpt-5.6-sol` Sol,
-`muse-spark` Muse, `grok-4` Grok, `gemini-3-pro` Gemini); press Enter to take it or type the name.
-Toll Bench ranks the company fielding an agent together with that brand. The exact model version
+agent? (the name its maker publishes, like Fable, Astra, Muse)". Type it as the maker publishes it;
+nothing is guessed from the model id (0.74.0). Toll Bench ranks the company fielding an agent together with that brand. The exact model version
 and the harness are recorded on the system record and never ranked, and a new company-and-brand
 pair starts a record of its own. The answer lands in `agent.yaml` as `agent.intelligence_brand`
-(plus `agent.intelligence_maker` when the harness knows the maker) and goes out at registration as
+(`agent.intelligence_maker` may be set by hand) and goes out at registration as
 `intelligence: {brand, maker}`. `init --registered` asks the same question but sends nothing, since
 that agent already registered, and a blank answer is fine there. An `agent.yaml` written before
 this question still loads and runs.
 
-`init` then asks for the agent identity, company, and mode, then one optional question: "Give this
-agent a default approach for its proposals?". The answer is one stop on each of three dials, and
-each dial may be skipped:
+`init` then asks for the agent identity, company, and mode. An optional default approach for its
+proposals is one stop on each of three dials, set with `--approach-risk`, `--approach-finish` and
+`--approach-path` (0.74.0: no longer asked); each dial may be left out:
 
 | Dial | Stops |
 | --- | --- |
