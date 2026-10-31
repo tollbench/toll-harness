@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.plan_door import a_row
 from toll_harness import cli
 from toll_harness.core.types import (
     AutonomyMode,
@@ -82,7 +81,6 @@ def test_scan_draft_road_still_files_when_submit_proposal_is_enabled(monkeypatch
 
 
 def test_market_scan_skips_closed_newest_brief_before_model_and_uses_next(monkeypatch):
-    cli._CLOSED_TARGET_MEMO.clear()
     brief_reads = []
     model_targets = []
     released = False
@@ -111,18 +109,14 @@ def test_market_scan_skips_closed_newest_brief_before_model_and_uses_next(monkey
         return {"brief": {"want": target_id}}
 
     resources.toll_bench.read_brief = read_brief
-    try:
-        result = cli._process_market_opportunities(resources, {"ok": True})
-        assert brief_reads == ["newer-held", "older-open"]
-        assert model_targets == [("older-open", "older-open")]
-        assert result["candidate_count"] == 1
-        assert not cli._CLOSED_TARGET_MEMO
-        released = True
-        cli._process_market_opportunities(resources, {"ok": True})
-        assert brief_reads[-1] == "newer-held"
-        assert model_targets[-1] == ("newer-held", "newer-held")
-    finally:
-        cli._CLOSED_TARGET_MEMO.clear()
+    result = cli._process_market_opportunities(resources, {"ok": True})
+    assert brief_reads == ["newer-held", "older-open"]
+    assert model_targets == [("older-open", "older-open")]
+    assert result["candidate_count"] == 1
+    released = True
+    cli._process_market_opportunities(resources, {"ok": True})
+    assert brief_reads[-1] == "newer-held"
+    assert model_targets[-1] == ("newer-held", "newer-held")
 
 
 def test_market_scan_does_not_model_on_only_closed_or_transient_brief(monkeypatch):
@@ -202,7 +196,7 @@ def test_plan_draft_loop_does_not_run_without_submit_informed_plan(monkeypatch):
     )
     obligation = {"kind": "file_informed_plan", "target_id": "t-1", "proposal_id": "p-1"}
 
-    planned = cli._file_the_informed_plan_from_draft(resources, obligation, {"ok": True}, 1, 5)
+    planned = cli._file_the_informed_plan_from_draft(resources, obligation, {"ok": True}, 1)
 
     assert planned is None
 
@@ -244,12 +238,10 @@ _UNREAD_STEP = {
 
 
 def test_step_ask_makes_no_disabled_call_and_takes_the_old_road(monkeypatch):
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
     resources, calls, model_calls = _step_ask_resources(["toll_bench.current_step"])
     obligation = {"kind": "unanswered_message", "deal_id": "deal-1", "step_id": "step-1"}
 
-    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1, 5)
+    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1)
 
     assert asked is None
     assert calls == []
@@ -257,12 +249,10 @@ def test_step_ask_makes_no_disabled_call_and_takes_the_old_road(monkeypatch):
 
 
 def test_step_ask_still_answers_when_the_reply_tool_is_enabled(monkeypatch):
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
     resources, calls, _model_calls = _step_ask_resources(["toll_bench.reply_step_message"])
     obligation = {"kind": "unanswered_message", "deal_id": "deal-1", "step_id": "step-1"}
 
-    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1, 5)
+    asked = cli._the_step_ask(resources, obligation, _UNREAD_STEP, {"ok": True}, 1)
 
     assert asked["ok"] is True
     assert [name for name, _args in calls] == ["reply_step_message"]
@@ -284,21 +274,6 @@ def test_outcome_form_needs_both_outcome_and_check_in_tools():
     assert narrowed["submission"]["actions"] == []
     assert "worker_status" not in narrowed["submission"]
     assert len(state["submission"]["actions"]) == 2
-
-
-@pytest.mark.parametrize(("enabled", "posted"), [([], False), (["toll_bench.post_check_in"], True)])
-def test_brake_blocker_obeys_post_check_in(enabled, posted):
-    posts = []
-    resources = SimpleNamespace(
-        runtime=SimpleNamespace(enabled_tools=enabled),
-        toll_bench=SimpleNamespace(post_check_in=lambda *args: posts.append(args) or {"ok": True}),
-    )
-    record = {"code": "stand_in", "road": 3, "sentence": "Refused."}
-
-    cli._post_the_blocker(resources, {"deal_id": "deal-1", "step_id": "step-1"}, {}, record)
-
-    assert bool(posts) is posted
-    assert record["blocker_posted"] is posted
 
 
 def test_market_watch_keeps_running_after_failed_cycle(monkeypatch):
@@ -1380,280 +1355,6 @@ def _future_iso(minutes: int) -> str:
     )
 
 
-def _idle_step_payload(
-    *, next_due_iso=None, unread=0, message_ids=(), agent_message_ids=(), overdue=False
-):
-    return {
-        "ok": True,
-        "current_step": {"id": "s-1", "state": "agent_working", "outcome_filed_at": None},
-        "step_thread": {
-            "messages": [{"id": mid, "who": "person"} for mid in message_ids]
-            + [{"id": mid, "who": "agent"} for mid in agent_message_ids],
-            "unread_from_person": unread,
-            "unanswered_elsewhere": [],
-        },
-        "latest_work_pulse": {
-            "overdue": overdue,
-            "next_due_at": next_due_iso or _future_iso(25),
-        },
-        "released_materials_count": 0,
-        "access": {"grants": []},
-        "deal": {"id": "d1", "status": "signed"},
-    }
-
-
-class _IdleMailClient:
-    def configure_send_context(self, **_kwargs):
-        pass
-
-    def resume_pending_send(self):
-        return None
-
-
-def _idle_resources(attention_items, current_step_payload, observed, fetched=None):
-    def current_step(deal_id):
-        if fetched is not None:
-            fetched.append(deal_id)
-        return current_step_payload
-
-    toll_bench = SimpleNamespace(
-        ensure_reachable=lambda: {"ok": True},
-        attention=lambda wait: {"attention": attention_items},
-        list_proposals=lambda: {"proposals": [{"id": "p-free", "total_ask_cents": 0}]},
-        current_step=current_step,
-    )
-    runtime = SimpleNamespace(
-        email_provider=SimpleNamespace(client=_IdleMailClient()),
-        enabled_tools=[
-            "state.load",
-            "state.save",
-            "result.complete",
-            "result.fail",
-            "toll_bench.current_step",
-            "toll_bench.file_outcome",
-            "toll_bench.read_finalist_answers",
-            "toll_bench.submit_informed_plan",
-        ],
-    )
-
-    def start(goal, mode):
-        observed["goal"] = goal
-        return _completed_run(goal, mode)
-
-    runtime.start = start
-    return SimpleNamespace(toll_bench=toll_bench, runtime=runtime, agent_identity=None)
-
-
-def test_idle_deal_step_is_skipped_and_the_plan_request_gets_the_cycle():
-    # A deal step the model already inspected in exactly this state, with no
-    # pulse due and nothing new from the person, must NOT be re-dispatched --
-    # and the finalist plan request behind it must get the cycle instead of
-    # starving (the 2026-08-29 Porsche plan sat ~55 minutes behind one).
-    cli._IDLE_STEP_MEMO.clear()
-    payload = _idle_step_payload()
-    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(payload)
-    observed = {}
-    resources = _idle_resources(
-        [
-            {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
-            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
-        ],
-        payload,
-        observed,
-    )
-    attention = iter(
-        [
-            {
-                "attention": [
-                    {
-                        "kind": "deal_step",
-                        "deal_id": "d1",
-                        "proposal_id": "p1",
-                        "step_id": "s-1",
-                    },
-                    {
-                        "kind": "file_informed_plan",
-                        "proposal_id": "p-free",
-                        "target_id": "t-1",
-                    },
-                ]
-            },
-            {
-                "attention": [
-                    {
-                        "kind": "deal_step",
-                        "deal_id": "d1",
-                        "proposal_id": "p1",
-                        "step_id": "s-1",
-                    }
-                ]
-            },
-        ]
-    )
-    resources.toll_bench.attention = lambda wait: next(attention)
-
-    result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    assert '"p-free"' in observed["goal"]
-    assert '"kind":"file_informed_plan"' in observed["goal"]
-    assert '"s-1"' not in observed["goal"]
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_idle_deal_step_is_redispatched_when_its_pulse_comes_due():
-    # The r100 pulse cadence still gets its one run per window: an otherwise
-    # idle step with a due (or overdue) pulse is dispatched, not skipped.
-    cli._IDLE_STEP_MEMO.clear()
-    payload = _idle_step_payload(overdue=True)
-    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(payload)
-    observed = {}
-    resources = _idle_resources(
-        [
-            {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
-            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
-        ],
-        payload,
-        observed,
-    )
-
-    result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    assert '"s-1"' in observed["goal"]
-    assert '"kind":"deal_step"' in observed["goal"]
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_idle_deal_step_wakes_when_the_person_writes():
-    # Any change the person can cause -- a new message, an unread count --
-    # breaks the fingerprint match and the step is dispatched immediately.
-    cli._IDLE_STEP_MEMO.clear()
-    quiet = _idle_step_payload()
-    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(quiet)
-    spoken = _idle_step_payload(unread=1, message_ids=("m-1",))
-    observed = {}
-    resources = _idle_resources(
-        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
-        spoken,
-        observed,
-    )
-
-    result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    assert '"s-1"' in observed["goal"]
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_noop_deal_step_run_records_the_idle_memo():
-    # After a dispatched deal-step run completes, the pre-run fingerprint is
-    # remembered so the next identical fetch can be skipped. A step that later
-    # leaves the attention feed is forgotten.
-    cli._IDLE_STEP_MEMO.clear()
-    payload = _idle_step_payload()
-    observed = {}
-    fetched = []
-    resources = _idle_resources(
-        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
-        payload,
-        observed,
-        fetched=fetched,
-    )
-
-    first = cli._process_market_attention(resources, wait=20)
-
-    assert first["ok"] is True
-    assert cli._IDLE_STEP_MEMO.get("s-1") == cli._deal_step_fingerprint(payload)
-
-    # Same state again: the step is now skipped without a model run.
-    observed.pop("goal", None)
-    second = cli._process_market_attention(resources, wait=20)
-    assert second["ok"] is True
-    assert second["run"] is None
-    assert "goal" not in observed
-
-    # The step leaves attention: its memo entry is pruned.
-    resources.toll_bench.attention = lambda wait: {"attention": []}
-    cli._process_market_attention(resources, wait=20)
-    # An empty attention list returns before the filter; prune via a cycle
-    # that still carries one unrelated obligation.
-    resources.toll_bench.attention = lambda wait: {
-        "attention": [
-            {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"}
-        ]
-    }
-    cli._process_market_attention(resources, wait=20)
-    assert "s-1" not in cli._IDLE_STEP_MEMO
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_agent_reposting_its_own_ask_does_not_defeat_the_idle_skip():
-    # A model that re-posts the same question to the person every run (one
-    # posted the identical ask 20 times on 2026-08-29) must still read as
-    # idle: its own messages are output, not actionable input, so the
-    # fingerprint ignores them and the spam loop is capped at the pulse
-    # cadence instead of the poll interval.
-    cli._IDLE_STEP_MEMO.clear()
-    before = _idle_step_payload(agent_message_ids=("a-1",))
-    cli._IDLE_STEP_MEMO["s-1"] = cli._deal_step_fingerprint(before)
-    after = _idle_step_payload(agent_message_ids=("a-1", "a-2"))
-    observed = {}
-    resources = _idle_resources(
-        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
-        after,
-        observed,
-    )
-
-    result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    assert result["run"] is None
-    assert "goal" not in observed
-
-    # But a PERSON message with the same shape wakes the step immediately.
-    spoken = _idle_step_payload(message_ids=("m-1",), agent_message_ids=("a-1", "a-2"))
-    resources2 = _idle_resources(
-        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
-        spoken,
-        observed,
-    )
-    result2 = cli._process_market_attention(resources2, wait=20)
-    assert result2["ok"] is True
-    assert '"s-1"' in observed["goal"]
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_limit_reached_run_still_records_the_idle_memo():
-    # A run that exhausts its iteration budget spent a full run over exactly
-    # this state; re-running identical input wanders identically at full
-    # price. limit_reached therefore records the memo like a completed run.
-    # (A FAILED run still records nothing -- adapter errors are transient.)
-    cli._IDLE_STEP_MEMO.clear()
-    payload = _idle_step_payload()
-    observed = {}
-    resources = _idle_resources(
-        [{"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}],
-        payload,
-        observed,
-    )
-
-    def start_limited(goal, mode):
-        import dataclasses
-
-        observed["goal"] = goal
-        return dataclasses.replace(
-            _completed_run(goal, mode), status=RunStatus.LIMIT_REACHED
-        )
-
-    resources.runtime.start = start_limited
-
-    cli._process_market_attention(resources, wait=20)
-
-    assert cli._IDLE_STEP_MEMO.get("s-1") == cli._deal_step_fingerprint(payload)
-    cli._IDLE_STEP_MEMO.clear()
-
-
 def test_pulse_due_resolves_doubt_toward_dispatch():
     # Missing, overdue, or unreadable pulse schedules all read as "due".
     assert cli._deal_step_pulse_due({"latest_work_pulse": None}) is True
@@ -1844,240 +1545,18 @@ def _plan_obligation(**extra):
     }
 
 
-def test_identical_failures_back_off_and_stall_the_obligation(monkeypatch):
-    # One selected agent failed this same dispatch 663 times in 11 hours on a
-    # flat 65-second delay. The delay now doubles and the key stops dispatching.
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    withdrawals = []
-    resources = _breaker_resources(
-        _plan_obligation(),
-        failure={"reason": "Model invocation failed", "error": "ValidationException: toolUse"},
-        withdrawals=withdrawals,
-    )
-
-    first = cli._process_market_attention(resources, wait=0, stall_threshold=3)
-    second = cli._process_market_attention(resources, wait=0, stall_threshold=3)
-    third = cli._process_market_attention(resources, wait=0, stall_threshold=3)
-
-    assert [step["breaker"]["consecutive_failures"] for step in (first, second, third)] == [1, 2, 3]
-    assert [step["retry_after_seconds"] for step in (first, second, third)] == [120.0, 240.0, 480.0]
-    assert first["breaker"]["stalled"] is False
-    assert third["breaker"]["stalled"] is True
-    assert third["breaker"]["error"] == "ValidationException: toolUse"
-
-    # Stalled: the fourth cycle never reaches the model at all.
-    fourth = cli._process_market_attention(resources, wait=0, stall_threshold=3)
-
-    assert fourth["ok"] is True
-    assert fourth["run"] is None
-    assert fourth["stalled_obligations"] == 1
-    # AND NOTHING IS WITHDRAWN (0.38.4). See the test below for the night that
-    # forced it.
-    assert withdrawals == []
-
-
-def test_a_stalled_plan_request_never_withdraws_the_persons_chosen_agent(monkeypatch):
-    """WHAT FORCED IT (production, 2026-09-11). The bench refused a selected
-    agent's plan five times on an UNCHANGED state for a bench-side bug -- a
-    refusal on a step the bench had stamped itself -- and this package went
-    straight to withdrawing the bid with cause `cannot_deliver`. It only failed
-    because the call carried no idempotency key. Had it worked, the person
-    would have watched their chosen agent withdraw over a mistake that was not
-    the agent's, and every held bid on the want would have returned to the
-    table for nothing.
-
-    A refusal the agent cannot clear is not proof the agent cannot deliver."""
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    withdrawals = []
-    resources = _breaker_resources(
-        _plan_obligation(),
-        failure={"error": "REJ-16 on a step the bench stamped"},
-        withdrawals=withdrawals,
-    )
-
-    for _ in range(5):
-        result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
-
-    assert withdrawals == []
-    assert result["breaker"]["stalled"] is True
-    blocked = result["breaker"]["blocked"]
-    assert blocked["withdrawn"] is False
-    assert blocked["blocked"] is True
-    assert blocked["attempts"] == 5
-    assert "REJ-16" in blocked["refusal"]
-    assert blocked["waiting_seconds"] == cli._PLAN_STALL_WAIT_SECONDS
-
-
-def test_the_stall_lifts_when_the_bench_is_holding_a_different_draft(monkeypatch):
-    """Tonight the bench FIXED the document server-side and the unit sat
-    stalled anyway until someone restarted it. The draft read costs no round,
-    so a stalled plan is re-tested every cycle."""
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    named = a_row("form.steps.0", step=1, slot="hand_over_line",
-                  say="Step 1: the hand-over line is empty.", codes=["REJ-16"])
-    held = {"ok": True, "problems": [named], "next_fix": named,
-            "draft": {"steps": [{"title": "one"}]}}
-    goals = []
-    resources = _breaker_resources(
-        _plan_obligation(),
-        failure={"error": "REJ-16 on a step the bench stamped"},
-        goals=goals,
-        draft=lambda: held,
-    )
-
-    for _ in range(2):
-        cli._process_market_attention(resources, wait=0, stall_threshold=2)
-    stalled = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-    assert stalled["run"] is None
-    assert stalled["stalled_obligations"] == 1
-    dispatched = len(goals)
-
-    # The bench fixes its own step. Nothing about the obligation changed.
-    held = {"ok": True, "problems": [], "next_fix": None, "ready": True,
-            "draft": {"steps": [{"title": "one"}], "_bench_fixed": ["step 1 rebuilt"]}}
-
-    after = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-
-    assert after["run"] is not None
-    assert len(goals) == dispatched + 1
-
-
-def test_a_stalled_plan_tries_again_after_the_bounded_wait(monkeypatch):
-    """Not forever, and not until a restart: ten minutes is the ceiling on a
-    stall somebody is waiting behind."""
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    goals = []
-    resources = _breaker_resources(
-        _plan_obligation(),
-        failure={"error": "REJ-16 on a step the bench stamped"},
-        goals=goals,
-        draft={"ok": True, "problems": [
-            a_row("form.steps.0", step=1, slot="hand_over_line",
-                  say="Step 1: the hand-over line is empty.", codes=["REJ-16"])]},
-    )
-
-    for _ in range(2):
-        cli._process_market_attention(resources, wait=0, stall_threshold=2)
-    assert cli._process_market_attention(
-        resources, wait=0, stall_threshold=2
-    )["run"] is None
-    dispatched = len(goals)
-
-    # Ten minutes later, with the same draft and the same obligation.
-    key = cli._obligation_key(_plan_obligation())
-    cli._OBLIGATION_FAILURES[key]["stalled_at"] -= cli._PLAN_STALL_WAIT_SECONDS + 1
-
-    after = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-
-    assert after["run"] is not None
-    assert len(goals) == dispatched + 1
-
-
-def test_a_plan_blocked_on_a_deal_puts_the_refusal_on_the_check_in(monkeypatch):
-    """Where the plan road HAS a blocker to post, the person reads why nothing
-    is moving. Where it has none -- a plan the person is still waiting on, with
-    no deal yet -- the log is the record and nothing is invented."""
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    pulses = []
-    resources = _breaker_resources(
-        _plan_obligation(deal_id="deal-9"),
-        failure={"error": "REJ-16 on a step the bench stamped"},
-    )
-    resources.toll_bench.post_check_in = lambda deal_id, pulse, key: (
-        pulses.append((deal_id, pulse, key)) or {"ok": True}
-    )
-    resources.runtime.enabled_tools.append("toll_bench.post_check_in")
-
-    for _ in range(2):
-        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-
-    assert result["breaker"]["blocked"]["blocker_posted"] is True
-    assert pulses[0][0] == "deal-9"
-    assert "refusing this plan" in pulses[0][1]["blocker"]
-    assert len(pulses[0][1]["blocker"]) <= 280
-
-
-def test_a_plan_with_no_deal_posts_nothing_and_says_nothing_it_cannot(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    resources = _breaker_resources(
-        _plan_obligation(),
-        failure={"error": "REJ-16 on a step the bench stamped"},
-    )
-
-    for _ in range(2):
-        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-
-    assert "blocker_posted" not in result["breaker"]["blocked"]
-
-
-def test_a_stalled_deal_step_stalls_without_withdrawing(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-    withdrawals = []
-    obligation = {"kind": "deal_step", "deal_id": "deal-1", "step_id": "step-1"}
-    resources = _breaker_resources(
-        obligation, failure={"error": "boom"}, withdrawals=withdrawals
-    )
-    resources.toll_bench.current_step = lambda deal_id: {"current_step": {"id": "step-1"}}
-
-    for _ in range(2):
-        result = cli._process_market_attention(resources, wait=0, stall_threshold=2)
-
-    assert result["breaker"]["stalled"] is True
-    assert withdrawals == []
-
-
-def test_a_different_failure_starts_the_count_over(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    errors = ["first failure", "first failure", "a different failure"]
-    obligation = _plan_obligation()
-
-    def next_resources():
-        return _breaker_resources(obligation, failure={"error": errors.pop(0)})
-
-    first = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
-    second = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
-    third = cli._process_market_attention(next_resources(), wait=0, stall_threshold=5)
-
-    assert [step["breaker"]["consecutive_failures"] for step in (first, second, third)] == [1, 2, 1]
-
-
-def test_a_success_clears_the_breaker(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    obligation = _plan_obligation()
-    failing = _breaker_resources(obligation, failure={"error": "boom"})
-
-    cli._process_market_attention(failing, wait=0, stall_threshold=5)
-    successful = _breaker_resources(obligation)
-    attention = iter(
-        [
-            {"attention": [dict(obligation)]},
-            {"attention": []},
-        ]
-    )
-    successful.toll_bench.attention = lambda wait: next(attention)
-    cli._process_market_attention(successful, wait=0, stall_threshold=5)
-    after = cli._process_market_attention(failing, wait=0, stall_threshold=5)
-
-    assert after["breaker"]["consecutive_failures"] == 1
-    assert cli._OBLIGATION_FAILURES[cli._obligation_key(obligation)]["count"] == 1
-
-
 def test_completed_plan_run_is_failure_while_filing_obligation_remains(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     obligation = _plan_obligation()
     resources = _breaker_resources(obligation)
 
-    result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
+    result = cli._process_market_attention(resources, wait=0)
 
     assert result["ok"] is False
     assert result["plan_filing_verified"] is False
-    assert result["breaker"]["consecutive_failures"] == 1
-    assert "without filing the informed plan" in result["breaker"]["error"]
+    assert "without filing the informed plan" in result["error"]
 
 
 def test_completed_plan_run_succeeds_after_server_clears_obligation(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     obligation = _plan_obligation()
     resources = _breaker_resources(obligation)
     attention = iter(
@@ -2088,39 +1567,16 @@ def test_completed_plan_run_succeeds_after_server_clears_obligation(monkeypatch)
     )
     resources.toll_bench.attention = lambda wait: next(attention)
 
-    result = cli._process_market_attention(resources, wait=0, stall_threshold=5)
+    result = cli._process_market_attention(resources, wait=0)
 
     assert result["ok"] is True
     assert result["plan_filing_verified"] is True
-    assert cli._obligation_key(obligation) not in cli._OBLIGATION_FAILURES
-
-
-def test_a_changed_obligation_payload_lifts_the_stall(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    goals = []
-    stalled = _breaker_resources(_plan_obligation(), failure={"error": "boom"})
-
-    for _ in range(2):
-        cli._process_market_attention(stalled, wait=0, stall_threshold=2)
-    skipped = cli._process_market_attention(stalled, wait=0, stall_threshold=2)
-
-    changed = _breaker_resources(
-        _plan_obligation(why="the person answered your question"),
-        failure={"error": "boom"},
-        goals=goals,
-    )
-    result = cli._process_market_attention(changed, wait=0, stall_threshold=2)
-
-    assert skipped["run"] is None
-    assert result["run"] is not None
-    assert len(goals) == 1
 
 
 def test_an_unknown_kind_is_a_notice_and_costs_no_model_call(monkeypatch):
     """0.68.0: an attention item this build has no action for is reported on
     the cycle's `notices` and never dispatched (until then it ran a full model
     call with every obligation's tools, which could do nothing about it)."""
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
     goals = []
     obligation = {
         "kind": "some_future_kind",
@@ -2136,14 +1592,6 @@ def test_an_unknown_kind_is_a_notice_and_costs_no_model_call(monkeypatch):
     assert goals == []
     assert result["notices"] == [{"kind": "some_future_kind", "target_id": "target-1"}]
     assert result["retry_after_seconds"] == 60.0
-
-
-def test_stall_threshold_comes_from_the_agent_configuration(tmp_path):
-    config = tmp_path / "agent.yaml"
-    config.write_text("version: 1\nfleet:\n  stall_threshold: 9\n")
-
-    assert cli._configured_stall_threshold(config) == 9
-    assert cli._configured_stall_threshold(tmp_path / "missing.yaml") == 5
 
 
 def _assert_dated_cycles(printed):

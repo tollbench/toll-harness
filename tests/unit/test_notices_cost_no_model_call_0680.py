@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from toll_harness import cli
 
 NOTICES = [
@@ -44,12 +42,6 @@ def _resources(items, started):
                            store=None)
 
 
-@pytest.fixture(autouse=True)
-def _clean(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-
-
 def test_a_cycle_of_notices_alone_costs_no_model_call():
     started: list = []
     result = cli._process_market_attention(_resources(NOTICES, started), wait=0)
@@ -73,7 +65,6 @@ def test_a_real_obligation_beside_the_notices_still_runs(monkeypatch):
         return {"ok": True, "run": None, "dispatch": {"kind": "step_ask"}}
 
     monkeypatch.setattr(cli, "not_the_agents_move", lambda *a: None)
-    monkeypatch.setattr(cli, "_refusal_brake_holds", lambda *a: None)
     monkeypatch.setattr(cli, "_step_ask_available", lambda *a: True)
     monkeypatch.setattr(cli, "_the_step_ask", step_ask)
     obligation = {"kind": "deal_step", "deal_id": "d-9", "step_id": "s-9"}

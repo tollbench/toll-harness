@@ -226,8 +226,6 @@ def test_the_cli_hands_the_whole_text_to_every_asker(monkeypatch):
     monkeypatch.setattr(cli, "_brief_for_the_loop", lambda *_a, **_k: {"want": "x"})
     monkeypatch.setattr(cli, "_act_kinds_for_the_loop", lambda _r: None)
     monkeypatch.setattr(cli, "_lab_lead_direction", lambda _r: "")
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
     resources = SimpleNamespace(
         runtime=SimpleNamespace(
             model=None,
@@ -242,11 +240,11 @@ def test_the_cli_hands_the_whole_text_to_every_asker(monkeypatch):
 
     cli._bid_through_the_draft_loop(resources, {"target_id": "t-1"}, {}, 1, [], True)
     cli._file_the_informed_plan_from_draft(
-        resources, {"target_id": "t-1", "proposal_id": "p-1"}, {"ok": True}, 1, 5)
+        resources, {"target_id": "t-1", "proposal_id": "p-1"}, {"ok": True}, 1)
     cli._the_step_ask(
         resources, {"kind": "deal_step", "deal_id": "d-1", "step_id": "s-1"},
         {"current_step": {"id": "s-1", "number": 2}, "deal": {"id": "d-1"}},
-        {"ok": True}, 1, 5)
+        {"ok": True}, 1)
 
     assert seen == [("bid", SKILL), ("plan", SKILL), ("step", SKILL)]
 

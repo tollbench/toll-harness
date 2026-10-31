@@ -92,8 +92,8 @@ def test_rewording_a_row_does_not_change_what_it_is_called():
 
 
 def test_the_plan_fingerprint_holds_still_when_only_the_words_move():
-    """`_plan_draft_fingerprint` and `_loop_state` both hash `fix_key`, so a
-    reworded row must not read as progress -- that is what lifts a stall."""
+    """`_loop_state` hashes `fix_key`, so a reworded row must not read as
+    progress -- a new state is what buys the guard's three more tries."""
     answer = reply("email_step")
 
     class Bench:
@@ -108,7 +108,6 @@ def test_the_plan_fingerprint_holds_still_when_only_the_words_move():
             self.toll_bench = Bench(payload)
 
     obligation = {"kind": "file_informed_plan", "target_id": "t-1"}
-    before = cli._plan_draft_fingerprint(Resources(answer), obligation)
     moved = dict(answer)
     moved["problems"] = [
         dict(entry, say="different words", accepted=list(reversed(entry["accepted"])),
@@ -116,9 +115,6 @@ def test_the_plan_fingerprint_holds_still_when_only_the_words_move():
         for entry in problems_of(answer)
     ]
     moved["next_fix"] = moved["problems"][0]
-    after = cli._plan_draft_fingerprint(Resources(moved), obligation)
-    assert before == after
-
     state_before = cli._loop_state(Resources(answer), obligation)
     state_after = cli._loop_state(Resources(moved), obligation)
     assert state_before == state_after
@@ -134,9 +130,9 @@ def test_a_cleared_row_does_move_the_fingerprint():
             )()
 
     obligation = {"kind": "file_informed_plan", "target_id": "t-1"}
-    before = cli._plan_draft_fingerprint(Resources(answer), obligation)
+    before = cli._loop_state(Resources(answer), obligation)
     fewer = only(answer, *problems_of(answer)[1:])
-    assert cli._plan_draft_fingerprint(Resources(fewer), obligation) != before
+    assert cli._loop_state(Resources(fewer), obligation) != before
 
 
 # ---------------------------------------------------------------------------
@@ -226,11 +222,6 @@ def test_a_whole_run_on_a_paused_door_sends_nothing():
     assert out["model_calls"] == 0 and out["rounds"] == 0
 
 
-def test_a_pause_parks_the_want_for_the_round_instead_of_failing_it():
-    assert DRAFT_PAUSED in cli._TERMINAL_DOOR_ERRORS
-    cli._CLOSED_TARGET_MEMO.clear()
-    target = {"target_id": "t", "round": 4}
-    assert cli._remember_closed(target, DRAFT_PAUSED)
-    assert cli._door_closed_this_round(target)
-    assert not cli._door_closed_this_round(dict(target, round=5))
-    cli._CLOSED_TARGET_MEMO.clear()
+def test_a_pause_is_not_a_close():
+    # The door opens again by itself, so the want is not marked done.
+    assert DRAFT_PAUSED not in cli._CLOSED_DOOR_ERRORS

@@ -98,7 +98,6 @@ DEAL_STEP = {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id
 
 
 def test_the_persons_words_on_a_platform_step_still_dispatch():
-    cli._IDLE_STEP_MEMO.clear()
     observed = {}
     payload = _payload(
         acts=[{"act_id": "a1", "kind": "meeting", "state": "held"}],
@@ -115,7 +114,6 @@ def test_the_persons_words_on_a_platform_step_still_dispatch():
 
 
 def test_a_working_step_with_no_act_standing_still_dispatches_once():
-    cli._IDLE_STEP_MEMO.clear()
     observed = {}
     resources = _resources([DEAL_STEP], _payload(), observed)
 
@@ -125,14 +123,12 @@ def test_a_working_step_with_no_act_standing_still_dispatches_once():
     assert '"s-1"' in observed["goal"]
     # The prefilter read is the H6 prefetch: the step was read once, not twice.
     assert resources.toll_bench.fetched == ["d1"]
-    cli._IDLE_STEP_MEMO.clear()
 
 
 def test_the_plan_request_behind_a_step_that_is_not_the_agents_turn_gets_the_cycle():
     """0.74.0: whose move a step is, is the bench's `turn`. A step whose turn
     is the person's starts no model run, and the plan request behind it gets
     the cycle."""
-    cli._IDLE_STEP_MEMO.clear()
     observed = {}
     payload = _payload(turn={"whose_turn": "human", "why": "The person holds the Allow"})
     plan = {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"}

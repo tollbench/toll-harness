@@ -368,7 +368,7 @@ def test_the_cli_hands_the_own_means_to_the_proposal_and_plan_loops(monkeypatch)
 
     cli._bid_through_the_draft_loop(resources, {"target_id": "t-1"}, {}, 1, [], True)
     cli._file_the_informed_plan_from_draft(
-        resources, {"target_id": "t-1", "proposal_id": "p-1"}, {"ok": True}, 1, 5)
+        resources, {"target_id": "t-1", "proposal_id": "p-1"}, {"ok": True}, 1)
 
     assert seen == [("bid", DJ), ("plan", DJ)]
 
@@ -385,8 +385,6 @@ def test_the_cli_hands_the_own_means_to_the_step_ask(monkeypatch):
             return {"ok": False, "road": "agentic", "why": "test"}
 
     monkeypatch.setattr(cli, "StepAsk", Ask)
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-    monkeypatch.setattr(cli, "_STEP_REFUSALS", {})
     monkeypatch.setattr(cli, "_act_kinds_for_the_loop", lambda _r: None)
     resources = SimpleNamespace(
         runtime=SimpleNamespace(model=None, enabled_tools=[], own_means=DJ),
@@ -397,6 +395,6 @@ def test_the_cli_hands_the_own_means_to_the_step_ask(monkeypatch):
 
     asked = cli._the_step_ask(
         resources, {"kind": "deal_step", "deal_id": "d-1", "step_id": "s-1"},
-        step, {"ok": True}, 1, 5)
+        step, {"ok": True}, 1)
 
     assert asked is None and seen == [DJ]

@@ -169,7 +169,7 @@ def test_an_operator_reply_turns_the_kept_read_stale(monkeypatch):
     )
     cli._file_the_informed_plan_from_draft(
         resources, {"kind": "file_informed_plan", "target_id": "t-1", "proposal_id": "p-1"},
-        {"ok": True}, 1, 3, already_read=dict(NO_DRAFT),
+        {"ok": True}, 1, already_read=dict(NO_DRAFT),
     )
     assert seen["already_read"] is None
 

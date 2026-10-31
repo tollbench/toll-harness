@@ -1042,7 +1042,7 @@ def test_three_content_misses_close_the_plan_and_that_is_the_end_of_it():
     assert out["error"] == "plan_failed"
     assert bench.plan_filed is None
     # And the runtime treats it as terminal, like a closed want.
-    assert "plan_failed" in cli._TERMINAL_DOOR_ERRORS
+    assert "plan_failed" in cli._CLOSED_DOOR_ERRORS
 
 
 def test_the_content_question_reaches_the_model_in_the_benchs_own_words():

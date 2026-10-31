@@ -62,18 +62,22 @@ def test_a_missing_calendar_slot_is_the_benchs_to_answer_with_issues():
     assert out["ok"] is False and out["issues"] == issues
 
 
-def test_a_standing_refusal_keeps_issues_and_failure():
-    cli._STEP_REFUSALS.pop("s-x", None)
+def test_a_standing_refusal_keeps_issues_and_failure(tmp_path):
+    from types import SimpleNamespace
+
+    from toll_harness.storage.local import SQLiteStore
+
+    resources = SimpleNamespace(store=SQLiteStore(tmp_path / "h.db"), toll_bench=None)
+    obligation = {"kind": "deal_step", "deal_id": "d1", "step_id": "s-x"}
+    step = {"current_step": {"id": "s-x", "number": 2}}
     issues = [{"slot": "start", "problem": "wrong kind",
                "accepted": "ISO string", "example": "2026-10-01T09:00:00"}]
     failure = {"code": "vendor_rejected", "vendor_message": "bad time",
                "slot": "start"}
-    cli._refusal_note(
-        "s-x", "fp", {"error": "invalid_act", "message": "fix start",
-                      "issues": issues, "failure": failure},
-        road="ask", number=2)
-    body = cli._standing_refusal("s-x", "fp")
-    cli._STEP_REFUSALS.pop("s-x", None)
+    cli._note_failure(
+        resources, obligation, "invalid_act", step,
+        {"error": "invalid_act", "message": "fix start", "issues": issues, "failure": failure})
+    body = cli._standing_refusal(resources, obligation, step)
     assert body["issues"] == issues
     assert body["failure"] == failure
 

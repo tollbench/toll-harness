@@ -68,12 +68,6 @@ def resources(response=None):
     )
 
 
-@pytest.fixture(autouse=True)
-def clean(monkeypatch):
-    monkeypatch.setattr(cli, "_OBLIGATION_FAILURES", {})
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
-
-
 def test_real_attention_cycle_provider_exact_door_no_model():
     r = resources()
     out = cli._process_market_attention(r, wait=0)
@@ -140,13 +134,13 @@ def test_exact_live_context_required(mutation):
         ("unknown", False, False),
     ],
 )
-def test_terminal_attempt_is_reported_honestly_without_breaker_retry(status, ok, repaired):
+def test_terminal_attempt_is_reported_honestly_without_a_retry(status, ok, repaired):
     r = resources({"ok": True, "status": status, "act_id": "new-1"})
     out = cli._process_market_attention(r, wait=0)
     assert out["ok"] is ok
     assert out["source_correction"]["repaired"] is repaired
     assert out["source_correction"]["terminal"] is True
-    assert "breaker" not in out
+    assert "error" not in out
     if status == "held":
         assert out["source_correction"]["awaiting_person"]
 
@@ -156,12 +150,12 @@ def test_missing_provider_and_transport_use_bounded_failure_path():
     r.toll_bench.refile_source_correction = None
     out = cli._process_market_attention(r, wait=0)
     assert out["source_correction"]["error"] == "source_correction_unavailable"
-    assert "breaker" in out and out["retry_after_seconds"] > 0
+    assert out["ok"] is False and out["error"] == "source_correction_unavailable"
     r = resources()
     r.toll_bench.api.propose_act.side_effect = TimeoutError("uncertain response")
     out = cli._process_market_attention(r, wait=0)
     assert out["source_correction"]["error"] == "source_correction_transport_unavailable"
-    assert "breaker" in out
+    assert out["error"] == "source_correction_transport_unavailable"
     r.runtime.start.assert_not_called()
 
 

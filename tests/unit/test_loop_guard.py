@@ -49,10 +49,8 @@ def test_dispatch_is_bounded_across_restarts_and_different_errors(tmp_path, monk
         raise RuntimeError("different error " + str(len(calls)))
 
     monkeypatch.setattr(cli, "not_the_agents_move", lambda *a: None)
-    monkeypatch.setattr(cli, "_refusal_brake_holds", lambda *a: None)
     monkeypatch.setattr(cli, "_step_ask_available", lambda *a: route == "step_ask")
     monkeypatch.setattr(cli, "_the_step_ask", invoke)
-    monkeypatch.setattr(cli, "_IDLE_STEP_MEMO", {})
 
     def resources():
         return SimpleNamespace(
@@ -168,3 +166,48 @@ def test_stop_reason_survives_restart_and_reaches_bench(tmp_path):
                                   "Provider timeout after 600 seconds")
     cli._report_worker_status(resources, obligation, "parked", snapshot)
     assert reports == [{"reason": "Provider timeout after 600 seconds", "cause": "runtime"}]
+
+
+def test_the_bench_sentence_rides_the_next_try_and_the_park_report(tmp_path):
+    """0.74.0: one brake. The refusal is kept beside the guard's count for this
+    state, rides the next try, and the third try parks with its sentence."""
+    reports = []
+    payload = {"current_step": {"id": "s", "rounds_used": 1},
+               "submission": {"worker_status": {"endpoint": "x"}}}
+    resources = SimpleNamespace(
+        store=SQLiteStore(tmp_path / "s.db"),
+        toll_bench=SimpleNamespace(
+            report_worker_status=lambda *a, **k: reports.append((a, k)) or {"ok": True},
+            current_step=lambda deal: payload))
+    obligation = {"kind": "deal_step", "deal_id": "d", "step_id": "s"}
+    refusal = {"ok": False, "error": "stand_in", "message": "A typed name is a stand-in.",
+               "issues": [{"slot": "who"}]}
+    guard = LoopGuard(resources.store.path)
+    key, state = cli._loop_key(obligation), cli._loop_state(resources, obligation, payload)
+    assert cli._standing_refusal(resources, obligation, payload) is None
+    for _ in range(3):
+        assert guard.reserve(key, state)
+        cli._note_failure(resources, obligation, "stand_in", payload, refusal)
+    body = cli._standing_refusal(resources, obligation, payload)
+    assert body["message"] == "A typed name is a stand-in."
+    assert body["issues"] == [{"slot": "who"}]
+    assert len(reports) == 1
+    args, kwargs = reports[0]
+    assert args[2] == "parked" and kwargs["reason"] == "A typed name is a stand-in."
+    changed = dict(payload, step_thread={"messages": [{"id": "m", "who": "person"}]})
+    assert cli._standing_refusal(resources, obligation, changed) is None
+
+
+def test_the_agents_own_messages_do_not_buy_retries():
+    # One model posted the identical question 20 times on 2026-08-29: its own
+    # messages are output, not new work, so they never reset the guard.
+    obligation = {"kind": "deal_step", "deal_id": "d", "step_id": "s"}
+
+    def step(*whos):
+        return {"current_step": {"id": "s"}, "step_thread": {"messages": [
+            {"id": f"m{i}", "who": who} for i, who in enumerate(whos)]}}
+
+    r = SimpleNamespace(toll_bench=None)
+    once = cli._loop_state(r, obligation, step("agent"))
+    assert cli._loop_state(r, obligation, step("agent", "agent")) == once
+    assert cli._loop_state(r, obligation, step("agent", "person")) != once

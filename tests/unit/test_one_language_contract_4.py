@@ -231,18 +231,11 @@ def test_a_whole_run_on_a_clean_plan_still_files():
     assert out["ok"] is True and out["filed"] is True
 
 
-def test_both_stops_park_the_want_for_this_round_and_not_for_ever():
+def test_both_stops_close_the_want_for_this_round():
     from toll_harness import cli
 
     for error in ("bench_must_fix", "waiting_on_the_person"):
-        assert error in cli._TERMINAL_DOOR_ERRORS
-    # The memo is keyed on the ROUND, so a repost asks again.
-    cli._CLOSED_TARGET_MEMO.clear()
-    target = {"target_id": "t", "round": 2}
-    assert cli._remember_closed(target, "bench_must_fix")
-    assert cli._door_closed_this_round(target)
-    assert not cli._door_closed_this_round(dict(target, round=3))
-    cli._CLOSED_TARGET_MEMO.clear()
+        assert error in cli._CLOSED_DOOR_ERRORS
 
 
 def test_an_agent_row_beside_our_bug_is_still_the_agents_to_fix():

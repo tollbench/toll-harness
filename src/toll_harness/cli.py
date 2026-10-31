@@ -3,12 +3,10 @@ from __future__ import annotations
 import argparse
 import contextlib
 import getpass
-import hashlib
 import json
 import logging
 import os
 import platform
-import re
 import shlex
 import shutil
 import sys
@@ -1224,16 +1222,6 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
 }
 
 
-# Idle-step memo: step_id -> the step-payload fingerprint at the last dispatched
-# run that ended without failing. When the next cycle fetches an IDENTICAL
-# payload, the model has already inspected exactly this state and made no move
-# -- the step is waiting on the person, and re-dispatching the model over it
-# would burn a full run to reach the same conclusion while starving every
-# lower-ranked obligation (a $0 plan request sat ~55 minutes behind
-# one such step on 2026-08-29). Process-local by design: a restart just costs
-# one extra inspection per step.
-_IDLE_STEP_MEMO: dict[str, str] = {}
-
 # Re-dispatch this long before a due progress pulse rather than after it, so
 # the pulse never goes overdue waiting on the poll interval.
 _IDLE_PULSE_MARGIN_SECONDS = 90.0
@@ -1321,66 +1309,6 @@ def _deal_step_pulse_due(step_payload: dict[str, Any], now: float | None = None)
     return due.timestamp() <= current + _IDLE_PULSE_MARGIN_SECONDS
 
 
-def _deal_step_is_idle(
-    step_id: str, step_payload: dict[str, Any] | None, now: float | None = None
-) -> bool:
-    """A step is idle when a prior run saw this exact state and made no move,
-    nothing from the person has arrived since, and no progress pulse is due."""
-    if not step_id or not isinstance(step_payload, dict):
-        return False
-    memo = _IDLE_STEP_MEMO.get(step_id)
-    if not memo:
-        return False
-    thread = step_payload.get("step_thread") or {}
-    if thread.get("unread_from_person"):
-        return False
-    if _deal_step_pulse_due(step_payload, now=now):
-        return False
-    return _deal_step_fingerprint(step_payload) == memo
-
-
-# ---------------------------------------------------------------------------
-# THE REFUSAL BRAKE (0.38.0)
-#
-# WHAT FORCED IT (production, 2026-09-11): one fleet unit sat on a deal step
-# no filing could ever satisfy. The bench refused every outcome 422
-# `stand_in` -- the step only restated the person's own Contact-book pick, and
-# a typed name or address is a stand-in, not a value. The small step ask has
-# a brake and handed the step to the OLD ROAD after two refused asks. The old
-# road -- the whole agentic run, 60-76k input tokens of tools brief -- had no
-# stop rule at all, so from the third cycle on it ran again every ~40 seconds
-# forever: same state, same filing, same refusal. `_IDLE_STEP_MEMO` could not
-# catch it, because a memo is only written after a run lands, and a refused
-# step never lands.
-#
-# So the old road gets a brake too, and the number is THREE (Steven: "two
-# seems odd, how about 3, in case of a mistake"). Three refusals carrying the
-# SAME code on ONE unchanged state and the harness stops re-running the step:
-# it memos the step as waiting on a change, posts the bench's own refusal
-# sentence as the blocker on the next check-in so the person can see why
-# nothing is moving, and leaves the step alone until the fingerprint changes
-# (a person message, a send-back, new materials, an act decision) or the
-# refusal code changes -- then it forgets and tries again.
-#
-# NOT A STRIKE. A road choice that resets on change. One journal, two
-# counters, so the small ask and the old road read the same rule.
-_STEP_REFUSALS: dict[str, dict[str, Any]] = {}
-_REFUSAL_TRIES = 3
-
-# The provider doors that move a step. The old road is a model holding tools,
-# so the harness never sees the bench's answers from out here; these are
-# wrapped for the length of one run.
-_STEP_MOVE_CALLS = (
-    "file_outcome",
-    "post_check_in",
-    "reply_step_message",
-    "propose_act",
-    "wait_outside",
-    "dismiss_reply",
-    "deliver_file",
-    "deliver_hosted_file",
-)
-
 _REFUSAL_KEYS = (
     "error", "code", "status", "message", "refusal", "field", "reason",
     "fix", "move", "allowed", "unexpected_fields", "deliverable",
@@ -1393,22 +1321,6 @@ _REFUSAL_KEYS = (
     "issues", "failure",
 )
 
-# A `stand_in` refusal QUOTES the stand-in it refused, and the check-in door
-# runs that same stand-in check on `blocker` -- so the bench's sentence posted
-# verbatim earns the same 422 in a new place. Addresses, bracket blanks and
-# bare URLs come out of it; the rest of the words are the bench's own.
-_ADDRESS_SHAPED = re.compile(r"[A-Za-z0-9._%+\-\[\]<>{}]+@[A-Za-z0-9.\-]+")
-_BRACKET_TOKEN = re.compile(r"\[[^\]\n]{1,60}\]")
-_BARE_URL = re.compile(r"https?://\S+|\bwww\.\S+", re.IGNORECASE)
-
-_BRAKE_TAIL = (
-    "Waiting for a change on this step: a message from you, the work sent "
-    "back, or new materials."
-)
-_BRAKE_BLOCKER_PLAIN = (
-    "The bench refuses this step's filing the same way every time. " + _BRAKE_TAIL
-)
-
 
 def _tool_enabled(resources: Any, name: str) -> bool:
     """True when the agent's configured enabled_tools allow this move.
@@ -1419,14 +1331,6 @@ def _tool_enabled(resources: Any, name: str) -> bool:
     """
     tools = getattr(getattr(resources, "runtime", None), "enabled_tools", None)
     return tools is None or name in tools
-
-
-def _person_safe(value: str) -> str:
-    """The bench's words, minus anything the check-in door would refuse."""
-    cleaned = _BARE_URL.sub("a link", str(value or ""))
-    cleaned = _ADDRESS_SHAPED.sub("that address", cleaned)
-    cleaned = _BRACKET_TOKEN.sub("a blank", cleaned)
-    return " ".join(cleaned.replace("`", "").split())
 
 
 def _refusal_code(refusal: Any) -> str:
@@ -1469,265 +1373,6 @@ def _refusal_body(refusal: Any) -> dict[str, Any]:
     }
 
 
-def _refusal_note(
-    step_id: str,
-    fingerprint: str,
-    refusal: Any,
-    *,
-    road: str,
-    number: Any = None,
-) -> dict[str, Any] | None:
-    """Count ONE refused try on this step, in this state, with this code.
-
-    One per dispatch, never one per retry inside it: a run that re-files three
-    times and is refused three times has spent one cycle, not three.
-    """
-    code = _refusal_code(refusal)
-    if not step_id or not code:
-        return None
-    record = _STEP_REFUSALS.get(step_id)
-    if (
-        not record
-        or record.get("fingerprint") != fingerprint
-        or record.get("code") != code
-    ):
-        record = {
-            "fingerprint": fingerprint,
-            "code": code,
-            "ask": 0,
-            "road": 0,
-            "sentence": "",
-            "body": {},
-            "blocker_posted": False,
-        }
-        _STEP_REFUSALS[step_id] = record
-    record[road] = int(record.get(road) or 0) + 1
-    sentence = _refusal_sentence(refusal)
-    if sentence:
-        record["sentence"] = sentence
-    body = _refusal_body(refusal)
-    if body:
-        record["body"] = body
-    if road == "road" and record["road"] == _REFUSAL_TRIES:
-        _LOGGER.warning(
-            "step %s: refused %d times on one state (code %s); waiting for the "
-            "step to change",
-            number if number is not None else step_id,
-            record["road"],
-            record["code"],
-        )
-    return record
-
-
-def _refused_asks(step_id: str, fingerprint: str) -> int:
-    record = _STEP_REFUSALS.get(step_id)
-    if not record or record.get("fingerprint") != fingerprint:
-        return 0
-    return int(record.get("ask") or 0)
-
-
-def _standing_refusal(step_id: str, fingerprint: str) -> dict[str, Any] | None:
-    """The bench's last refusal on this step while the state has not changed.
-
-    It rides the NEXT try on BOTH roads. Inside the three tries a fixable
-    refusal is meant to be fixed on try two, and it cannot be fixed by a model
-    that was never shown what the bench said.
-    """
-    record = _STEP_REFUSALS.get(step_id)
-    if not record or record.get("fingerprint") != fingerprint:
-        return None
-    body = dict(record.get("body") or {})
-    if not body:
-        return None
-    body["refused_tries_on_this_state"] = int(record.get("ask") or 0) + int(
-        record.get("road") or 0
-    )
-    return body
-
-
-def _held_progress(step_payload: dict[str, Any]) -> int:
-    """The step's own progress, never 100: a refused filing did not finish."""
-    pulse = step_payload.get("latest_work_pulse")
-    try:
-        value = int((pulse or {}).get("progress_percent") or 0)
-    except (TypeError, ValueError):
-        value = 0
-    for step_value in (75, 50, 25):
-        if value >= step_value:
-            return step_value
-    return 0
-
-
-def _brake_blocker(record: dict[str, Any]) -> str:
-    times = record.get("road") or _REFUSAL_TRIES
-    code = record.get("code") or "no code"
-    head = f"The bench refused this filing {times} times, the same way ({code})."
-    said = _person_safe(record.get("sentence") or "").rstrip(". ")
-    room = 280 - len(head) - len(_BRAKE_TAIL) - len(" It said: ") - 2
-    if said and room > 24:
-        if len(said) > room:
-            said = said[: room - 1].rstrip() + "\u2026"
-        return f"{head} It said: {said}. {_BRAKE_TAIL}"[:280]
-    return f"{head} {_BRAKE_TAIL}"[:280]
-
-
-def _post_the_blocker(
-    resources: Any,
-    obligation: dict[str, Any],
-    step_payload: dict[str, Any],
-    record: dict[str, Any],
-) -> None:
-    """The bench's own refusal sentence, on the check-in the step already owes.
-
-    No new call: `post_check_in` is the path the pulse already rides, and its
-    `blocker` field is what the person's card shows.
-    """
-    post = getattr(getattr(resources, "toll_bench", None), "post_check_in", None)
-    deal_id = str(
-        obligation.get("deal_id") or (step_payload.get("deal") or {}).get("id") or ""
-    )
-    step_id = str(obligation.get("step_id") or "")
-    if (
-        not callable(post)
-        or not deal_id
-        or not _tool_enabled(resources, "toll_bench.post_check_in")
-    ):
-        record["blocker_posted"] = False
-        return
-    progress = _held_progress(step_payload)
-    # The bench's words first; a plain sentence of our own if its words are
-    # themselves something the check-in door will not take.
-    for blocker in (_brake_blocker(record), _BRAKE_BLOCKER_PLAIN):
-        pulse = {
-            "changed": "Nothing changed here.",
-            "now": "Waiting: the bench refuses this step's filing the same way every time.",
-            "next": "Your move: a message, sending the work back, or new materials.",
-            "progress_percent": progress,
-            "blocker": blocker,
-        }
-        digest = hashlib.sha256(blocker.encode("utf-8")).hexdigest()[:10]
-        key = f"brake-{step_id or deal_id}-{record.get('code') or 'none'}-{digest}"
-        try:
-            answer = post(deal_id, pulse, key)
-        except Exception as error:  # noqa: BLE001 - a blocker must not kill the cycle
-            _LOGGER.warning("the brake's blocker check-in failed: %s", error)
-            break
-        if (answer or {}).get("ok", True):
-            record["blocker_posted"] = True
-            _LOGGER.info("the brake posted its blocker on the check-in: %s", blocker)
-            return
-        _LOGGER.warning(
-            "the brake's blocker check-in was refused (%s); trying plain words",
-            (answer or {}).get("error"),
-        )
-    record["blocker_posted"] = True
-
-
-def _refusal_brake_holds(
-    resources: Any, obligation: dict[str, Any], step_payload: dict[str, Any]
-) -> dict[str, Any] | None:
-    """The standing brake on this step in this state, or None.
-
-    Three refusals with one code on one unchanged state: no model call, and
-    the person gets the bench's own sentence as the blocker.
-    """
-    step_id = str(obligation.get("step_id") or "")
-    record = _STEP_REFUSALS.get(step_id)
-    if not record or int(record.get("road") or 0) < _REFUSAL_TRIES:
-        return None
-    if record.get("fingerprint") != _deal_step_fingerprint(step_payload):
-        return None
-    number = (step_payload.get("current_step") or {}).get("number")
-    _LOGGER.info(
-        "step %s: still waiting for the step to change (refused %d times, "
-        "code %s); no model call",
-        number if number is not None else step_id,
-        record["road"],
-        record["code"],
-    )
-    _report_worker_status(resources, obligation, "parked", step_payload,
-                          reason=str(record.get("message") or record.get("code") or
-                                     "Toll Bench repeatedly refused the submission."))
-    if not record.get("blocker_posted") or _deal_step_pulse_due(step_payload):
-        _post_the_blocker(resources, obligation, step_payload, record)
-    return record
-
-
-class _RefusalWatch:
-    """What the bench refused while the old road ran.
-
-    The old road hands the model tools and the harness sees only the run's
-    verdict, so a refusal the model keeps re-earning is invisible from out
-    here. This wraps the step-move doors on the provider for the length of one
-    run and keeps the LAST refusal.
-    """
-
-    _MISSING = object()
-
-    def __init__(self, provider: Any):
-        self.provider = provider
-        self._refusal: dict[str, Any] | None = None
-        self._restore: list[tuple[str, Any]] = []
-
-    def last_refusal(self) -> dict[str, Any] | None:
-        return self._refusal
-
-    def _note(self, call: str, answer: Any) -> None:
-        if not isinstance(answer, dict) or answer.get("ok", True):
-            return
-        body = _refusal_body(answer)
-        if _refusal_code(body):
-            body["call"] = call
-            self._refusal = body
-
-    def _wrap(self, name: str, original: Any):
-        def wrapped(*args: Any, **kwargs: Any) -> Any:
-            try:
-                answer = original(*args, **kwargs)
-            except BookOfHousesApiError as error:
-                self._note(
-                    name,
-                    {
-                        "ok": False,
-                        "error": error.code,
-                        "status": error.status,
-                        "message": error.message,
-                        "detail": error.body,
-                    },
-                )
-                raise
-            self._note(name, answer)
-            return answer
-
-        return wrapped
-
-    def __enter__(self) -> _RefusalWatch:
-        if self.provider is None:
-            return self
-        for name in _STEP_MOVE_CALLS:
-            original = getattr(self.provider, name, None)
-            if not callable(original):
-                continue
-            try:
-                previous = vars(self.provider).get(name, self._MISSING)
-                setattr(self.provider, name, self._wrap(name, original))
-            except (AttributeError, TypeError):  # pragma: no cover - exotic provider
-                continue
-            self._restore.append((name, previous))
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        for name, previous in reversed(self._restore):
-            try:
-                if previous is self._MISSING:
-                    delattr(self.provider, name)
-                else:
-                    setattr(self.provider, name, previous)
-            except AttributeError:  # pragma: no cover - defensive
-                pass
-        self._restore = []
-
-
 def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the single highest-priority obligation to handle this cycle.
 
@@ -1743,49 +1388,18 @@ def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | No
     return obligations[0] if obligations else None
 
 
-# Circuit breaker over an obligation that keeps failing the same way. A selected
-# agent whose model could not emit a valid tool-use block for its plan payload
-# had that one obligation re-dispatched 663 times in 11 hours on a flat
-# 65-second delay -- no counter, no ceiling, and nothing telling the person
-# waiting on the plan. Now every obligation is keyed, identical failures
-# are counted, the delay doubles, and at the stall threshold the key stops being
-# dispatched at all. A plan request the model cannot produce leaves through the
-# public exit instead of retrying in silence (rule 97).
-#
-# Process-local by design, like the idle-step memo: a restart costs one extra
-# attempt per key, which is the safe direction.
-_OBLIGATION_FAILURES: dict[tuple[str, ...], dict[str, Any]] = {}
-
-# A WANT THE DOOR CLOSED IS NOT RETRIED UNTIL IT IS POSTED AGAIN. On
-# 2026-09-09 four fleet agents asked the draft door for the same walked want
-# every cycle, got `bidding_closed` every cycle (0 rounds, 0 model calls), and
-# because it sorted first, the wants behind it waited. The key carries the
-# round, so a repost -- a new round -- is a new want to this memo.
-# Process-local like the memos above: a restart costs one extra ask per key.
-_CLOSED_TARGET_MEMO: set[str] = set()
-# `plan_failed` joins them on 2026-09-11 (rule 245): the plan door gives up
-# out loud now -- three content tries and it closes with that reason, the
-# bench scores "selected, could not present a plan", and the person is told
-# in red and asked to pick another. Coming back to that target cannot change
-# any of it.
-# `bench_must_fix` and `waiting_on_the_person` join them on 2026-09-17
-# (contract 4.0). Every row left on the plan belongs to somebody else -- the
-# bench's own bug, or an answer the person owes -- and there is nothing the
-# agent can send that changes either. The memo is keyed on the ROUND, so this
-# is "not this round", not "never": a repost is a new want to it.
-# `draft_paused` joins them the same day. The bench shuts a plan door for a
-# quarter of an hour when its own check is in the way, and for an hour when the
-# same plan comes back five times; while it stands, every call is read and
-# refused. Counting those refusals as failures would spend the five-cycle
-# breaker on a door that was always going to open by itself -- and the breaker
-# is what stops us retrying a want that is really broken, so it must not be
-# burned on one that is only resting.
-_TERMINAL_DOOR_ERRORS = frozenset(
+# A WANT THE DOOR CLOSED IS DONE FOR THIS ROUND (0.74.0, was a process-local
+# memo). `bidding_closed`, `draft_stalled`, `plan_failed` (rule 245), and the
+# two contract 4.0 closes where every row left belongs to the bench or the
+# person: nothing the agent sends changes any of them. On the bid road the
+# want is marked reviewed in the fleet store, keyed on its ROUND, so a repost
+# is new work and a restart does not ask again. `draft_paused` is not here:
+# that door opens again by itself.
+_CLOSED_DOOR_ERRORS = frozenset(
     {
         "bidding_closed",
         "draft_stalled",
         "plan_failed",
-        draft.DRAFT_PAUSED,
         DraftLoop.BENCH_MUST_FIX,
         DraftLoop.WAITING_ON_THE_PERSON,
     }
@@ -1813,23 +1427,6 @@ def _remember_filed_odds(target_id: str, outcome: Any) -> None:
         _FILED_PROPOSAL_ODDS[target_id] = float(odds)
 
 
-def _remember_closed(target: dict[str, Any], error: Any) -> bool:
-    """Memo a want the door closed; True when it was just added."""
-    if str(error or "") not in _TERMINAL_DOOR_ERRORS:
-        return False
-    key = _market_target_key(target)[0]
-    if not key or key in _CLOSED_TARGET_MEMO:
-        return False
-    _CLOSED_TARGET_MEMO.add(key)
-    return True
-
-
-def _door_closed_this_round(target: dict[str, Any]) -> bool:
-    return _market_target_key(target)[0] in _CLOSED_TARGET_MEMO
-_STALL_THRESHOLD_DEFAULT = 5
-_STALL_DELAY_CAP_SECONDS = 3600.0
-
-
 def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     """The one piece of work an obligation names, independent of its wording."""
     if obligation.get("kind") == "goal_check":
@@ -1848,12 +1445,6 @@ def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
-def _obligation_fingerprint(obligation: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(obligation, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()
-
-
 def _failure_signature(payload: Any) -> str:
     """The failure's own words, so two different failures never count as one."""
     if isinstance(payload, dict):
@@ -1863,97 +1454,6 @@ def _failure_signature(payload: Any) -> str:
                 return str(value)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return str(payload or "unknown_failure")
-
-
-# A STALL IS A WAIT, NOT A STATE (0.38.4). A stalled plan obligation used to
-# stay stalled until the process restarted. On 2026-09-11 the bench refused a
-# plan five times for a BENCH-side bug on a step the bench had stamped itself,
-# fixed the document server-side, and the fleet unit sat stalled anyway until
-# someone restarted it. So a stall on a plan lifts on either of two things: the
-# draft the bench is HOLDING changes, or this much time passes.
-_PLAN_STALL_WAIT_SECONDS = 600.0
-
-
-def _plan_draft_fingerprint(resources: Any, obligation: dict[str, Any]) -> str | None:
-    """What the bench is holding for this plan, as one digest, or None.
-
-    The draft read costs no round, so a stalled plan can be re-checked every
-    cycle for free. What counts as a change is what the bench SAYS about the
-    document -- the problem it names next, the problems left, what it fixed
-    itself, whether it is ready or closed, and when it last moved -- because a
-    plan stalls on the bench's answer and not on its own text.
-    """
-    reader = getattr(getattr(resources, "toll_bench", None), "read_draft", None)
-    target_id = str(obligation.get("target_id") or "")
-    if not callable(reader) or not target_id:
-        return None
-    try:
-        answer = reader(target_id, kind="plan")
-    except Exception:  # noqa: BLE001 - a free probe never breaks the cycle
-        return None
-    if not isinstance(answer, dict):
-        return None
-    document = answer.get("draft") if isinstance(answer.get("draft"), dict) else {}
-    fix = draft.next_fix_of(answer) or {}
-    basis = {
-        # CONTRACT 4.0: a row is named by its step, its slot and what is wrong
-        # with it. The legacy codes are not part of what changed, because one
-        # fault told under two of them is still one fault.
-        "next_fix": draft.fix_key(fix) if fix else None,
-        "problems": [draft.fix_key(row) for row in draft.problems_of(answer)],
-        "ready": answer.get("ready"),
-        "closed": answer.get("closed"),
-        "bench_fixed": document.get("_bench_fixed") or answer.get("bench_fixed"),
-        "updated_at": answer.get("updated_at") or document.get("updated_at"),
-        "steps": len(document.get("steps") or []),
-    }
-    return hashlib.sha256(
-        json.dumps(basis, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()
-
-
-def _breaker_skip(obligation: dict[str, Any], resources: Any = None) -> bool:
-    """True while this exact obligation is stalled and nothing has changed."""
-    key = _obligation_key(obligation)
-    state = _OBLIGATION_FAILURES.get(key)
-    if not state or not state.get("stalled"):
-        return False
-    if state.get("fingerprint") != _obligation_fingerprint(obligation):
-        # The server changed what it is asking for: this is new work, and a
-        # stalled key must never outlive the payload that stalled it.
-        _OBLIGATION_FAILURES.pop(key, None)
-        return False
-    if obligation.get("kind") != "file_informed_plan":
-        return True
-    # THE PERSON IS WAITING ON THIS ONE. A plan obligation is somebody's chosen
-    # agent owing them a plan, so the stall is re-tested every cycle rather
-    # than held until a restart.
-    held = _plan_draft_fingerprint(resources, obligation)
-    if held is not None and state.get("draft") is None:
-        state["draft"] = held
-    if held is not None and held != state.get("draft"):
-        _LOGGER.warning(
-            "Plan %s: the bench is holding a different draft than when this "
-            "stalled; trying again",
-            obligation.get("proposal_id") or obligation.get("target_id") or "?",
-        )
-        _OBLIGATION_FAILURES.pop(key, None)
-        return False
-    waited = time.monotonic() - float(state.get("stalled_at") or 0.0)
-    if waited >= _PLAN_STALL_WAIT_SECONDS:
-        _LOGGER.warning(
-            "Plan %s: stalled %.0f seconds and the person is still waiting; "
-            "trying again",
-            obligation.get("proposal_id") or obligation.get("target_id") or "?",
-            waited,
-        )
-        _OBLIGATION_FAILURES.pop(key, None)
-        return False
-    return True
-
-
-def _breaker_reset(obligation: dict[str, Any]) -> None:
-    _OBLIGATION_FAILURES.pop(_obligation_key(obligation), None)
 
 
 def _plan_obligation_cleared(resources: Any, obligation: dict[str, Any]) -> tuple[bool, str | None]:
@@ -1981,164 +1481,6 @@ def _plan_obligation_cleared(resources: Any, obligation: dict[str, Any]) -> tupl
             "the file_informed_plan obligation is still pending",
         )
     return True, None
-
-
-def _plan_is_blocked(
-    resources: Any, obligation: dict[str, Any], attempts: int, error: str
-) -> dict[str, Any]:
-    """SAY SO AND WAIT. A stalled plan is never withdrawn by this package.
-
-    WHAT FORCED THE CHANGE (production, 2026-09-11). This used to withdraw the
-    bid with cause `cannot_deliver` after N identical failures. That night the
-    bench refused a selected agent's plan five times on an unchanged state for
-    a BENCH-side bug -- REJ-16 on a step the bench had stamped itself -- and
-    the harness moved straight to "Withdrawal of unproducible plan". It only
-    failed because the call carried no idempotency key. Had it worked, a person
-    would have watched their chosen agent withdraw over a mistake that was not
-    the agent's, and every held bid on the want would have come back to the
-    table for nothing.
-
-    A refusal the agent cannot clear is not proof the agent cannot deliver. So
-    the door's own words go in the log (and on the blocker where the plan road
-    has one), and the obligation waits: `_breaker_skip` lifts the stall the
-    moment the bench is holding a different draft, and after ten minutes
-    regardless. Withdrawing is the MODEL's call, through
-    `toll_bench.withdraw_proposal`, or the person's.
-    """
-    proposal_id = str(obligation.get("proposal_id") or "")
-    _LOGGER.warning(
-        "Plan %s is blocked on the bench's own refusal after %d identical "
-        "failures: %s. NOT withdrawing -- a refusal this agent cannot clear is "
-        "not proof it cannot deliver. Waiting for the draft to change, or %.0f "
-        "seconds, whichever comes first.",
-        proposal_id or obligation.get("target_id") or "?",
-        attempts,
-        error[:300],
-        _PLAN_STALL_WAIT_SECONDS,
-    )
-    blocked: dict[str, Any] = {
-        "ok": True,
-        "blocked": True,
-        "proposal_id": proposal_id,
-        "attempts": attempts,
-        "refusal": error[:600],
-        "waiting_seconds": _PLAN_STALL_WAIT_SECONDS,
-        "withdrawn": False,
-    }
-    # Where the plan road has a blocker to post, post it. A plan obligation is
-    # usually pre-deal and has none, and then the log is the record.
-    posted = _post_plan_blocker(resources, obligation, error)
-    if posted is not None:
-        blocked["blocker_posted"] = posted
-    return blocked
-
-
-def _post_plan_blocker(
-    resources: Any, obligation: dict[str, Any], error: str
-) -> bool | None:
-    """The bench's refusal, on the check-in of the deal this plan belongs to.
-
-    None when there is no deal and no check-in door to put it on, which is the
-    usual case for a plan the person is still waiting on.
-    """
-    deal_id = str(obligation.get("deal_id") or "")
-    post = getattr(getattr(resources, "toll_bench", None), "post_check_in", None)
-    if (
-        not deal_id
-        or not callable(post)
-        or not _tool_enabled(resources, "toll_bench.post_check_in")
-    ):
-        return None
-    blocker = _person_safe(
-        f"The bench is refusing this plan and the refusal is not mine to fix: "
-        f"{error}"
-    )[:280]
-    pulse = {
-        "changed": "Nothing changed here.",
-        "now": "Waiting: the bench is refusing this plan the same way every time.",
-        "next": "Nothing of yours; this one is ours and the platform's.",
-        "progress_percent": 0,
-        "blocker": blocker,
-    }
-    digest = hashlib.sha256(blocker.encode("utf-8")).hexdigest()[:10]
-    try:
-        answer = post(deal_id, pulse, f"plan-blocked-{deal_id}-{digest}")
-    except Exception as failure:  # noqa: BLE001 - a blocker must not kill the cycle
-        _LOGGER.warning("the plan blocker check-in failed: %s", failure)
-        return False
-    return bool((answer or {}).get("ok", True))
-
-
-def _breaker_record_failure(
-    resources: Any,
-    obligation: dict[str, Any],
-    error: str,
-    *,
-    threshold: int,
-) -> dict[str, Any]:
-    """Count one failure on this key and say how long to wait before retrying."""
-    key = _obligation_key(obligation)
-    guard = _loop_guard(resources)
-    if guard is not None and obligation.get("deal_id") and obligation.get("step_id"):
-        try:
-            snapshot = resources.toll_bench.current_step(str(obligation["deal_id"]))
-            work_state = _loop_state(resources, obligation, snapshot)
-            guard.record_reason(_loop_key(obligation), work_state, error)
-            if guard.held(_loop_key(obligation), work_state):
-                _report_worker_status(resources, obligation, "parked", snapshot, reason=error)
-        except Exception:
-            _LOGGER.warning("Could not check parked status for worker report")
-    state = _OBLIGATION_FAILURES.get(key)
-    if state is None or state.get("error") != error:
-        # A different failure is a different problem: the count starts over.
-        state = {"count": 0, "error": error, "stalled": False, "exited": False}
-    state["count"] = int(state["count"]) + 1
-    state["fingerprint"] = _obligation_fingerprint(obligation)
-    attempts = int(state["count"])
-    delay = min(_STALL_DELAY_CAP_SECONDS, 60.0 * (2**attempts))
-    breaker: dict[str, Any] = {
-        "key": list(key),
-        "consecutive_failures": attempts,
-        "error": error,
-        "retry_after_seconds": delay,
-        "stalled": False,
-    }
-    if attempts >= max(1, threshold) and not state["stalled"]:
-        state["stalled"] = True
-        state["stalled_at"] = time.monotonic()
-        if obligation.get("kind") == "file_informed_plan":
-            # What the bench was holding when this stalled, so the next cycle
-            # can tell a fixed document from the same one.
-            state["draft"] = _plan_draft_fingerprint(resources, obligation)
-        # ONE line, at the fleet log level, carrying the count and the error.
-        _LOGGER.warning(
-            "Stalling obligation %s after %d identical failures: %s",
-            "/".join(part for part in key if part),
-            attempts,
-            error,
-        )
-    if state["stalled"]:
-        breaker["stalled"] = True
-        if obligation.get("kind") == "file_informed_plan" and not state["exited"]:
-            state["exited"] = True
-            breaker["blocked"] = _plan_is_blocked(
-                resources, obligation, attempts, error
-            )
-    _OBLIGATION_FAILURES[key] = state
-    return breaker
-
-
-def _configured_stall_threshold(config_path: Any) -> int:
-    """agent.yaml fleet.stall_threshold, or the default when it is not set."""
-    try:
-        config = load_config(config_path)
-    except Exception:  # noqa: BLE001 - an unreadable config must not stop the watch
-        return _STALL_THRESHOLD_DEFAULT
-    fleet = config.get("fleet") or {}
-    try:
-        return max(1, int(fleet.get("stall_threshold", _STALL_THRESHOLD_DEFAULT)))
-    except (TypeError, ValueError):
-        return _STALL_THRESHOLD_DEFAULT
 
 
 def _loop_guard(resources: Any) -> LoopGuard | None:
@@ -2232,6 +1574,82 @@ def _report_worker_status(resources: Any, obligation: dict[str, Any], state: str
         _LOGGER.warning("Could not report worker status for step %s", step_id)
 
 
+# ONE BRAKE (0.74.0, audit D10). The durable loop guard is the only brake:
+# three attempts per work state, then the work parks and the park report
+# carries the bench's own sentence. The idle-step memo, the refusal brake, the
+# circuit breaker and the closed-want memo were each process-local and each
+# was written after a real spin (663 plan re-dispatches in 11 hours; a step
+# re-run every forty seconds; one question posted 20 times). The guard counts
+# all of those against one durable budget, and a step whose turn is not the
+# agent's never reaches it (not_the_agents_move).
+#
+# The bench's last refusal on a work state rides the NEXT try as
+# `the_bench_refused` (0.38.0): it is kept beside the guard's reason, under
+# the same state, so it survives a restart and is forgotten when the state
+# changes.
+_REFUSED_SUFFIX = "#refused"
+_REFUSAL_RECORD_CHARS = 2000
+
+
+def _guard_slot(resources: Any, obligation: dict[str, Any],
+                step_state: Any = None) -> tuple[LoopGuard, str, str] | None:
+    """The guard, key and state for one step's work, or None.
+
+    A plan's state is read off its draft (a GET), so only work that carries
+    its step in hand is recorded here; a plan parks on the guard's count.
+    """
+    if not isinstance(step_state, dict):
+        return None
+    guard = _loop_guard(resources)
+    if guard is None:
+        return None
+    try:
+        return guard, _loop_key(obligation), _loop_state(resources, obligation, step_state)
+    except Exception:  # noqa: BLE001 - a record must never break the cycle
+        return None
+
+
+def _standing_refusal(resources: Any, obligation: dict[str, Any],
+                      step_state: Any = None) -> dict[str, Any] | None:
+    """The bench's last refusal on this work in this unchanged state, or None."""
+    slot = _guard_slot(resources, obligation, step_state)
+    if slot is None:
+        return None
+    guard, key, state = slot
+    try:
+        body = json.loads(guard.reason(key + _REFUSED_SUFFIX, state))
+    except (TypeError, ValueError):
+        return None
+    return body if isinstance(body, dict) and body else None
+
+
+def _note_failure(resources: Any, obligation: dict[str, Any], error: str,
+                  step_state: Any = None, refusal: Any = None) -> None:
+    """Why this try failed, in the bench's words where it gave them.
+
+    The sentence becomes the guard's reason, so the park report carries it;
+    the refusal body rides the next try. When this was the third try on one
+    state, the step is reported parked now rather than next cycle.
+    """
+    slot = _guard_slot(resources, obligation, step_state)
+    if slot is None:
+        return
+    guard, key, state = slot
+    body = _refusal_body(refusal)
+    sentence = _refusal_sentence(body) or str(error or "") or "Toll Bench refused the filing."
+    try:
+        guard.record_reason(key, state, sentence)
+        if body:
+            text = json.dumps(body, sort_keys=True, default=str)
+            if len(text) > _REFUSAL_RECORD_CHARS:
+                text = json.dumps({"error": _refusal_code(body), "message": sentence[:1500]})
+            guard.record_reason(key + _REFUSED_SUFFIX, state, text)
+        if guard.held(key, state):
+            _report_worker_status(resources, obligation, "parked", step_state, reason=sentence)
+    except Exception:  # noqa: BLE001 - visibility only
+        _LOGGER.warning("Could not record the failure for %s", key)
+
+
 def _loop_parked(reachability: dict[str, Any], keys: list[str]) -> dict[str, Any]:
     return {"ok": True, "reachability": reachability, "attention_count": 0,
             "run": None, "loop_guard": {"parked": keys, "attempt_limit": 3},
@@ -2267,7 +1685,7 @@ def _process_market_attention(
     wait: int,
     previous_failure: dict[str, Any] | None = None,
     *,
-    stall_threshold: int | None = None,
+    stall_threshold: int | None = None,  # unused since 0.74.0: the loop guard is the brake
 ) -> dict[str, Any]:
     """One attention cycle. NOTICES COST NO MODEL CALL (0.68.0): an attention
     item of a kind this harness has no action for (`everyone_post_invited`,
@@ -2277,8 +1695,7 @@ def _process_market_attention(
     could do nothing about it: lab agent A-0667 (staging, 2026-10-23) paid
     for those runs on every cycle a notice stood."""
     notices: list[dict[str, Any]] = []
-    result = _attention_cycle(resources, wait, previous_failure,
-                              stall_threshold=stall_threshold, notices=notices)
+    result = _attention_cycle(resources, wait, previous_failure, notices=notices)
     if notices and isinstance(result, dict):
         result = {**result, "notices": notices}
     return result
@@ -2289,12 +1706,10 @@ def _attention_cycle(
     wait: int,
     previous_failure: dict[str, Any] | None = None,
     *,
-    stall_threshold: int | None = None,
     notices: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if resources.toll_bench is None:
         raise ValueError("This agent is not connected to Toll Bench")
-    threshold = _STALL_THRESHOLD_DEFAULT if stall_threshold is None else int(stall_threshold)
     reachability = resources.toll_bench.ensure_reachable()
     if not reachability.get("ok"):
         return {"ok": False, "reachability": reachability}
@@ -2325,25 +1740,6 @@ def _attention_cycle(
             quiet["retry_after_seconds"] = 60.0
         return quiet
     guard = _loop_guard(resources)
-    # Stalled keys drop out before anything is fetched or dispatched. They come
-    # back the moment the server changes what it is asking for.
-    _live: list[dict[str, Any]] = []
-    _stalled = 0
-    for item in obligations:
-        if guard is None and _breaker_skip(item, resources):
-            _stalled += 1
-            continue
-        _live.append(item)
-    obligations = _live
-    if not obligations:
-        return {
-            "ok": True,
-            "reachability": reachability,
-            "attention_count": 0,
-            "stalled_obligations": _stalled,
-            "retry_after_seconds": 300.0,
-            "run": None,
-        }
     finalist_proposal_ids = {
         str(item.get("proposal_id") or "")
         for item in obligations
@@ -2401,24 +1797,14 @@ def _attention_cycle(
                         "run": None,
                     }
     # WHOSE MOVE IS IT, before any model run. Every deal step is read ONCE
-    # here (the same current_step read the dispatch makes anyway, H6) and
-    # judged twice:
-    #
-    # 1. THE PLATFORM'S MOVE (0.36.0). A block the platform filed and will
-    #    close (rule 229), an act waiting on the person's Allow, an act the
-    #    platform is carrying out, a step the person is reviewing, a declared
-    #    wait on the outside world (rule 216): nothing of the agent's moves
-    #    it, and no model run starts. Before this, the step ran the whole
-    #    agentic road to find that out -- one fleet unit spent 261,749 input tokens
-    #    over twenty calls on one such step on 2026-09-09 and filed nothing.
-    #    A pulse coming due does NOT wake it: the ball is not the agent's.
-    # 2. IDLE: byte-identical to what the model already inspected and left
-    #    untouched, unless a progress pulse is due (r100 cadence still gets
-    #    its one run per window -- that run doubles as the retry chance for a
-    #    model that misread its move).
-    #
-    # Skipped steps drop out of this cycle's contention so plan requests and
-    # message debts are not starved behind a person's silence.
+    # here (the same current_step read the dispatch makes anyway, H6). When
+    # the bench's `turn.whose_turn` is not the agent's -- the person's review,
+    # an Allow, the platform carrying out an act, a declared wait outside --
+    # no model run starts (one fleet unit spent 261,749 input tokens over
+    # twenty calls on such a step on 2026-09-09 and filed nothing). Skipped
+    # steps drop out of this cycle's contention, so plan requests and message
+    # debts are not starved behind a person's silence. Everything else is the
+    # loop guard's: three tries per unchanged state.
     prefetched_steps: dict[str, dict[str, Any]] = {}
     # The plan drafts the loop-guard probe read this cycle, by target id
     # (0.68.0): the plan dispatch starts from them rather than reading again.
@@ -2426,8 +1812,6 @@ def _attention_cycle(
     loop_states: dict[str, str] = {}
     loop_parked: list[str] = []
     _remaining: list[dict[str, Any]] = []
-    _idle_step_ids: list[str] = []
-    _braked_step_ids: list[str] = []
     _platform_step_ids: list[str] = []
     _read_step = getattr(resources.toll_bench, "current_step", None)
     for item in obligations:
@@ -2455,12 +1839,6 @@ def _attention_cycle(
                     )
                     _platform_step_ids.append(step_id)
                     continue
-                if _refusal_brake_holds(resources, item, payload) is not None:
-                    _braked_step_ids.append(step_id)
-                    continue
-                if step_id in _IDLE_STEP_MEMO and _deal_step_is_idle(step_id, payload):
-                    _idle_step_ids.append(step_id)
-                    continue
         if guard is not None:
             key = _loop_key(item)
             if (item.get("kind") in _STEP_ASK_KINDS and deal_id
@@ -2480,25 +1858,7 @@ def _attention_cycle(
                 loop_parked.append(key)
                 continue
         _remaining.append(item)
-    if _idle_step_ids:
-        _LOGGER.warning(
-            "Skipping %d idle deal step(s) waiting on the person; "
-            "servicing %d remaining obligation(s)",
-            len(_idle_step_ids),
-            len(_remaining),
-        )
     obligations = _remaining
-    # Forget steps that left the attention feed (ended, approved, reassigned).
-    _live_step_ids = (
-        {str(item.get("step_id") or "") for item in obligations}
-        | set(_idle_step_ids)
-        | set(_braked_step_ids)
-        | set(_platform_step_ids)
-    )
-    for _sid in [sid for sid in _IDLE_STEP_MEMO if sid not in _live_step_ids]:
-        _IDLE_STEP_MEMO.pop(_sid, None)
-    for _sid in [sid for sid in _STEP_REFUSALS if sid not in _live_step_ids]:
-        _STEP_REFUSALS.pop(_sid, None)
     deal_obligation = next((item for item in obligations if item.get("kind") == "deal_step"), None)
     email_provider = resources.runtime.email_provider
     mail_client = getattr(email_provider, "client", None)
@@ -2557,8 +1917,6 @@ def _attention_cycle(
         }
         if _platform_step_ids:
             _nothing["platform_steps"] = len(_platform_step_ids)
-        if _braked_step_ids:
-            _nothing["braked_steps"] = len(_braked_step_ids)
         return _nothing
     if guard is not None:
         key = _loop_key(obligation)
@@ -2587,19 +1945,13 @@ def _attention_cycle(
                        "attention_count": len(obligations), "run": None,
                        "dispatch": {"kind": kind, "model_calls": 0},
                        "source_correction": correction_result}
-            if ok or correction_result.get("terminal"):
-                _breaker_reset(obligation)
-            else:
-                breaker = _breaker_record_failure(resources, obligation,
-                                                   _failure_signature(correction_result),
-                                                   threshold=threshold)
-                payload["breaker"] = breaker
-                payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+            if not ok and not correction_result.get("terminal"):
+                payload["error"] = _failure_signature(correction_result)
             return payload
         # RULE 241: the informed plan is built up in pieces too, at the same door.
         if kind == "file_informed_plan" and _draft_door_available(resources):
             planned = _file_the_informed_plan_from_draft(
-                resources, obligation, reachability, len(obligations), threshold,
+                resources, obligation, reachability, len(obligations),
                 already_read=plan_drafts.get(str(obligation.get("target_id") or "")),
             )
             if (
@@ -2655,7 +2007,7 @@ def _attention_cycle(
         # says why whenever it is taken.
         if isinstance(step_state, dict) and _step_ask_available(resources):
             asked = _the_step_ask(
-                resources, obligation, step_state, reachability, len(obligations), threshold
+                resources, obligation, step_state, reachability, len(obligations)
             )
             if asked is not None:
                 if _platform_step_ids:
@@ -2664,14 +2016,7 @@ def _attention_cycle(
         # The bench's own words about the last refusal on THIS step ride the next
         # dispatch, so a fixable refusal is fixed on try two instead of being
         # earned again from a blank slate.
-        step_fingerprint = (
-            _deal_step_fingerprint(step_state) if isinstance(step_state, dict) else ""
-        )
-        refused_before = (
-            _standing_refusal(str(obligation.get("step_id") or ""), step_fingerprint)
-            if step_fingerprint
-            else None
-        )
+        refused_before = _standing_refusal(resources, obligation, step_state)
         goal = (
             instruction
             + (_REFUSED_BEFORE_TAIL if refused_before else "")
@@ -2693,40 +2038,11 @@ def _attention_cycle(
         resources.runtime.enabled_tools = [name for name in original_tools
                                            if name in obligation_tools]
         meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
-        watch = _RefusalWatch(getattr(resources, "toll_bench", None))
         try:
-            with watch, _cost_scope(resources, obligation, step_state):
+            with _cost_scope(resources, obligation, step_state):
                 result = resources.runtime.start(goal, mode)
         finally:
             resources.runtime.enabled_tools = original_tools
-        if kind == "deal_step" and step_state is not None:
-            # Remember what the model was shown. If the next fetch of this step is
-            # identical, the run above made no move and the step is idle until the
-            # payload changes or a pulse comes due. limit_reached counts: the model
-            # spent its whole run over exactly this state and got nowhere, and an
-            # identical re-run wanders identically at full price (a looping model
-            # burned 20-iteration runs every couple of minutes on 2026-08-29).
-            # A FAILED run records nothing: an adapter or API error is transient
-            # and must retry at full cadence, not be mistaken for a judged wait.
-            _step_id = str(obligation.get("step_id") or "")
-            if _step_id and result.status.value in {"completed", "waiting", "limit_reached"}:
-                _IDLE_STEP_MEMO[_step_id] = _deal_step_fingerprint(step_state)
-        # THE BRAKE counts this run. One refusal per dispatch, whatever the run
-        # did afterwards; a run that moved the step with nothing refused forgets
-        # the whole journal.
-        if kind in _STEP_ASK_KINDS and step_state is not None:
-            _brake_step_id = str(obligation.get("step_id") or "")
-            _last_refusal = watch.last_refusal()
-            if _last_refusal is not None:
-                _refusal_note(
-                    _brake_step_id,
-                    step_fingerprint,
-                    _last_refusal,
-                    road="road",
-                    number=(step_state.get("current_step") or {}).get("number"),
-                )
-            elif result.status.value in {"completed", "waiting"}:
-                _STEP_REFUSALS.pop(_brake_step_id, None)
         ok = result.status.value in {"completed", "waiting"}
         payload: dict[str, Any] = {
             "ok": ok,
@@ -2735,28 +2051,17 @@ def _attention_cycle(
             "dispatch": meter,
             "run": _result_payload(result),
         }
-        if _stalled:
-            payload["stalled_obligations"] = _stalled
         if _platform_step_ids:
             payload["platform_steps"] = len(_platform_step_ids)
-        if _braked_step_ids:
-            payload["braked_steps"] = len(_braked_step_ids)
         postcondition_error = None
         if ok and kind == "file_informed_plan":
             ok, postcondition_error = _plan_obligation_cleared(resources, obligation)
             payload["ok"] = ok
             payload["plan_filing_verified"] = ok
         if ok:
-            _breaker_reset(obligation)
             return payload
-        breaker = _breaker_record_failure(
-            resources,
-            obligation,
-            postcondition_error or _failure_signature(result.result),
-            threshold=threshold,
-        )
-        payload["breaker"] = breaker
-        payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+        payload["error"] = postcondition_error or _failure_signature(result.result)
+        _note_failure(resources, obligation, payload["error"], step_state)
         return payload
     except Exception as error:
         # A crash must survive a process restart with its real cause. The
@@ -2805,8 +2110,6 @@ def _market_scan_candidates(
         if not target_id or target.get("your_bid") is not None:
             continue
         if target_key in reviewed:
-            continue
-        if target_key in _CLOSED_TARGET_MEMO:
             continue
         if fleet is not None and fleet.proposal_count(target_id, round_value) >= fleet_limit:
             continue
@@ -3000,10 +2303,11 @@ def _bid_through_the_draft_loop(
         idempotency_key=f"draft-bid-{target_id}-{brief.get('round') or target.get('round') or 1}",
         file=not dry_run,
     )
-    if _remember_closed(target, outcome.get("error") if isinstance(outcome, dict) else None):
+    closed = isinstance(outcome, dict) and outcome.get("error") in _CLOSED_DOOR_ERRORS
+    if closed:
         _LOGGER.info(
-            "paused bidding on want %s for this round (%s); not asked again "
-            "until it is posted again or the worker is restarted",
+            "the door closed want %s for this round (%s); not asked again "
+            "until it is posted again",
             target_id,
             outcome.get("error"),
         )
@@ -3017,8 +2321,12 @@ def _bid_through_the_draft_loop(
     _remember_filed_odds(target_id, outcome)
     identity = resources.agent_identity
     fleet = getattr(resources.toll_bench, "fleet", None)
-    if filed and fleet is not None and identity is not None:
-        fleet.mark_targets_reviewed(agent_id=identity.id, targets=review_targets)
+    if fleet is not None and identity is not None:
+        if filed:
+            fleet.mark_targets_reviewed(agent_id=identity.id, targets=review_targets)
+        elif closed:
+            fleet.mark_targets_reviewed(agent_id=identity.id,
+                                        targets=[_market_target_key(target)])
     payload: dict[str, Any] = {
         "ok": bool(outcome.get("ok")),
         "reachability": reachability,
@@ -3110,7 +2418,6 @@ def _file_the_informed_plan_from_draft(
     obligation: dict[str, Any],
     reachability: dict[str, Any],
     attention_count: int,
-    threshold: int,
     *,
     already_read: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -3177,33 +2484,14 @@ def _file_the_informed_plan_from_draft(
             target_id,
         )
         return None
-    # RULE 245: THE PLAN DOOR GIVES UP OUT LOUD, AND THAT IS THE END. A
-    # `plan_failed` close is scored on the bench ("selected, could not present
-    # a plan"), the person is shown a red card and asked to choose another
-    # agent, and the other proposals are already under it. Coming back to the
-    # target next cycle cannot change any of that, so it is memoized exactly
-    # like `bidding_closed` and `draft_stalled` and never asked again.
-    #
-    # WHAT IS HELD, AND WHERE (0.55.3). Nothing on disk. The memo is
-    # `_CLOSED_TARGET_MEMO`, in this process only, keyed on the want and its
-    # round, and a worker restart clears it. The bench is what stops asking:
-    # it stamps the proposal's plan as failed and drops the plan from this
-    # agent's attention. To walk the plan again, the bench reopens it and the
-    # worker is restarted; the loop guard's row for it
-    # (`file_informed_plan:<target>:<proposal>::`) parks only after three
-    # attempts on one unchanged state, and `toll-harness loop-guard
-    # <agent.yaml> --reset <that key>` clears it.
-    if _remember_closed(
-        {"target_id": target_id, "round": brief.get("round")},
-        outcome.get("error") if isinstance(outcome, dict) else None,
-    ):
-        _LOGGER.warning(
-            "the plan door closed target %s (%s); the bench stops asking this "
-            "agent for that plan. Held only in this process: a worker restart "
-            "clears it once the bench reopens the plan",
-            target_id,
-            outcome.get("error"),
-        )
+    # RULE 245: THE PLAN DOOR GIVES UP OUT LOUD. A `plan_failed` close is
+    # scored on the bench and the bench drops the plan from this agent's
+    # attention; nothing is held here. Should the plan come back unchanged,
+    # the loop guard's row for it (`file_informed_plan:<target>:<proposal>::`)
+    # parks after three tries, and `toll-harness loop-guard <agent.yaml>
+    # --reset <that key>` clears it.
+    if isinstance(outcome, dict) and outcome.get("error") in _CLOSED_DOOR_ERRORS:
+        _LOGGER.warning("the plan door closed target %s (%s)", target_id, outcome.get("error"))
     ok = bool(outcome.get("filed"))
     postcondition_error = None
     if ok:
@@ -3223,21 +2511,13 @@ def _file_the_informed_plan_from_draft(
         "run": None,
     }
     if ok:
-        _breaker_reset(obligation)
         return payload
     if not postcondition_error and outcome.get("error") == draft.DRAFT_PAUSED:
-        # A resting door is not a failure (see _TERMINAL_DOOR_ERRORS): no
-        # breaker count, just come back after a while.
+        # A resting door is not a failure: the attention cycle hands the
+        # guard's try back, and this comes back after a while.
         payload["retry_after_seconds"] = 300.0
         return payload
-    breaker = _breaker_record_failure(
-        resources,
-        obligation,
-        postcondition_error or str(outcome.get("error") or "draft_loop_failed"),
-        threshold=threshold,
-    )
-    payload["breaker"] = breaker
-    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+    payload["error"] = postcondition_error or str(outcome.get("error") or "draft_loop_failed")
     return payload
 
 
@@ -3249,14 +2529,6 @@ def _file_the_informed_plan_from_draft(
 _STEP_ASK_KINDS: frozenset[str] = frozenset(
     {"deal_step", "unanswered_message", "draft_sent_back"}
 )
-# THREE refused asks on one unchanged state hand the step to the old road next
-# cycle: the ask is cheap, and a move it cannot shape must not stall the step
-# behind a refusal it will get again. Not a strike rule -- a road choice,
-# forgotten the moment the state changes or an ask lands. THREE, not two, and
-# the same three as the old road's brake, so the two roads read one rule
-# (Steven, 2026-09-11: "two seems odd, how about 3, in case of a mistake").
-# The count itself lives in `_STEP_REFUSALS`, beside the old road's.
-_STEP_ASK_TRIES = _REFUSAL_TRIES
 
 # The bench form each step-ask call files through, and the configured tools
 # that make the same move. The outcome door posts a 100% pulse first.
@@ -3368,7 +2640,6 @@ def _the_step_ask(
     step_state: dict[str, Any],
     reachability: dict[str, Any],
     attention_count: int,
-    threshold: int,
 ) -> dict[str, Any] | None:
     """One step, one small ask, one call. None means: the old road."""
     kind = str(obligation.get("kind") or "")
@@ -3379,14 +2650,6 @@ def _the_step_ask(
         _LOGGER.info(
             "step %s: the %s is on another step than the one working; the old road",
             number, kind,
-        )
-        return None
-    fingerprint = _deal_step_fingerprint(step_state)
-    refused_asks = _refused_asks(step_id, fingerprint)
-    if refused_asks >= _STEP_ASK_TRIES:
-        _LOGGER.info(
-            "step %s: the small ask was refused %d times on this state; the old road",
-            number, refused_asks,
         )
         return None
     target_id = str(
@@ -3405,7 +2668,7 @@ def _the_step_ask(
             brief=brief,
             act_kinds=_act_kinds_for_the_loop(resources),
             pulse_due=_deal_step_pulse_due(step_state),
-            refused=_standing_refusal(step_id, fingerprint),
+            refused=_standing_refusal(resources, obligation, step_state),
         )
     if outcome.get("road") == ROAD_AGENTIC:
         _LOGGER.info("step %s: %s; the old road", number, outcome.get("why"))
@@ -3428,28 +2691,15 @@ def _the_step_ask(
         "run": None,
     }
     if ok:
-        _STEP_REFUSALS.pop(step_id, None)
-        if step_id:
-            # What the model was shown, same as the old road: an identical
-            # fetch next cycle is the step waiting, not new work.
-            _IDLE_STEP_MEMO[step_id] = fingerprint
-        _breaker_reset(obligation)
         return payload
-    _refused = outcome.get("result")
-    if not isinstance(_refused, dict) or not _refusal_code(_refused):
-        _refused = {
+    refused = outcome.get("result")
+    if not isinstance(refused, dict) or not _refusal_code(refused):
+        refused = {
             "error": outcome.get("error") or "step_ask_refused",
             "message": outcome.get("message"),
         }
-    _refusal_note(step_id, fingerprint, _refused, road="ask", number=number)
-    breaker = _breaker_record_failure(
-        resources,
-        obligation,
-        str(outcome.get("error") or "step_ask_refused"),
-        threshold=threshold,
-    )
-    payload["breaker"] = breaker
-    payload["retry_after_seconds"] = breaker["retry_after_seconds"]
+    payload["error"] = _refusal_code(refused)
+    _note_failure(resources, obligation, payload["error"], step_state, refused)
     return payload
 
 
@@ -3983,7 +3233,7 @@ def _sync_default_approach(resources: Any) -> dict[str, Any] | None:
 
 # WHAT A CYCLE WITH NO DISPATCH STILL HAS TO SAY when a board scan becomes the
 # cycle's story (0.68.0).
-_CARRIED_PAST_A_SCAN = ("notices", "loop_guard", "stalled_obligations")
+_CARRIED_PAST_A_SCAN = ("notices", "loop_guard")
 
 
 def command_market_watch(arguments: argparse.Namespace) -> int:
@@ -4000,7 +3250,6 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
             return _market_watch_proposals_only(arguments, resources)
         finally:
             resources.close()
-    stall_threshold = _configured_stall_threshold(arguments.config)
     previous_failure = None
     previous_scan_failure = None
     next_market_scan = 0.0
@@ -4020,7 +3269,6 @@ def command_market_watch(arguments: argparse.Namespace) -> int:
                     resources,
                     arguments.wait,
                     previous_failure=previous_failure,
-                    stall_threshold=stall_threshold,
                 )
                 # Agents look for new work ALWAYS, debt or not (Steven,
                 # 2026-08-26). Obligations are serviced first in every cycle,

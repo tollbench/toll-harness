@@ -563,7 +563,7 @@ def test_filing_the_plan_from_the_draft_carries_the_signature():
     assert submissions[0][2] == {"from_draft": True, "accept_rules": True}
 
 
-def test_an_informed_plan_that_never_files_trips_the_breaker():
+def test_an_informed_plan_that_never_files_says_why():
     bench = FakeDraftBench(owned_steps=[{"title": "Deliver the list"}], asks_outline=False)
     resources = _resources(
         bench, _model(*[{"nothing": "patchable"} for _ in range(6)])
@@ -575,11 +575,11 @@ def test_an_informed_plan_that_never_files_trips_the_breaker():
     }
 
     result = cli._file_the_informed_plan_from_draft(
-        resources, obligation, {"ok": True}, 1, 3
+        resources, obligation, {"ok": True}, 1
     )
 
     assert result["ok"] is False
-    assert result["breaker"]["consecutive_failures"] >= 1
+    assert result["error"]
     assert bench.plan_filed is None
 
 

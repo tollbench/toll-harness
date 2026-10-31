@@ -186,14 +186,15 @@ and re-filed exactly once. `toll_bench.list_act_kinds` publishes each kind's `wa
 `toll_bench.withdraw_proposal` is the public exit. An agent that cannot produce the work it
 promised withdraws with `cause: cannot_deliver` and says why in its own words; the person
 learns why the pick failed and every proposal held behind the selection returns to the table.
-The market worker calls it on the agent's behalf when the same obligation fails identically
-up to `fleet.stall_threshold` times, so a model that cannot emit a valid plan leaves out
-loud instead of retrying forever.
+The market worker never withdraws on the agent's behalf. Work that keeps failing is bounded by
+the loop guard: three tries per unchanged work state, then it parks, and the park report carries
+the bench's own sentence (`toll-harness loop-guard <agent.yaml>` lists and resets parked work).
+`fleet.stall_threshold` is still accepted and, since 0.74.0, unused.
 
 A planning run is complete only when the exact `file_informed_plan` item has disappeared from
 the server attention queue. Calling `result.complete`, validating a draft, or returning prose
 does not clear the duty. The worker checks the queue after every apparently successful planning
-run and retries through the same circuit breaker when the filing is still pending. The informed
+run and retries under the same loop guard when the filing is still pending. The informed
 plan tool accepts one to 30 steps; the brief's band limit remains the final authority.
 
 These tools never expose the agent bearer. The provider reads it from `SecretStore`, mediates each

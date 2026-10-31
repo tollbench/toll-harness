@@ -28,6 +28,7 @@ from toll_harness.core.types import (
     ToolCall,
 )
 from toll_harness.models.scripted import ScriptedModelAdapter
+from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.step import (
     NEED_TOOLS,
@@ -383,12 +384,6 @@ def test_a_returned_act_is_refiled_once_changed():
 # ---------------------------------------------------------------------------
 # 4. The dispatch takes the step-ask road, and says when it does not
 # ---------------------------------------------------------------------------
-def _clean():
-    cli._IDLE_STEP_MEMO.clear()
-    cli._STEP_REFUSALS.clear()
-    cli._OBLIGATION_FAILURES.clear()
-
-
 def _completed_run(goal, mode):
     return RunResult(run_id="run-x", status=RunStatus.COMPLETED, result={"summary": "Handled."},
                      checkpoint=Checkpoint(
@@ -410,7 +405,7 @@ class _MailClient:
         return None
 
 
-def _resources(payload, model, *, bench=None, attention=None):
+def _resources(payload, model, *, bench=None, attention=None, store=None):
     bench = bench or FakeBench()
     bench.ensure_reachable = lambda: {"ok": True}
     bench.attention = lambda wait: {"attention": attention or [OBLIGATION]}
@@ -442,11 +437,11 @@ def _resources(payload, model, *, bench=None, attention=None):
         return _completed_run(goal, mode)
 
     runtime.start = start
-    return SimpleNamespace(toll_bench=bench, runtime=runtime, agent_identity=None), observed
+    return SimpleNamespace(toll_bench=bench, runtime=runtime, agent_identity=None,
+                           store=store), observed
 
 
 def test_the_dispatch_files_a_hand_back_through_the_step_ask(caplog):
-    _clean()
     bench = FakeBench()
     model = _model(CAFES)
     resources, observed = _resources(_payload(), model, bench=bench)
@@ -460,25 +455,20 @@ def test_the_dispatch_files_a_hand_back_through_the_step_ask(caplog):
     assert result["dispatch"]["call"] == "submit_step_outcome"
     assert "goal" not in observed  # the old road never ran
     assert len(bench.outcomes) == 1
-    assert cli._IDLE_STEP_MEMO["s-1"] == cli._deal_step_fingerprint(_payload())
     assert "model call 1: prompt 1500 input tokens" in caplog.text
-    cli._IDLE_STEP_MEMO.clear()
 
 
 def test_need_tools_takes_the_old_road_after_one_small_call():
-    _clean()
     model = _model({"call": NEED_TOOLS, "why": "need a live search"})
     resources, observed = _resources(_payload(), model)
     result = cli._process_market_attention(resources, wait=20)
     assert result["dispatch"]["kind"] == "deal_step" and '"s-1"' in observed["goal"]
     assert len(model.invocations) == 1
-    cli._IDLE_STEP_MEMO.clear()
 
 
-def test_three_refused_asks_on_one_state_hand_the_step_to_the_old_road():
+def test_three_refused_asks_on_one_state_park_the_step(tmp_path):
     # THREE, not two (Steven, 2026-09-11: "two seems odd, how about 3, in case
-    # of a mistake"), and the same three the old road's brake counts.
-    _clean()
+    # of a mistake"), counted by the one durable brake (0.74.0).
     refusal = {"ok": False, "error": "invalid_delivery_note", "message": "no"}
 
     class AlwaysRefuses(FakeBench):
@@ -487,21 +477,18 @@ def test_three_refused_asks_on_one_state_hand_the_step_to_the_old_road():
             return refusal
 
     model = _model(*([CAFES] * 8))
-    resources, observed = _resources(_payload(), model, bench=AlwaysRefuses())
+    resources, observed = _resources(_payload(), model, bench=AlwaysRefuses(),
+                                     store=SQLiteStore(tmp_path / "h.db"))
     for _ in range(3):
         asked = cli._process_market_attention(resources, wait=20)
         assert asked["ok"] is False and asked["dispatch"]["kind"] == "deal_step_step_ask"
-        cli._OBLIGATION_FAILURES.clear()
     fourth = cli._process_market_attention(resources, wait=20)
-    assert fourth["dispatch"]["kind"] == "deal_step" and '"s-1"' in observed["goal"]
-    _clean()
+    assert fourth["loop_guard"]["parked"] and "goal" not in observed
 
 
-def test_the_benchs_refusal_rides_the_next_ask_and_the_next_dispatch():
+def test_the_benchs_refusal_rides_the_next_ask(tmp_path):
     # A refusal the model never sees is a refusal it earns again from a blank
-    # slate. The bench's own words ride the first ask of the next cycle, and
-    # the old road's goal when the step gets there.
-    _clean()
+    # slate. The bench's own words ride the first ask of the next cycle.
     refusal = {
         "ok": False,
         "error": "stand_in",
@@ -514,25 +501,17 @@ def test_the_benchs_refusal_rides_the_next_ask_and_the_next_dispatch():
             return refusal
 
     model = _model(*([CAFES] * 8))
-    resources, observed = _resources(_payload(), model, bench=AlwaysRefuses())
+    resources, observed = _resources(_payload(), model, bench=AlwaysRefuses(),
+                                     store=SQLiteStore(tmp_path / "h.db"))
     cli._process_market_attention(resources, wait=20)
-    cli._OBLIGATION_FAILURES.clear()
     model.invocations.clear()
     cli._process_market_attention(resources, wait=20)
     # The FIRST ask of the second cycle already carries the bench's sentence.
     assert "the_bench_refused" in model.invocations[0]["messages"][0].content[0]["text"]
     assert "a stand-in is not a value" in model.invocations[0]["messages"][0].content[0]["text"]
-    cli._OBLIGATION_FAILURES.clear()
-    cli._process_market_attention(resources, wait=20)
-    cli._OBLIGATION_FAILURES.clear()
-    cli._process_market_attention(resources, wait=20)
-    assert '"the_bench_refused"' in observed["goal"]
-    assert "a stand-in is not a value" in observed["goal"]
-    _clean()
 
 
 def test_a_message_debt_on_another_step_takes_the_old_road():
-    _clean()
     debt = {"kind": "unanswered_message", "deal_id": "d1", "step_id": "s-0", "target_id": "t1"}
     model = _model(CAFES)
     resources, observed = _resources(_payload(), model, attention=[debt])
@@ -546,7 +525,6 @@ def test_a_message_debt_on_another_step_takes_the_old_road():
 # ---------------------------------------------------------------------------
 def test_the_step_ask_is_a_fraction_of_the_old_roads_opening_prompt(capsys):
     """The old road's FIRST call, on this same step, versus the whole step ask."""
-    _clean()
     payload = _payload()
     # The old road: instruction + goal JSON + the system sheet + every tool's schema.
     resources, observed = _resources(payload, None)
@@ -577,7 +555,6 @@ def test_the_step_ask_is_a_fraction_of_the_old_roads_opening_prompt(capsys):
           f"{len(invocation['messages'][0].content[0]['text'])})")
     assert new_chars < 8_000
     assert new_chars * 3 < old_chars
-    cli._IDLE_STEP_MEMO.clear()
 
 
 # ---------------------------------------------------------------------------
