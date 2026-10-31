@@ -37,25 +37,6 @@ def test_a_meeting_is_intent_only_at_the_same_door():
     assert key == 'k-3'
 
 
-def test_a_meeting_needs_the_invitee():
-    provider, api = _provider()
-    out = provider.propose_act('d-1', 's-1', {'kind': 'meeting', 'title': 'x'}, 'k-4')
-    assert out == {'ok': False, 'error': 'missing_act_field', 'field': 'with'}
-    assert api.calls == []
-
-
-def test_a_meeting_never_carries_a_slot_or_a_body():
-    """The harness refuses to smuggle a time or an email body onto a meeting
-    act: those are the platform's, by rule."""
-    provider, api = _provider()
-    out = provider.propose_act('d-1', 's-1', {
-        'kind': 'meeting', 'with': 'r@x.co', 'start': {'dateTime': 'x'},
-        'body_text': 'When: Friday 11'}, 'k-5')
-    assert out['ok'] is True
-    payload = api.calls[0][2]
-    assert 'start' not in payload and 'body_text' not in payload
-
-
 def test_a_meeting_carries_the_agent_written_invite_message():
     """RULE 223 / contract 2.38: the agent writes the words that OPEN the
     invite email; the platform owns the times, the pick link and the AI
@@ -67,13 +48,6 @@ def test_a_meeting_carries_the_agent_written_invite_message():
     assert out['ok'] is True
     payload = api.calls[0][2]
     assert payload['message'].startswith('Hi Ruby')
-
-
-def test_a_runaway_meeting_message_is_capped():
-    provider, api = _provider()
-    provider.propose_act('d-1', 's-1', {
-        'kind': 'meeting', 'with': 'r@x.co', 'message': 'x' * 5000}, 'k-7')
-    assert len(api.calls[0][2]['message']) == 4000
 
 
 def test_an_email_act_still_goes_through_unchanged():

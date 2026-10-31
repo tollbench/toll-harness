@@ -10,7 +10,6 @@ that the platform's move costs zero model calls.
 """
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 
 from toll_harness import cli
@@ -198,24 +197,6 @@ def _resources(attention_items, payload, observed, *, owned=None):
 
 
 DEAL_STEP = {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"}
-
-
-def test_a_platform_run_step_starts_no_model_run_and_logs_one_line(caplog):
-    cli._IDLE_STEP_MEMO.clear()
-    observed = {}
-    payload = _payload(acts=[{"act_id": "a1", "kind": "meeting", "state": "held"}])
-    resources = _resources([DEAL_STEP], payload, observed, owned={"kinds": {"meeting": "held"}})
-
-    with caplog.at_level(logging.INFO, logger="toll_harness.cli"):
-        result = cli._process_market_attention(resources, wait=20)
-
-    assert result["ok"] is True
-    assert result["run"] is None
-    assert result["platform_steps"] == 1
-    assert "goal" not in observed  # the model was never started
-    assert resources.toll_bench.fetched == ["d1"]  # one read, the one the dispatch makes anyway
-    assert ("step 2: the platform's move (meeting block held (rule 229)); "
-            "no model call" in caplog.text)
 
 
 def test_an_act_held_for_allow_starts_no_model_run_even_when_a_pulse_is_due():

@@ -110,17 +110,6 @@ def test_a_calendar_event_on_a_schedule_carries_its_date():
     assert api.calls[0][2]["summary"] == "Practice"
 
 
-def test_a_meeting_keeps_its_shaping_and_passes_what_it_does_not_know():
-    provider, api = _provider()
-    provider.propose_act("d1", "s-1", {
-        "kind": "meeting", "with": "r@x.co", "start": {"dateTime": "x"},
-        "body_text": "When: Friday 11", "repeat_item": ITEM}, "k-5")
-    payload = api.calls[0][2]
-    assert payload["repeat_item"] == ITEM
-    # still never a slot or a body on a meeting (rule 223)
-    assert "start" not in payload and "body_text" not in payload
-
-
 # ---------------------------------------------------------------------------
 # 2. The kinds are the bench's
 # ---------------------------------------------------------------------------

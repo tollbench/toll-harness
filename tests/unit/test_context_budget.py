@@ -35,8 +35,6 @@ from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench.book_of_houses import (
     MAX_VALIDATE_ATTEMPTS,
-    STEP_ACT_LIMIT,
-    STEP_THREAD_MESSAGE_LIMIT,
     BookOfHousesTollBenchProvider,
 )
 from toll_harness.tools.registry import build_standard_registry
@@ -338,90 +336,6 @@ def test_every_validate_attempt_is_one_line_and_every_refusal_is_verbatim(caplog
     # result is trimmed, the run log is not.
     assert json.dumps(DOOR_REFUSAL["problems"][0]["fix"])[1:-1] in verbatim[0]
 
-
-# ---------------------------------------------------------------------------
-# 4. THE OTHER BIG PAYLOADS.
-# ---------------------------------------------------------------------------
-class StepApi:
-    def __init__(self, payload=None, proposals=None):
-        self._payload = payload or {}
-        self._proposals = proposals or []
-
-    def current_step(self, deal_id):
-        return copy.deepcopy(self._payload)
-
-    def proposals(self):
-        return copy.deepcopy(self._proposals)
-
-
-def test_a_long_step_thread_hands_back_the_newest_and_says_how_many():
-    messages = [{"id": str(index), "body": "hello"} for index in range(60)]
-    api = StepApi(
-        {
-            "ok": True,
-            "deal": {"id": "d-1"},
-            "current_step": {"id": "s-1", "number": 1, "title": "Send it"},
-            "step_thread": {"messages": messages, "unread_from_person": 0},
-            "acts": [{"id": str(index)} for index in range(40)],
-        }
-    )
-    payload = BookOfHousesTollBenchProvider(api).current_step("d-1")
-
-    thread = payload["step_thread"]
-    assert len(thread["messages"]) == STEP_THREAD_MESSAGE_LIMIT
-    assert thread["messages"][-1]["id"] == "59"
-    assert thread["messages_total"] == 60
-    assert thread["messages_omitted"] == 40
-    assert len(payload["acts"]) == STEP_ACT_LIMIT
-    assert payload["acts_total"] == 40
-
-
-def test_a_short_step_thread_is_untouched_and_still_says_zero():
-    api = StepApi(
-        {
-            "ok": True,
-            "deal": {"id": "d-1"},
-            "current_step": {"id": "s-1"},
-            "step_thread": {"messages": [{"id": "1"}], "unread_from_person": 1},
-        }
-    )
-    thread = BookOfHousesTollBenchProvider(api).current_step("d-1")["step_thread"]
-    assert thread["messages"] == [{"id": "1"}]
-    assert thread["messages_total"] == 1
-    assert thread["messages_omitted"] == 0
-
-
-def test_a_bid_with_no_move_hands_back_its_row_and_not_its_plan():
-    settled = {
-        "id": "p-1",
-        "target_goal_id": "t-1",
-        "status": "closed",
-        "total_ask_cents": 0,
-        "your_move": None,
-        "deal": {"deal_id": None},
-        "steps": [{"title": "One"}, {"title": "Two"}],
-        "pitch_body": "words " * 500,
-        "finalist_answers": ["duplicate"],
-        "selection_answers": ["duplicate"],
-    }
-    working = {
-        **settled,
-        "id": "p-2",
-        "your_move": {"kind": "file_informed_plan"},
-    }
-    rows = BookOfHousesTollBenchProvider(StepApi(proposals=[settled, working])).list_proposals()
-    settled_row, working_row = rows["proposals"]
-
-    assert "steps" not in settled_row
-    assert "pitch_body" not in settled_row
-    assert settled_row["steps_count"] == 2
-    assert settled_row["plan_omitted"]
-    assert settled_row["total_ask_cents"] == 0
-    # The bid with a move keeps its plan: the revision is written from it.
-    assert working_row["steps"] == [{"title": "One"}, {"title": "Two"}]
-    # The bench emits the answers twice under both vocabularies; one is enough.
-    assert "finalist_answers" not in settled_row
-    assert settled_row["selection_answers"] == ["duplicate"]
 
 
 def test_a_large_tool_result_is_named_in_the_run_log(caplog):

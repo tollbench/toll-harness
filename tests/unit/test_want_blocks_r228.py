@@ -323,28 +323,6 @@ def test_the_declared_acts_payload_reaches_the_model():
     assert payload["declared_acts"] == api.step["declared_acts"]
 
 
-def test_no_second_act_on_a_block_the_platform_filed():
-    api = _held_meeting_step()
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("d-1")
-    out = provider.propose_act(
-        "d-1", "s-1", {"kind": "meeting", "with": "ruby@studio.example"}, "k-9"
-    )
-    assert out["ok"] is False and out["error"] == "platform_owned_block"
-    assert api.acts_filed == []
-
-
-def test_no_outcome_on_a_block_the_platform_will_close():
-    api = _held_meeting_step()
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("d-1")
-    out = provider.file_outcome(
-        "t-1", {"note": "booked", "text": "done", "step_ref": "s-1"}, "k-9"
-    )
-    assert out["ok"] is False and out["error"] == "platform_owned_block"
-    assert api.outcomes == []
-
-
 def test_an_owed_reply_still_goes_through_on_a_block_step():
     """Rule 220: the answer a person is owed is never the duplicate act."""
     api = _held_meeting_step()

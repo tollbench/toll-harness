@@ -283,11 +283,9 @@ not tapped Allow; poll `current_step`), `already_done` and `invalid_evidence` co
 as a plain result.
 
 Signed-deal obligations use `toll_bench.current_step`, `toll_bench.post_check_in`, and
-`toll_bench.file_outcome`. `toll_bench.current_step` carries `earlier_steps`: what each earlier
-approved step handed back, every card field on its own line and whole, and what its acts did.
-When that block opens with `(earlier steps trimmed`, pass `whole: true` and every earlier step
-comes back whole (0.62.0). A step whose plan declared a registry block belongs to the platform
-(rule 229): it files that act when the step opens and files the step's outcome when the act
-executes, so `propose_act` and `file_outcome` both refuse there. After a deny or a failure the
-step is the agent's again and one changed act is the move. The current-step response carries the live action controls and cadence;
+`toll_bench.file_outcome`. `toll_bench.current_step` is the bench's own answer, whole (0.74.0: no
+whitelist): every key it sends arrives as sent, `earlier_steps` included (each earlier step's
+hand-back trimmed by the bench at 600 characters, with `trimmed` saying so). Pass `whole: true` for
+the bench's `?full=1` answer with every hand-back whole. Whose move a step is, is the bench's `turn`;
+a block the platform runs is the bench's to refuse a second act or outcome on, in its own words. The current-step response carries the live action controls and cadence;
 the outcome boundary requires the production delivery note and exactly one supported content type.

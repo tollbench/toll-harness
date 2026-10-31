@@ -11,10 +11,7 @@ from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHouse
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench import blocks, draft
 from toll_harness.toll_bench.step import (
-    EARLIER_STEPS_KEY,
     LAST_FILING_KEY,
-    bench_trimmed,
-    render_earlier_steps,
 )
 from toll_harness.tools import sniff as sniffer
 
@@ -45,40 +42,6 @@ VALIDATE_DOOR_MIN_CONTRACT_MAJOR = 3
 PLAN_DOOR_MIN_CONTRACT = "4.0"
 PLAN_DOOR_MIN_CONTRACT_MAJOR = 4
 
-# An act in one of these states is standing: it is the person's move or it has
-# already run. Filing another copy of the same kind is a duplicate.
-LIVE_ACT_STATES: frozenset[str] = frozenset(
-    {"pending", "held", "approved", "executed", "sent"}
-)
-
-# Kinds the platform files and closes on a block step when the catalog cannot
-# be read. Today the registry publishes a `declaration` for exactly one.
-BLOCK_KINDS_FALLBACK: frozenset[str] = frozenset({"meeting"})
-
-# 0.64.2: a block act in one of these states has RUN. What is left on the step
-# is the step's question, not the act's, and the bench answers it on
-# `submission` (contract 4.1.26, "the piece follows").
-DONE_BLOCK_ACT_STATES: frozenset[str] = frozenset({"executed", "sent"})
-# The forms that hand the step back. When the bench offers one on the agent's
-# own turn, the outcome is the agent's to file, whatever block ran before it.
-HAND_BACK_ACTIONS: frozenset[str] = frozenset({"submit_step_outcome", "deliver_file"})
-
-
-def bench_hands_back_to_agent(payload: Any) -> bool:
-    """True when the bench's own `submission` on this current_step read says
-    the step is the AGENT'S to hand back: its turn is `agent` and it offers
-    the outcome door (`submit_step_outcome`, or `deliver_file` first on a
-    file step). An older bench with no `submission` answers False, and rule
-    229 reads as it always did."""
-    submission = payload.get("submission") if isinstance(payload, dict) else None
-    if not isinstance(submission, dict):
-        return False
-    if str(submission.get("turn") or "").strip().lower() != "agent":
-        return False
-    return any(
-        isinstance(action, dict) and action.get("action") in HAND_BACK_ACTIONS
-        for action in submission.get("actions") or []
-    )
 
 # THE OUTSIDE ACT (Steven, 2026-09-05) -- WHAT THE PLATFORM HAS NO HANDS FOR.
 # The bounds of the evidence door, checked here so a refusal the harness can
@@ -202,15 +165,6 @@ FILE_DOOR_BODY_KEYS: tuple[str, ...] = (
 # run called the validate door fourteen times in three minutes, never filed,
 # and each answer re-entered the conversation whole.
 MAX_VALIDATE_ATTEMPTS = 3
-# The newest N of an unbounded list. A step thread, a step's acts and the
-# materials released to a deal all grow for the life of the deal.
-STEP_THREAD_MESSAGE_LIMIT = 20
-# 0.62.0: an earlier step's whole hand-back, read off history_url once per
-# receipt. A read that did not carry it is tried again after this long, and
-# at most this many whole hand-backs are remembered per process.
-WHOLE_HAND_BACK_RETRY_SECONDS = 600.0
-WHOLE_HAND_BACK_MEMORY = 512
-STEP_ACT_LIMIT = 12
 # 0.64.0: the two lists the outcome 201 carries about the cards it took off a
 # list a who step reads (contract 4.1.12; `finds_taken` 2026-10-10). Always
 # present on the bench's answer, `[]` when nothing came off.
@@ -225,11 +179,6 @@ LAST_FILING_NOTE = (
     "another of this person's wants already has). The rest stood. Replace "
     "them with real finds; never file them again."
 )
-RELEASED_MATERIAL_LIMIT = 20
-# A door answer names every problem at once; past this many the plan is not
-# nearly right and the rest is noise. The count is always the true count.
-PROBLEM_LIMIT = 25
-PROBLEM_TEXT_MAX = 600
 
 # THE QUESTIONS ARE THE DOOR'S TO COUNT, NOT THIS PACKAGE'S (2026-09-17).
 # WHAT FORCED IT: Kai's round-2 proposal on prod was blocked by a
@@ -306,6 +255,13 @@ def _is_a_missing_field(problem: Any) -> bool:
     return " is required" in str(problem.get("detail") or "")
 
 
+def _door_rows(problems: Any) -> list[dict[str, Any]]:
+    """The door's own rows, whole (0.74.0: nothing capped or cut here)."""
+    if not isinstance(problems, list):
+        return []
+    return [row for row in problems if isinstance(row, dict)]
+
+
 def _withdraw_key(proposal_id: Any, body: dict[str, Any]) -> str:
     """A stable Idempotency-Key for one withdrawal.
 
@@ -319,22 +275,6 @@ def _withdraw_key(proposal_id: Any, body: dict[str, Any]) -> str:
         json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()[:12]
     return f"withdraw-{str(proposal_id or 'none')[:64]}-{digest}"
-
-
-def _history_receipt_words(history: Any) -> list[tuple[str, str]]:
-    """(receipt_id, words) for every receipt on a history read's steps[].outcome
-    that carries words. The bench's history_url answer (contract 3.13 ?full=1)."""
-    found: list[tuple[str, str]] = []
-    steps = history.get("steps") if isinstance(history, dict) else None
-    for step in steps if isinstance(steps, list) else []:
-        outcome = step.get("outcome") if isinstance(step, dict) else None
-        for receipt in outcome if isinstance(outcome, list) else []:
-            if not isinstance(receipt, dict):
-                continue
-            rid, words = str(receipt.get("receipt_id") or ""), receipt.get("words")
-            if rid and isinstance(words, str) and words:
-                found.append((rid, words))
-    return found
 
 
 class BookOfHousesTollBenchProvider:
@@ -361,15 +301,12 @@ class BookOfHousesTollBenchProvider:
         # this long for its ack.
         self._reachable_cached: dict[str, Any] | None = None
         self._reachable_until = 0.0
-        # Contract 2.44 state. The act registry is fetched once per process;
-        # the block memo is what the last current_step said about which steps
-        # the platform is running itself (rule 229), so the harness never
-        # files an act or an outcome on a block it does not own; and the
-        # refusal counter is what keeps ONE correction from becoming a loop
-        # (a harness filed and withdrew about a hundred times in 90 minutes on
-        # 2026-09-04).
+        # Contract 2.44 state. The act registry is fetched once per process,
+        # and the refusal counter is what keeps ONE correction from becoming
+        # a loop (a harness filed and withdrew about a hundred times in 90
+        # minutes on 2026-09-04). Whose move a step is, is the bench's `turn`
+        # (0.74.0: no rule-229 block memo here any more).
         self._act_kinds: dict[str, Any] | None = None
-        self._platform_blocks: dict[str, dict[str, Any]] = {}
         self._last_step_id: str | None = None
         # The person's unanswered message ids per step, oldest first, as the
         # last current-step read (or reply 200) listed them. A reply that names
@@ -379,23 +316,11 @@ class BookOfHousesTollBenchProvider:
         # Contract 3.0: probed once per provider, then remembered. None means
         # "not asked yet"; False means this bench publishes no validate door.
         self._validate_door: bool | None = None
-        # RULE 230. Every file receipt known to be attached to a step -- the
-        # server's, plus anything this process filed through deliver_file --
-        # so current_step can show them even when the bench's read omits them.
-        self._step_receipts: dict[str, list[dict[str, Any]]] = {}
         # 0.34.0. The validate door's attempt count per want, and the last
         # problems it named there -- so the fourth call answers honestly
         # instead of spending another round trip on the same refusal.
         self._validate_attempts: dict[str, int] = {}
         self._last_door_problems: dict[str, dict[str, Any]] = {}
-        # 0.62.0. An earlier step's approved hand-back, whole, by receipt id:
-        # the bench trims one at 600 characters on current-step and keeps it
-        # whole on history_url. A receipt never changes, so it is read once.
-        # A read that found nothing is not repeated for a while.
-        self._whole_hand_backs: dict[str, str] = {}
-        self._whole_misses: dict[str, float] = {}
-        # The last earlier_steps rows per deal, whole, for a whole re-render.
-        self._earlier_rows: dict[str, list[Any]] = {}
         # 0.64.0. The cards the outcome door took off a filing on a step whose
         # list a who step's book reads (`finds_refused`, `finds_taken` on the
         # 201, contract 4.1.12), by step id, so the next ask on that step can
@@ -621,25 +546,6 @@ class BookOfHousesTollBenchProvider:
             self._act_kinds = self.api.act_kinds()
         return self._act_kinds
 
-    def _block_kinds(self) -> frozenset[str]:
-        """The kinds the PLATFORM writes, files, runs and closes (rule 229).
-
-        A kind that publishes a `declaration` or a `template` is a block: its
-        step is written at signing and its act is filed by the platform when
-        the step opens. Read once, best effort; the fallback is the one kind
-        that publishes them today.
-        """
-        try:
-            catalog = self.list_act_kinds().get("kinds") or {}
-        except Exception:  # noqa: BLE001 - a catalog read must never block work
-            return BLOCK_KINDS_FALLBACK
-        found = {
-            str(name).strip().lower()
-            for name, entry in catalog.items()
-            if isinstance(entry, dict) and (entry.get("declaration") or entry.get("template"))
-        }
-        return frozenset(found) or BLOCK_KINDS_FALLBACK
-
     def _brief_for(self, target_id: str) -> dict[str, Any]:
         """The live brief, or an empty dict. Never raises except on a 404.
 
@@ -811,102 +717,35 @@ class BookOfHousesTollBenchProvider:
             payload["plan_template"] = error.plan_template
         return payload
 
-    def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
-        """What the platform is running on this step, or None.
-
-        RULE 229: a block is a step the platform writes, files, runs and
-        closes. When its act is standing or already executed, the harness has
-        no move on it: filing another act is a duplicate (409) and filing the
-        outcome takes words that are the platform's to write. The memo is fed
-        by current_step, the call the deal dispatch already makes.
-        """
-        entry = self._platform_blocks.get(str(step_id or ""))
-        return entry if entry and entry.get("kinds") else None
-
-    def platform_owned_block(self, step_id: str) -> dict[str, Any] | None:
-        """The rule-229 memo, for the dispatch: {"kinds": {kind: state}} when
-        the platform is running a block on this step, else None. Read off the
-        last current_step call; never a call of its own."""
-        return self._platform_owned(step_id)
-
-    # THE AGENT'S OWN FILED PLANS, WHICH IT WROTE AND DOES NOT NEED BACK.
-    # /proposals/mine carries every bid this agent ever filed, each with its
-    # whole plan: the route's own comment says the body can exceed 100KB, and
-    # it is re-read into the conversation on every cycle. The bid the agent
-    # must ACT on keeps its plan; the rest come back as the row -- ids, money,
-    # status, the deal block, the person's answers and the move.
-    PROPOSAL_PLAN_KEYS = (
-        "steps",
-        "steps_original",
-        "pitch_body",
-        "strategy",
-        "skill_research",
-        "research_links",
-        "smart_goals",
-        "finalist_questions",
-        "wins",
-        "capabilities",
-        "campaign",
-        "allocation",
-    )
-    # Emitted twice by the bench under both vocabularies (contract 2.23). One
-    # copy is enough; the newer word is the one kept.
-    PROPOSAL_DUPLICATE_KEYS = ("finalist_answers", "finalist_health")
-
-    # THE MODEL'S VIEW OF ITS OWN BIDS IS SMALL (0.35.5). On 2026-09-09 one
-    # `list_proposals` call handed a GLM run 213,096 characters (~53k tokens):
-    # 79 bids, sixteen of them accepted deals long ended, each kept WHOLE
-    # because it carried a deal id. The run burned 268k input tokens and was
-    # cut off by its budget before it filed anything. A settled bid -- expired,
-    # rejected, withdrawn, or a deal that ended -- is one line now, only the
-    # newest few of those are listed, and the whole answer is capped: past the
-    # cap the oldest live plans drop out first. `_owned_proposals` (the
-    # harness's own reader) is untouched and still sees every bid whole.
-    SETTLED_STATUSES = frozenset({"expired", "rejected", "withdrawn", "superseded"})
-    ENDED_DEAL_STATUSES = frozenset({"ended", "resolved", "lapsed"})
-    SETTLED_ROWS_KEPT = 12
+    # ONE SIZE CAP, ON THIS LIST ONLY (0.35.5, kept by the 0.74.0 cut). On
+    # 2026-09-09 one `list_proposals` call handed a GLM run 213,096 characters
+    # (~53k tokens): 79 bids, each with its whole plan. Every row now goes as
+    # the bench sent it, and only when the whole answer runs past the cap do
+    # the oldest rows with no move on them drop out, counted and said.
     LIST_PROPOSALS_CHARS = 48_000
 
     def list_proposals(self) -> dict[str, Any]:
-        rows = self.api.proposals()
-        return self._proposals_view(rows)
-
-    def _proposals_view(self, rows: Any) -> dict[str, Any]:
-        live: list[dict[str, Any]] = []
-        settled: list[dict[str, Any]] = []
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            if self._settled(row):
-                settled.append(self._settled_line(row))
-            else:
-                live.append(self._proposal_row(row))
-        settled.sort(key=lambda r: str(r.get("filed_at") or ""), reverse=True)
-        omitted = max(0, len(settled) - self.SETTLED_ROWS_KEPT)
-        settled = settled[: self.SETTLED_ROWS_KEPT]
-        payload: dict[str, Any] = {
-            "ok": True,
-            "proposals": live + settled,
-            "settled_omitted": omitted,
-        }
-        if omitted:
-            payload["note"] = (
-                f"{omitted} older settled bid(s) are not listed; the bench still holds them."
-            )
-        # The cap: the oldest live plan goes first, the bid's row stays.
-        with_plans = sorted(
-            (i for i, r in enumerate(live) if "steps" in r),
-            key=lambda i: str(live[i].get("filed_at") or ""),
+        rows = [row for row in (self.api.proposals() or []) if isinstance(row, dict)]
+        payload: dict[str, Any] = {"ok": True, "proposals": rows, "omitted": 0}
+        if self._measure(payload) <= self.LIST_PROPOSALS_CHARS:
+            return payload
+        # The rows with a move on them always stay; the rest go oldest first.
+        candidates = sorted(
+            (i for i, row in enumerate(rows) if not row.get("your_move")),
+            key=lambda i: str(rows[i].get("filed_at") or ""),
         )
-        while with_plans and self._measure(payload) > self.LIST_PROPOSALS_CHARS:
-            row = live[with_plans.pop(0)]
-            for key in self.PROPOSAL_PLAN_KEYS:
-                row.pop(key, None)
-            row["plan_omitted"] = (
-                "This list is too long to carry every plan, so this one is not "
-                "handed back. The bench holds it; the deal's live step comes "
-                "from toll_bench.current_step."
-            )
+        dropped: set[int] = set()
+        for index in candidates:
+            if self._measure({"proposals": [r for i, r in enumerate(rows)
+                                            if i not in dropped]}) <= self.LIST_PROPOSALS_CHARS:
+                break
+            dropped.add(index)
+        payload["proposals"] = [r for i, r in enumerate(rows) if i not in dropped]
+        payload["omitted"] = len(dropped)
+        payload["note"] = (
+            f"{len(dropped)} older bid(s) with no move on them are not listed, to "
+            "keep this answer small; the bench still holds them."
+        )
         return payload
 
     @staticmethod
@@ -915,77 +754,6 @@ class BookOfHousesTollBenchProvider:
             return len(json.dumps(value, separators=(",", ":"), default=str))
         except (TypeError, ValueError):  # pragma: no cover - defensive
             return len(str(value))
-
-    def _settled(self, row: dict[str, Any]) -> bool:
-        if row.get("your_move"):
-            return False
-        deal = row.get("deal") if isinstance(row.get("deal"), dict) else {}
-        deal_status = str(deal.get("status") or "")
-        if deal_status in self.ENDED_DEAL_STATUSES:
-            return True
-        if deal_status:
-            return False
-        return str(row.get("status") or "") in self.SETTLED_STATUSES
-
-    @staticmethod
-    def _settled_line(row: dict[str, Any]) -> dict[str, Any]:
-        deal = row.get("deal") if isinstance(row.get("deal"), dict) else {}
-        steps = row.get("steps")
-        line = {
-            key: row.get(key)
-            for key in ("id", "target_goal_id", "status", "filed_at", "total_ask_cents")
-        }
-        line["deal"] = {"deal_id": deal.get("deal_id"), "status": deal.get("status")}
-        line["steps_count"] = len(steps) if isinstance(steps, list) else 0
-        line["settled"] = True
-        return line
-
-    def _owned_proposals(self) -> list[dict[str, Any]]:
-        """Every filed bid, WHOLE. `list_proposals` is the MODEL's view.
-
-        The informed plan inherits from the SEALED steps of the bid it
-        revises, so this path needs the plan the tool keeps off the wire. It
-        reads the API where there is one and falls through to the tool
-        otherwise, which is how a provider whose bids are stubbed still works.
-        """
-        fetch = getattr(self.api, "proposals", None)
-        if callable(fetch):
-            rows = fetch()
-            if isinstance(rows, list):
-                return rows
-        return self.list_proposals().get("proposals") or []
-
-    def _proposal_row(self, proposal: Any) -> Any:
-        """One filed bid, with its plan only where the plan is the work.
-
-        A proposal with a move on it -- a plan to file, a deal to sign, a
-        person's answers to read -- keeps everything: that plan is what the
-        next filing is written from. A settled or open bid keeps its row and
-        says how many steps it had.
-        """
-        if not isinstance(proposal, dict):
-            return proposal
-        row = {
-            key: value
-            for key, value in proposal.items()
-            if key not in self.PROPOSAL_DUPLICATE_KEYS
-        }
-        deal = proposal.get("deal") or {}
-        acting = bool(proposal.get("your_move")) or bool(
-            isinstance(deal, dict) and deal.get("deal_id")
-        )
-        if acting:
-            row.pop("steps_original", None)
-            return row
-        steps = proposal.get("steps")
-        for key in self.PROPOSAL_PLAN_KEYS:
-            row.pop(key, None)
-        row["steps_count"] = len(steps) if isinstance(steps, list) else 0
-        row["plan_omitted"] = (
-            "This bid has no move on it, so its plan is not handed back. It is "
-            "the plan you filed; the bench still holds it."
-        )
-        return row
 
     def validate_proposal(
         self,
@@ -1065,17 +833,15 @@ class BookOfHousesTollBenchProvider:
             self._log_refusal("validate", key, door)
         return {
             "ok": bool(door.get("ok")),
-            "problems": self._trim_problems(problems),
+            "problems": _door_rows(problems),
             "problem_count": len(problems),
             "summary": summary,
             # TRIMS ARE NOT PROBLEMS (contract 4.0.12): a headline over 40
             # characters or a research note over its cap is cut at a word at
             # filing, and this is what would be stored. ALWAYS PRESENT.
-            "trimmed": self._trim_problems(door.get("trimmed")),
+            "trimmed": _door_rows(door.get("trimmed")),
             "corrected_ok": bool(door.get("corrected_ok")),
-            "corrections": [
-                str(line)[:PROBLEM_TEXT_MAX] for line in (door.get("corrections") or [])
-            ][:PROBLEM_LIMIT],
+            "corrections": list(door.get("corrections") or []),
             "attempt": attempts,
             "attempts_left": max(0, MAX_VALIDATE_ATTEMPTS - attempts),
             "source": "bench_validate_door",
@@ -1112,7 +878,7 @@ class BookOfHousesTollBenchProvider:
             "terminal": True,
             "attempts": MAX_VALIDATE_ATTEMPTS,
             "attempts_left": 0,
-            "problems": self._trim_problems(problems),
+            "problems": _door_rows(problems),
             "problem_count": len(problems),
             "summary": last.get("summary") or "",
             "fix": (
@@ -1151,27 +917,6 @@ class BookOfHousesTollBenchProvider:
             else:
                 parts.append(f"{code} x{len(steps)}")
         return f"{len(problems)} problem(s): " + ", ".join(parts)
-
-    @staticmethod
-    def _trim_problems(problems: Any) -> list[dict[str, Any]]:
-        """The door's problems, capped and with every string bounded.
-
-        A problem is a code, where it is, what is wrong and how to fix it. The
-        detail is the door's own words and is kept; it is only stopped from
-        quoting an entire plan back into the conversation.
-        """
-        if not isinstance(problems, list):
-            return []
-        trimmed: list[dict[str, Any]] = []
-        for problem in problems[:PROBLEM_LIMIT]:
-            if not isinstance(problem, dict):
-                continue
-            row = {
-                key: (value[:PROBLEM_TEXT_MAX] if isinstance(value, str) else value)
-                for key, value in problem.items()
-            }
-            trimmed.append(row)
-        return trimmed
 
     @staticmethod
     def _log_refusal(door: str, target_id: str, payload: Any) -> None:
@@ -1972,414 +1717,36 @@ class BookOfHousesTollBenchProvider:
             raise
 
     def current_step(self, deal_id: str, whole: bool = False) -> dict[str, Any]:
-        """The current step, whitelisted. `whole=True` renders every earlier
-        step whole, nothing trimmed for size (0.62.0): the read a step ask
-        that answered need_tools gets on the old road."""
-        result = self.api.current_step(deal_id)
-        step = result.get("current_step") or {}
-        deal = result.get("deal") or {}
-        thread = result.get("step_thread") or {}
-        access = result.get("access") or {}
-        material = access.get("material_change") or {}
-        swap = access.get("equivalent_swap") or {}
-        payload = {
-            "ok": result.get("ok", True),
-            "deal": {
-                key: deal.get(key)
-                for key in (
-                    "id",
-                    "proposal_id",
-                    "target_goal_id",
-                    "status",
-                    "timeline_days",
-                    "is_free",
-                )
-            },
-            "current_step": {
-                key: step.get(key)
-                for key in (
-                    "id",
-                    "number",
-                    "title",
-                    "state",
-                    "ask",
-                    "outcome_promise",
-                    "outcome_filed_at",
-                    "declared_odds_at_bid",
-                    "declared_odds_restated",
-                    "declared_odds_drift",
-                    "har_blocks",
-                    "har_responses",
-                    # RULE 230: what this step's SIGNED plan promised to hand
-                    # back ({channel, family, types}), null when it promised
-                    # nothing. A key the server adds and this whitelist drops
-                    # does not exist -- that is exactly how person_sees_control
-                    # went missing for weeks.
-                    "deliverable",
-                    # The file receipts already attached to this step. ALWAYS
-                    # PRESENT, including the empty list: nothing delivered and
-                    # no visibility must be tellable apart.
-                    "file_receipts",
-                    # THE ROUNDS AND THE LOOP (bench contract 4.1.42; 0.66.0):
-                    # `repeats` is the bench's own count of a step done in
-                    # rounds (cadence, total, per_round, current, items,
-                    # `say` -- which names the round and says when to send
-                    # last_round) or of a loop. This whitelist dropped it, so
-                    # the model never read "send last_round: true" and never
-                    # knew it was on round 2 (Dr. Moose, 2026-10-21). None on
-                    # a plain step and on an older bench.
-                    "repeats",
-                )
-            },
-            # Open-ask visibility (server contract 2026-08-28): False while a
-            # person-held ask is not yet open (the person sees NO control);
-            # open_ask_move then spells out the one move that opens it. These
-            # were stripped by this whitelist until v0.15.0 -- the reason the
-            # server's hint never reached railed models.
-            "person_sees_control": result.get("person_sees_control"),
-            "open_ask_move": result.get("open_ask_move"),
-            "pulse_cadence": result.get("pulse_cadence"),
-            "latest_work_pulse": result.get("latest_work_pulse"),
-            "step_thread": {
-                "unread_from_person": thread.get("unread_from_person", 0),
-                "unanswered_elsewhere": thread.get("unanswered_elsewhere") or [],
-                "messages": thread.get("messages") or [],
-                "post_reply": thread.get("post_reply"),
-                # Contract 4.0.4: the list behind unread_from_person, each
-                # entry {id, posted_at, answer_with}. This whitelist dropped it
-                # until 0.56.1, so no reply ever named what it answered.
-                "unanswered_messages": thread.get("unanswered_messages") or [],
-            },
-            "released_materials": result.get("released_materials") or [],
-            "released_materials_count": result.get("released_materials_count", 0),
-            "access": {
-                "grants": access.get("grants") or [],
-                "your_homework": access.get("your_homework"),
-                "equivalent_swap": {
-                    key: swap.get(key) for key in ("endpoint", "when")
-                },
-                "material_change": {
-                    key: material.get(key)
-                    for key in ("endpoint", "consequence", "materiality_tests", "exceptions")
-                },
-            },
-            "world_file_missing": result.get("world_file_missing", False),
-            "world_file_url": result.get("world_file_url"),
-            "tip_invited": result.get("tip_invited"),
-            # r216 (server contract 2.26): the declared wait on the outside
-            # world, null when there is none. This whitelist is why
-            # person_sees_control never reached railed models until v0.15.0 --
-            # a key the server adds and the harness drops does not exist.
-            "waiting_outside": result.get("waiting_outside"),
-            # The thing an email_reply wait is waiting FOR. It rides this call
-            # and the check-in 201; dropping it here would make the agent poll
-            # for the one payload it must act on.
-            "inbound_replies": result.get("inbound_replies") or [],
-            # r220 (server contract 2.30): the replies you OWE AN ANSWER. While
-            # one stands the bench refuses your outcome, any act that is not
-            # the answer, and a declared wait (reply_owed). Each entry carries
-            # the exact propose_act body that pays it.
-            "owed_replies": result.get("owed_replies") or [],
-            # r220 second half: every act on this step and where it stands.
-            # A sent_back act carries the person's own words in `note` and is
-            # DEAD -- this whitelist is exactly why that reason never reached
-            # a railed model and one idled for hours.
-            "acts": result.get("acts") or [],
-            # The acts this step's PLAN declared, each with the door, an
-            # example body and the one move that is yours on it. A raw agent
-            # spent a whole run guessing REST shapes for a door that rode this
-            # payload; this whitelist dropped it until contract 2.44, which is
-            # the same bug in the other direction.
-            "declared_acts": result.get("declared_acts") or [],
-            # contract 2.29: the same rows, email-only, in the older shape.
-            "drafts_sent_back": result.get("drafts_sent_back") or [],
-        }
-        # LAW A: the person's answers include the selected contact refs that
-        # make an email act valid. The step ask already preserves this block
-        # verbatim, but the provider whitelist used to drop it before the ask
-        # saw it, leaving the model to request contacts the person had already
-        # picked. Keep absence distinct from an empty list for older benches.
-        if "rounds_used" in step:
-            payload["current_step"]["rounds_used"] = step["rounds_used"]
-        for field in ("submission", "turn"):
-            if isinstance(result.get(field), dict):
-                payload[field] = result[field]
-        person_said = result.get("the_person_said")
-        if isinstance(person_said, list):
-            payload["the_person_said"] = list(person_said)
-        # Contract 4.1.14 (0.58.3): what this deal's earlier approved steps
-        # handed back and what their acts did. This whitelist dropped it, so
-        # lab agent Bree failed a flyer three times for want of a date step
-        # 3's calendar act carried (2026-10-05). Absent on an older bench, and
-        # then absent here. 0.62.0: a hand-back the bench trimmed is read
-        # whole first (SF Founder House never saw its match card's lobby
-        # time, 2026-10-06), and every hand-back renders field by field.
-        rows = result.get(EARLIER_STEPS_KEY)
-        if isinstance(rows, list):
-            rows = self._whole_earlier_rows(deal_id, rows)
-            self._earlier_rows.pop(str(deal_id), None)
-            self._earlier_rows[str(deal_id)] = rows
-            while len(self._earlier_rows) > WHOLE_HAND_BACK_MEMORY:
-                self._earlier_rows.pop(next(iter(self._earlier_rows)))
-        earlier = render_earlier_steps(rows, cap=None) if whole else render_earlier_steps(rows)
-        if earlier is not None:
-            payload[EARLIER_STEPS_KEY] = earlier
-        # Contract 3.13: every message the step holds, whatever `messages`
-        # carries. `messages` is only the person's words since the agent last
-        # spoke, so without this count an agent's own posted ask looked lost
-        # and was posted again (Bree, eleven times on one step, 2026-10-05).
-        if "thread_count" in thread:
-            payload["step_thread"]["thread_count"] = thread.get("thread_count")
-        # RULE 230, always present including zero. The file receipts ride the
-        # step where the server puts them; read both places rather than making
-        # the model poll a route for the one payload it must act on.
-        receipts = payload["current_step"].get("file_receipts")
-        if not isinstance(receipts, list):
-            receipts = result.get("file_receipts")
-        payload["current_step"]["file_receipts"] = receipts if isinstance(receipts, list) else []
-        known = self._step_receipts.get(str(step.get("id") or ""), [])
-        if known and not payload["current_step"]["file_receipts"]:
-            payload["current_step"]["file_receipts"] = list(known)
-        if payload["current_step"].get("deliverable") is None:
-            payload["current_step"]["deliverable"] = result.get("deliverable")
-        # 0.64.0: the hand-back's readers, beside the step. `control` is the
-        # person's ONE control on this step (contract 4.1.1), {kind, shape,
-        # count, binds, own_list, quiet_door, closes}, on current_step and the
-        # root alike; `closes` is the bench's sentence for what the person
-        # does with the hand-back, and on the research step a
-        # found_by_research who step stamps it is pick_people over the
-        # agent's own cards. This whitelist dropped it, so the model never
-        # read who picks from its list. `read_by` is the later step whose
-        # control is built from this step's list (a who step whose
-        # `from_step` is this step, contract 4.1.9); `work_sent_back` is what
-        # the person sent back on this step and why, with `expected`
-        # (contract 2.43) -- the note behind "None of these fit". Absent on an
-        # older bench, and then absent here.
-        control = step.get("control")
-        if not isinstance(control, dict):
-            control = result.get("control")
-        if isinstance(control, dict):
-            payload["current_step"]["control"] = control
-        if isinstance(result.get("read_by"), list):
-            payload["read_by"] = list(result["read_by"])
-        if isinstance(result.get("work_sent_back"), list):
-            payload["work_sent_back"] = list(result["work_sent_back"])
-            payload["work_sent_back_count"] = result.get(
-                "work_sent_back_count", len(result["work_sent_back"])
-            )
-        finds = self._last_filing_finds.get(str(step.get("id") or ""))
+        """The bench's current-step answer, WHOLE (0.74.0, audit item 11).
+
+        No whitelist: nine CHANGELOG entries were "the whitelist dropped a key
+        the bench added" (person_sees_control, owed_replies, earlier_steps,
+        repeats, control, ...), so every key the bench sends now reaches the
+        model as sent. `whole=True` is the bench's own `?full=1` answer -- every
+        earlier step's hand-back whole, the pulse history and the thread --
+        for a run that needs more than the small default.
+
+        Two relay notes are kept, both the bench's own words carried from one
+        call to the next: the ids of the person's unanswered messages (a reply
+        names what it answers, 0.56.1), and the cards the outcome door took off
+        the last filing on this step (`your_last_filing`, 0.64.0).
+        """
+        result = (self.api.current_step(deal_id, full=True) if whole
+                  else self.api.current_step(deal_id))
+        payload: dict[str, Any] = dict(result) if isinstance(result, dict) else {}
+        step = payload.get("current_step") if isinstance(payload.get("current_step"), dict) else {}
+        step_id = str(step.get("id") or "")
+        if step_id:
+            self._last_step_id = step_id
+        finds = self._last_filing_finds.get(step_id)
         if finds:
             payload[LAST_FILING_KEY] = {
                 **{key: list(rows) for key, rows in finds.items()},
                 "note": LAST_FILING_NOTE,
             }
-        self._remember_platform_blocks(step.get("id"), payload)
-        self._remember_deliverable(step.get("id"), payload)
-        self._remember_unanswered(
-            str(step.get("id") or ""), thread.get("unanswered_messages") or [])
-        self._fit_the_step(payload)
+        thread = payload.get("step_thread") if isinstance(payload.get("step_thread"), dict) else {}
+        self._remember_unanswered(step_id, thread.get("unanswered_messages") or [])
         return payload
-
-    def earlier_steps_whole(self, deal_id: str) -> list[str] | None:
-        """The last earlier_steps read for this deal, rendered with nothing
-        trimmed for size; None when this process has not read the deal."""
-        rows = self._earlier_rows.get(str(deal_id))
-        return render_earlier_steps(rows, cap=None) if rows is not None else None
-
-    def _whole_earlier_rows(self, deal_id: str, rows: list[Any]) -> list[Any]:
-        """The rows with every hand-back the bench trimmed filled in whole.
-
-        The bench trims a hand-back's words at 600 characters on current-step
-        and says so in `trimmed`; the whole receipt is steps[].outcome on
-        history_url (`?full=1`). One history read fills every trimmed receipt
-        it carries, and each is remembered by receipt id, so a deal costs one
-        extra read per new trimmed hand-back, not one per cycle. When the read
-        fails or does not carry the receipt, the row keeps the bench's words
-        and its `trimmed` note, which the render shows where the cut is.
-        """
-        wanted = [
-            str(row["hand_back"].get("receipt_id"))
-            for row in rows
-            if isinstance(row, dict)
-            and bench_trimmed(row.get("hand_back"))
-            and row["hand_back"].get("receipt_id")
-        ]
-        now = time.monotonic()
-        missing = [
-            rid for rid in wanted
-            if rid not in self._whole_hand_backs
-            and now - self._whole_misses.get(rid, -WHOLE_HAND_BACK_RETRY_SECONDS)
-            >= WHOLE_HAND_BACK_RETRY_SECONDS
-        ]
-        if missing:
-            history: Any = None
-            try:
-                history = self.api.current_step(deal_id, full=True)
-            except Exception as error:  # noqa: BLE001 - a read never costs the step
-                # A client with no history read (TypeError) lands here too.
-                _LOGGER.warning(
-                    "earlier_steps: history read for deal %s failed (%s); "
-                    "trimmed hand-backs stay as the bench cut them", deal_id, error,
-                )
-            for rid, words in _history_receipt_words(history):
-                if rid in missing:
-                    self._whole_hand_backs[rid] = words
-            for rid in missing:
-                if rid in self._whole_hand_backs:
-                    self._whole_misses.pop(rid, None)
-                else:
-                    self._whole_misses[rid] = now
-            while len(self._whole_hand_backs) > WHOLE_HAND_BACK_MEMORY:
-                self._whole_hand_backs.pop(next(iter(self._whole_hand_backs)))
-            filled = [rid for rid in missing if rid in self._whole_hand_backs]
-            if filled:
-                _LOGGER.info(
-                    "earlier_steps: %d trimmed hand-back(s) on deal %s read whole "
-                    "from history", len(filled), deal_id,
-                )
-        out: list[Any] = []
-        for row in rows:
-            back = row.get("hand_back") if isinstance(row, dict) else None
-            rid = str(back.get("receipt_id") or "") if isinstance(back, dict) else ""
-            whole = self._whole_hand_backs.get(rid) if bench_trimmed(back) else None
-            if whole is not None:
-                row = {**row, "hand_back": {**back, "text": whole,
-                                            "text_chars": len(whole), "trimmed": None}}
-            out.append(row)
-        return out
-
-    def _fit_the_step(self, payload: dict[str, Any]) -> None:
-        """Cap the lists on a step that grow for the life of the deal.
-
-        A step thread, the acts filed on a step and the materials released to
-        a deal all get longer and never shorter, and every one of them is
-        re-read into the conversation on every cycle. The newest rows are kept
-        -- the server sends them oldest first -- and the TRUE COUNT is always
-        published beside them, because "nothing there" and "not shown" must be
-        tellable apart. `owed_replies` is never capped: it is the list of
-        things the bench will refuse the next filing over.
-        """
-        thread = payload.get("step_thread")
-        if isinstance(thread, dict):
-            messages = thread.get("messages")
-            if isinstance(messages, list):
-                thread["messages_total"] = len(messages)
-                thread["messages_omitted"] = max(
-                    0, len(messages) - STEP_THREAD_MESSAGE_LIMIT
-                )
-                if thread["messages_omitted"]:
-                    thread["messages"] = messages[-STEP_THREAD_MESSAGE_LIMIT:]
-                    thread["messages_note"] = (
-                        f"The newest {STEP_THREAD_MESSAGE_LIMIT} messages on this "
-                        f"step; {thread['messages_omitted']} older ones are not "
-                        "shown. Nothing is owed an answer that is not in "
-                        "`unread_from_person` or `unanswered_elsewhere`."
-                    )
-                elif (thread.get("thread_count") or 0) > len(messages):
-                    thread["messages_note"] = (
-                        "`messages` carries only the person's words since you "
-                        "last spoke, never your own posts; `thread_count` counts "
-                        "every message on this step."
-                    )
-        for key, cap in (
-            ("acts", STEP_ACT_LIMIT),
-            ("declared_acts", STEP_ACT_LIMIT),
-            ("drafts_sent_back", STEP_ACT_LIMIT),
-            ("work_sent_back", STEP_ACT_LIMIT),
-            ("released_materials", RELEASED_MATERIAL_LIMIT),
-        ):
-            rows = payload.get(key)
-            if isinstance(rows, list) and len(rows) > cap:
-                payload[f"{key}_total"] = len(rows)
-                payload[key] = rows[-cap:]
-                _LOGGER.info(
-                    "current_step: %d of %d %s rows handed over", cap, len(rows), key
-                )
-
-    def _remember_deliverable(self, step_id: Any, payload: dict[str, Any]) -> None:
-        """Record the files already on this step (rule 230), so a later read
-        that omits them still shows them. Whether a filing owes a file is the
-        bench's to say (`deliverable_missing`), never a local check."""
-        step_id = str(step_id or "")
-        if not step_id:
-            return
-        step = payload.get("current_step") or {}
-        server_receipts = [
-            item for item in (step.get("file_receipts") or []) if isinstance(item, dict)
-        ]
-        if server_receipts:
-            known = {
-                str(item.get("receipt_id") or "")
-                for item in self._step_receipts.get(step_id, [])
-            }
-            merged = list(self._step_receipts.get(step_id, []))
-            merged.extend(
-                item
-                for item in server_receipts
-                if str(item.get("receipt_id") or "") not in known
-            )
-            self._step_receipts[step_id] = merged
-
-    def _remember_platform_blocks(
-        self, step_id: Any, payload: dict[str, Any]
-    ) -> None:
-        """Record which declared blocks the platform is running on this step.
-
-        RULE 229: on a block step the platform files the act when the step
-        opens and files the outcome when the act executes. The harness has to
-        know that without asking, or it files a duplicate act (409) and an
-        outcome in words that are not its own. A declared kind is the
-        platform's while an act of that kind is standing or already executed;
-        a failed or denied one is the work coming back (rule 225) and the step
-        is the agent's again. An executed one is the agent's again too when
-        the bench's `submission` hands the outcome to the agent on its turn
-        (0.64.2, contract 4.1.26: the piece the block promised is still owed).
-        """
-        step_id = str(step_id or "")
-        if not step_id:
-            return
-        self._last_step_id = step_id
-        live: dict[str, str] = {}
-        for act in payload.get("acts") or []:
-            if not isinstance(act, dict):
-                continue
-            kind = str(act.get("kind") or "").strip().lower()
-            state = str(act.get("state") or "").strip().lower()
-            if kind and state in LIVE_ACT_STATES:
-                live[kind] = state
-        declared = {
-            str(entry.get("kind") or "").strip().lower()
-            for entry in payload.get("declared_acts") or []
-            if isinstance(entry, dict)
-        }
-        block_kinds = self._block_kinds()
-        # 0.64.2: THE PIECE FOLLOWS (bench contract 4.1.26, corrected
-        # 2026-10-18). WHAT FORCED IT: prod heat 2026-10-20 02:15Z, lab agents
-        # Opus (deal a90bd449) and Fable (deal 3dc988f9). Step 3 of each was a
-        # `calls` block (platform.draft) on an APPROVE step promising cards
-        # (subject, body). The platform ran the draft at 02:27Z and the act
-        # read `executed`, but the cards were still owed, so the bench kept
-        # the step the agent's: turn `agent`, "Hand in the work", submission
-        # recommending submit_step_outcome with "The step stays yours until
-        # it lands". This memo still read the executed block as the
-        # platform's (rule 229), so every cycle logged "the platform's move
-        # (calls block executed (rule 229)); no model call" and the draft
-        # never came. A block act that has RUN no longer holds the step when
-        # the bench itself hands the outcome to the agent on its turn; a
-        # STANDING block act (pending, held, approved) is still the
-        # platform's, so a second copy of it is still never filed.
-        hands_back = bench_hands_back_to_agent(payload)
-        owned = {
-            kind: state
-            for kind, state in live.items()
-            if kind in block_kinds
-            and (not declared or kind in declared)
-            and not (hands_back and state in DONE_BLOCK_ACT_STATES)
-        }
-        if owned:
-            self._platform_blocks[step_id] = {"kinds": owned}
-        else:
-            self._platform_blocks.pop(step_id, None)
 
     def _remember_unanswered(self, step_id: str, rows: Any) -> None:
         if not step_id or not isinstance(rows, list):
@@ -2524,18 +1891,6 @@ class BookOfHousesTollBenchProvider:
     # to the bench exactly as filed. Not a list of what the door takes.
     # A meeting is intent only (rule 223): a slot, a time or an email body is
     # never carried onto it, so every email and calendar field stays out.
-    _SHAPED_MEETING_FIELDS = frozenset({
-        "kind", "to", "contact_ref", "found_contact", "seat",
-        "subject", "body_text", "purpose", "in_reply_to",
-        "summary", "start", "end", "description", "location", "attendees",
-        "with", "with_name", "duration_min", "window", "title",
-        "offer_count", "message",
-    })
-    _SHAPED_CALENDAR_FIELDS = frozenset({
-        "kind", "summary", "start", "end", "description", "location",
-        "attendees", "purpose",
-    })
-
     def refile_source_correction(
         self, deal_id: str, step_id: str, correction: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -2560,100 +1915,14 @@ class BookOfHousesTollBenchProvider:
         (`list_act_kinds`). On a loop step the act names its item with
         `repeat_item`, exactly as current_step says.
 
-        THE BENCH IS THE ONE DOOR (0.56.4). What forced it: lab agents Rick
-        (deal 40b6df58, step 5) and Ali (step 7) filed a loop-step email with
-        `repeat_item`, as the bench's own form and current_step told them to,
-        and this method refused it `invalid_act_fields` from a private
-        allow-list before it reached the server; the retry without the item
-        failed the bench's schema, and both steps were parked. So the act goes
-        to the bench as filed: no key and no kind is refused here. The one
-        local refusal left is rule 229's, a block the platform is running.
-        meeting and calendar_event keep their shaping and carry any key it
-        does not shape (0.57.1: calendar_event no longer refuses a missing
-        summary, start or end -- the bench answers with `issues`); every
-        other kind goes as filed. A refusal from the door
-        comes back in the door's own words (`_act_refusal`)."""
-        # RULE 229: HANDS OFF A BLOCK THE PLATFORM IS RUNNING. It filed the
-        # act itself when the step opened; a second copy is a duplicate the
-        # bench refuses 409, and the person sees two Allow cards for one
-        # meeting. An ANSWER to an owed reply is never that (rule 220), so it
-        # goes through.
-        owned = self._platform_owned(step_id)
-        kind_asked = str(act.get("kind") or "email").strip().lower()
-        if (
-            owned
-            and kind_asked in owned["kinds"]
-            and not str(act.get("in_reply_to") or "").strip()
-        ):
-            return {
-                "ok": False,
-                "error": "platform_owned_block",
-                "kind": kind_asked,
-                "state": owned["kinds"][kind_asked],
-                "message": (
-                    f"This step's {kind_asked} block is the platform's to file "
-                    "and to close (rule 229): it filed the act when the step "
-                    "opened and it files the step's outcome when the act "
-                    "executes. File nothing here. Watch current_step, answer "
-                    "the person's messages, and file a changed act only after "
-                    "a deny or a failure."
-                ),
-            }
-        kind = kind_asked
-        # What the shaping below does not know rides along as filed:
-        # repeat_item today, whatever the door takes next week.
-        if kind == "meeting":
-            passed = {key: value for key, value in act.items()
-                      if key not in self._SHAPED_MEETING_FIELDS}
-            # RULE 223: intent only. You say who, how long and roughly when;
-            # the platform reads the person's calendar, offers the invitee the
-            # times, books the pick and carries change and cancel. You never
-            # touch a slot, a time or an email body.
-            if not str(act.get("with") or "").strip():
-                return {"ok": False, "error": "missing_act_field", "field": "with"}
-            payload = {"kind": kind, "with": str(act["with"]).strip()}
-            for field in ("with_name", "title", "description", "location"):
-                if act.get(field):
-                    payload[field] = str(act[field])
-            if act.get("message"):
-                payload["message"] = str(act["message"])[:4000]
-            if act.get("window"):
-                payload["window"] = (act["window"] if isinstance(act["window"], dict)
-                                     else str(act["window"]))
-            for field in ("duration_min", "offer_count"):
-                if act.get(field) is not None:
-                    payload[field] = act[field]
-            if act.get("purpose"):
-                payload["purpose"] = str(act["purpose"])[:120]
-            return self._file_act(deal_id, step_id, {**passed, **payload},
-                                  idempotency_key)
-        if kind == "calendar_event":
-            # 0.57.1: no local refusal. A calendar slot takes whatever kind the
-            # service's own form takes; the bench answers a missing or wrong
-            # one in `issues` with an example.
-            passed = {key: value for key, value in act.items()
-                      if key not in self._SHAPED_CALENDAR_FIELDS}
-            payload = {"kind": kind}
-            if act.get("summary"):
-                payload["summary"] = str(act["summary"])[:400]
-            for field in ("start", "end"):
-                if act.get(field):
-                    payload[field] = act[field]
-            for field in ("description", "location"):
-                if act.get(field):
-                    payload[field] = str(act[field])
-            if isinstance(act.get("attendees"), list) and act["attendees"]:
-                payload["attendees"] = act["attendees"]
-            if act.get("purpose"):
-                payload["purpose"] = str(act["purpose"])[:120]
-            return self._file_act(deal_id, step_id, {**passed, **payload},
-                                  idempotency_key)
-        # email and every other kind: as filed. The bench fills what it
-        # holds (the recipient from a loop's item, a follow-up's subject from
-        # its thread, an answer's recipient and subject from the reply) and
-        # refuses what is wrong in its own words.
-        return self._file_act(deal_id, step_id, dict(act, kind=kind),
-                              idempotency_key)
+        THE BENCH IS THE ONE DOOR (0.56.4, finished in 0.74.0). The act goes to
+        the bench exactly as filed, every kind: no key refused, no field
+        shaped or cut here, and no rule-229 block check (the bench refuses a
+        duplicate 409 and its `turn` says whose move a step is). A refusal
+        comes back in the door's own words (`_act_refusal`). `kind` defaults
+        to email, as it always has."""
+        kind = str(act.get("kind") or "email").strip().lower()
+        return self._file_act(deal_id, step_id, dict(act, kind=kind), idempotency_key)
 
     def _file_act(
         self, deal_id: str, step_id: str, payload: dict[str, Any], idempotency_key: str
@@ -2789,20 +2058,6 @@ class BookOfHousesTollBenchProvider:
                     return {"ok": False, "error": error.code, "status": error.status,
                             "message": error.message, "detail": error.body}
         step_ref = str(outcome.get("step_ref") or "").strip() or self._last_step_id
-        owned = self._platform_owned(step_ref) if step_ref else None
-        if owned:
-            return {
-                "ok": False,
-                "error": "platform_owned_block",
-                "kinds": sorted(owned["kinds"]),
-                "message": (
-                    f"The {', '.join(sorted(owned['kinds']))} block on this "
-                    "step files its own outcome when the act executes (rule "
-                    "229), and the person's APPROVE opens on the platform's "
-                    "receipt words. Do not file one. If the act failed or was "
-                    "denied, the step is yours again: file a changed act."
-                ),
-            }
         # RULE 230 (2026-09-05): `file_url` is the agent-hosted lane. The
         # platform fetches the link ONCE, sniffs the bytes, hashes them and
         # drops them; `claim_url` rides along for a here.now page the person
@@ -3032,8 +2287,6 @@ class BookOfHousesTollBenchProvider:
             "sniffed_type": response.get("sniffed_type"),
             "family": response.get("family"),
         }
-        if step_id:
-            self._step_receipts.setdefault(step_id, []).append(receipt)
         return {
             "ok": True,
             **receipt,

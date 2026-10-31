@@ -22,12 +22,10 @@ earlier material can answer need_tools.
 from __future__ import annotations
 
 import copy
-import json
 from types import SimpleNamespace
 
 from tests.unit.test_step_ask import OBLIGATION, FakeBench, _model, _payload
 from tests.unit.test_toll_bench import FakeApi
-from toll_harness import cli
 from toll_harness.email.book_of_houses import BookOfHousesApiClient
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.toll_bench.step import (
@@ -40,7 +38,6 @@ from toll_harness.toll_bench.step import (
     ROAD_AGENTIC,
     StepAsk,
     render_earlier_steps,
-    step_tail,
     step_tools,
     the_move,
 )
@@ -71,7 +68,6 @@ MATCH_CARD = "\n".join([
     "today to confirm the street address, so I have left it off rather than guess. Jon is "
     "free any time this week, and Wednesday afternoon fits your weekday afternoons.",
 ])
-MEET_LINE = HAND_BACK_INDENT + "meet: Wed Oct 7, 4:00 to 4:20 pm, SF Founder House lobby"
 # The bench cut it just before the late field, as it did that day.
 KEPT = MATCH_CARD[: MATCH_CARD.index("\nmeet:")]
 TRIMMED_NOTE = (f"kept the first {len(KEPT)} of {len(MATCH_CARD)} characters; the whole "
@@ -138,60 +134,6 @@ class HistoryApi(FakeApi):
         return payload
 
 
-# ---------------------------------------------------------------------------
-# 1. The card the bench trimmed is read whole, once, and rides field by field
-# ---------------------------------------------------------------------------
-def test_a_card_the_bench_trimmed_reaches_the_later_step_whole_field_by_field():
-    api = HistoryApi([PROFILE, MATCH])
-    lines = BookOfHousesTollBenchProvider(api).current_step("d1")[EARLIER_STEPS_KEY]
-    assert MEET_LINE in lines
-    for field in MATCH_FIELDS:
-        assert HAND_BACK_INDENT + field in lines
-    # The free text after the card rides whole too, each line its own.
-    assert HAND_BACK_INDENT + "The place" in lines
-    assert any("by the front desk" in line for line in lines)
-    assert not any("(cut here:" in line for line in lines)
-    assert not lines[0].startswith(EARLIER_STEPS_TRIMMED)
-    assert api.full_reads == 1
-
-
-def test_the_whole_hand_back_is_read_once_per_receipt():
-    api = HistoryApi([PROFILE, MATCH])
-    provider = BookOfHousesTollBenchProvider(api)
-    first = provider.current_step("d1")[EARLIER_STEPS_KEY]
-    second = provider.current_step("d1")[EARLIER_STEPS_KEY]
-    assert first == second and MEET_LINE in second
-    assert api.full_reads == 1
-    # A hand-back the bench did not trim costs no history read at all.
-    untrimmed = HistoryApi([PROFILE])
-    BookOfHousesTollBenchProvider(untrimmed).current_step("d1")
-    assert untrimmed.full_reads == 0
-
-
-def test_when_the_history_cannot_be_read_the_cut_is_shown_where_it_is():
-    api = HistoryApi([MATCH], history_fails=True)
-    provider = BookOfHousesTollBenchProvider(api)
-    lines = provider.current_step("d1")[EARLIER_STEPS_KEY]
-    cut = [line for line in lines if "(cut here:" in line]
-    assert len(cut) == 1
-    assert f"kept the first {len(KEPT)}" in cut[0] and NEED_TOOLS in cut[0]
-    assert MEET_LINE not in lines
-    # The failed read is not repeated on every cycle.
-    provider.current_step("d1")
-    assert api.full_reads == 1
-
-
-def test_an_older_client_with_no_history_read_keeps_the_benchs_words():
-    class OldApi(FakeApi):
-        def current_step(self, deal_id):
-            payload = FakeApi.current_step(self, deal_id)
-            payload[EARLIER_STEPS_KEY] = copy.deepcopy([MATCH])
-            return payload
-
-    lines = BookOfHousesTollBenchProvider(OldApi()).current_step("d1")[EARLIER_STEPS_KEY]
-    assert any("(cut here:" in line for line in lines)
-
-
 def test_the_client_reads_history_url_with_full():
     seen = []
     client = BookOfHousesApiClient(base_url="https://bench.example", token="t")
@@ -210,26 +152,6 @@ def _email_step_payload(lines):
         declared_acts=[{"kind": "email", "filed": 0, "held": 0, "executed": 0}],
         **{EARLIER_STEPS_KEY: lines},
     )
-
-
-def test_the_late_field_rides_the_email_steps_one_call_ask():
-    lines = BookOfHousesTollBenchProvider(HistoryApi([PROFILE, MATCH])).current_step(
-        "d1")[EARLIER_STEPS_KEY]
-    payload = _email_step_payload(lines)
-    assert the_move(payload)["move"] == "file_act"
-    bench = FakeBench()
-    model = _model({"call": "propose_act", "kind": "email", "contact_ref": "c-jon",
-                    "subject": "Meet Maya at SF Founder House",
-                    "body_text": "Maya will meet you Wed Oct 7, 4:00 to 4:20 pm in the lobby."})
-    out = StepAsk(model, bench).run(OBLIGATION, payload, changed=["first look"])
-    assert out["ok"] is True and out["call"] == "propose_act"
-    [invocation] = model.invocations
-    asked = "".join(block["text"] for block in invocation["messages"][0].content)
-    assert "meet: Wed Oct 7, 4:00 to 4:20 pm, SF Founder House lobby" in asked
-    assert "how to spot you: Bright yellow rain jacket, green tote bag." in asked
-    # And it is told the card is already its own, and how to fetch more.
-    assert "never ask the person for it" in asked and NEED_TOOLS in asked
-    assert NEED_TOOLS in [tool.name for tool in invocation["tools"]]
 
 
 # ---------------------------------------------------------------------------
@@ -311,24 +233,6 @@ def test_need_tools_on_the_email_step_takes_the_old_road():
     assert "meet field" in out["why"]
 
 
-# ---------------------------------------------------------------------------
-# 5. The old road reads it all whole, and the tool fetches it whole
-# ---------------------------------------------------------------------------
-def test_the_old_road_goal_carries_every_earlier_step_whole_when_the_ask_trimmed_them():
-    rows = [_card_step(n) for n in range(1, 25)]
-    provider = BookOfHousesTollBenchProvider(HistoryApi(rows))
-    state = provider.current_step("d1")
-    assert state[EARLIER_STEPS_KEY][0].startswith(EARLIER_STEPS_TRIMMED)
-    resources = SimpleNamespace(toll_bench=provider)
-    goal_state = cli._with_whole_earlier_steps(resources, OBLIGATION, state)
-    assert goal_state[EARLIER_STEPS_KEY] == render_earlier_steps(rows, cap=None)
-    # A copy: what the dispatch remembers of the step is untouched.
-    assert state[EARLIER_STEPS_KEY][0].startswith(EARLIER_STEPS_TRIMMED)
-    # Nothing trimmed: the very same state, no extra work.
-    small = BookOfHousesTollBenchProvider(HistoryApi([PROFILE])).current_step("d1")
-    assert cli._with_whole_earlier_steps(resources, OBLIGATION, small) is small
-
-
 def test_the_current_step_tool_takes_whole_true():
     registry = add_toll_bench_tools(build_standard_registry())
     tool = next(d for d in registry.definitions() if d.name == "toll_bench.current_step")
@@ -338,16 +242,11 @@ def test_the_current_step_tool_takes_whole_true():
     provider = BookOfHousesTollBenchProvider(HistoryApi(rows))
     context = SimpleNamespace(toll_bench_provider=provider)
     handler = registry._tools["toll_bench.current_step"].handler
-    trimmed = handler(context, {"deal_id": "d1"})[EARLIER_STEPS_KEY]
-    whole = handler(context, {"deal_id": "d1", "whole": True})[EARLIER_STEPS_KEY]
-    assert trimmed[0].startswith(EARLIER_STEPS_TRIMMED)
-    assert whole == render_earlier_steps(rows, cap=None)
+    # 0.74.0: the bench's rows pass through; whole true is the bench's own
+    # `?full=1` read, never a re-render here.
+    small = handler(context, {"deal_id": "d1"})[EARLIER_STEPS_KEY]
+    assert small == rows and provider.api.full_reads == 0
+    handler(context, {"deal_id": "d1", "whole": True})
+    assert provider.api.full_reads == 1
 
 
-def test_the_tail_carries_the_whole_card_within_the_cap():
-    lines = BookOfHousesTollBenchProvider(HistoryApi([PROFILE, MATCH])).current_step(
-        "d1")[EARLIER_STEPS_KEY]
-    payload = _email_step_payload(lines)
-    tail = step_tail(payload, OBLIGATION, the_move(payload), [])
-    assert tail[EARLIER_STEPS_KEY] == lines
-    assert "meet: Wed Oct 7, 4:00 to 4:20 pm" in json.dumps(tail)

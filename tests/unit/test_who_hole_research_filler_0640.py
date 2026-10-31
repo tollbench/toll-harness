@@ -343,12 +343,13 @@ def _outcome():
     return {key: value for key, value in FINDS.items() if key != "call"}
 
 
-def test_control_read_by_and_work_sent_back_survive_the_whitelist():
+def test_control_read_by_and_work_sent_back_ride_where_the_bench_puts_them():
     for root in (False, True):
         payload = BookOfHousesTollBenchProvider(_ResearchApi(root_control=root)).current_step("d1")
-        assert payload["current_step"]["control"] == CONTROL
+        held = payload if root else payload["current_step"]
+        assert held["control"] == CONTROL
         assert payload["read_by"] == []
-        assert payload["work_sent_back"] == [] and payload["work_sent_back_count"] == 0
+        assert payload["work_sent_back"] == []
 
 
 def test_the_cards_the_door_took_off_ride_the_next_read_of_that_step():

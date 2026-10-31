@@ -219,9 +219,10 @@ class EarlierApi(FakeApi):
         return payload
 
 
-def test_the_provider_hands_the_rendered_block_over():
+def test_the_provider_hands_the_rows_over_whole():
+    """0.74.0: no whitelist and no rendering; the bench's rows as sent."""
     result = BookOfHousesTollBenchProvider(EarlierApi([SIGNED, CALENDAR])).current_step("d1")
-    assert result[EARLIER_STEPS_KEY] == render_earlier_steps([SIGNED, CALENDAR])
+    assert result[EARLIER_STEPS_KEY] == [SIGNED, CALENDAR]
 
 
 def test_the_provider_invents_nothing_for_an_older_bench():
@@ -235,7 +236,6 @@ def test_the_provider_keeps_thread_count_and_says_own_posts_are_not_in_messages(
     thread = result["step_thread"]
     assert thread["thread_count"] == 11
     assert thread["messages"] == []
-    assert "never your own posts" in thread["messages_note"]
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ def test_the_old_road_goal_carries_earlier_steps_in_current_step():
 
     goal = observed["goal"]
     data = json.loads(goal[goal.index("\n\n{") + 2:])
-    assert data["current_step"][EARLIER_STEPS_KEY] == render_earlier_steps([CALENDAR])
+    assert data["current_step"][EARLIER_STEPS_KEY] == [CALENDAR]
     assert data["current_step"]["step_thread"]["thread_count"] == 4
 
 

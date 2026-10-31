@@ -56,9 +56,6 @@ class _Response:
         return False
 
 
-class _HttpError(Exception):
-    """Stands in for urllib.error.HTTPError, which the client catches."""
-
 
 def _transport(monkeypatch, *, status=201, body=None, error=None):
     captured = {}
@@ -398,32 +395,6 @@ def test_current_step_carries_the_promise_and_the_files_always():
     # Always present, including zero: an empty hand-over and no visibility
     # must be tellable apart.
     assert payload["current_step"]["file_receipts"] == []
-
-
-def test_the_same_step_closes_once_the_bytes_are_delivered(monkeypatch):
-    api = _StepApi({"channel": "file", "family": "video", "types": ["mp4"]})
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("deal-1")
-    provider._step_receipts["step-2"] = [{"receipt_id": "receipt-1"}]
-
-    result = provider.file_outcome(
-        "target-1",
-        {"note": "The animation is on your card.", "text": "Delivered."},
-        "idem-1",
-    )
-
-    assert result == {"ok": True, "receipt_id": "r-1"}
-    assert api.filed
-
-
-def test_the_files_this_run_delivered_show_on_the_step():
-    api = _StepApi({"channel": "file", "family": "video", "types": ["mp4"]})
-    provider = BookOfHousesTollBenchProvider(api)
-    provider._step_receipts["step-2"] = [{"receipt_id": "receipt-1"}]
-
-    payload = provider.current_step("deal-1")
-
-    assert payload["current_step"]["file_receipts"] == [{"receipt_id": "receipt-1"}]
 
 
 def test_a_step_that_promised_words_draws_no_new_refusal():

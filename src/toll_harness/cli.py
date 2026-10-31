@@ -71,8 +71,6 @@ from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.draft import APPROACH_DIALS, DraftLoop
 from toll_harness.toll_bench.step import (
-    EARLIER_STEPS_KEY,
-    EARLIER_STEPS_TRIMMED,
     FORMS_TURNED_OFF,
     ROAD_AGENTIC,
     StepAsk,
@@ -1242,30 +1240,6 @@ _IDLE_STEP_MEMO: dict[str, str] = {}
 _IDLE_PULSE_MARGIN_SECONDS = 90.0
 
 
-def _with_whole_earlier_steps(
-    resources: Any, obligation: dict[str, Any], step_state: Any
-) -> Any:
-    """The step state for the old road's goal, every earlier step whole.
-
-    0.62.0. The step ask trims `earlier_steps` to fit one small call, oldest
-    steps first, and says so on the block's first line. The old road is where
-    a step that needed more lands (need_tools among them) and it has the
-    room, so when the block was trimmed its goal carries the whole set. A copy:
-    what the dispatch remembers of the step is untouched."""
-    if not isinstance(step_state, dict):
-        return step_state
-    lines = step_state.get(EARLIER_STEPS_KEY)
-    if not (isinstance(lines, list) and lines and isinstance(lines[0], str)
-            and lines[0].startswith(EARLIER_STEPS_TRIMMED)):
-        return step_state
-    whole_for = getattr(getattr(resources, "toll_bench", None), "earlier_steps_whole", None)
-    deal_id = str(obligation.get("deal_id") or (step_state.get("deal") or {}).get("id") or "")
-    whole = whole_for(deal_id) if callable(whole_for) and deal_id else None
-    if not isinstance(whole, list):
-        return step_state
-    return {**step_state, EARLIER_STEPS_KEY: whole}
-
-
 def _deal_step_fingerprint(step_payload: dict[str, Any] | None) -> str:
     """Digest of every part of a current_step payload an agent can act on.
 
@@ -1753,20 +1727,6 @@ class _RefusalWatch:
             except AttributeError:  # pragma: no cover - defensive
                 pass
         self._restore = []
-
-
-def _platform_owned_block(resources: Any, step_id: str) -> dict[str, Any] | None:
-    """The provider's rule-229 memo for this step, fed by the current_step read
-    just made. A provider without the memo (a fake, an older bench) says None
-    and the act states on the payload decide alone."""
-    reader = getattr(getattr(resources, "toll_bench", None), "platform_owned_block", None)
-    if not callable(reader) or not step_id:
-        return None
-    try:
-        owned = reader(step_id)
-    except Exception:  # noqa: BLE001 - a memo read must never stop the cycle
-        return None
-    return owned if isinstance(owned, dict) else None
 
 
 def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -2486,7 +2446,7 @@ def _attention_cycle(
                     payload = None
             if payload is not None:
                 prefetched_steps[deal_id] = payload
-                why = platform_move(payload, _platform_owned_block(resources, step_id))
+                why = platform_move(payload)
                 if why:
                     _number = (payload.get("current_step") or {}).get("number")
                     _LOGGER.info(
@@ -2721,7 +2681,7 @@ def _attention_cycle(
             + json.dumps(
                 {
                     "obligation": obligation,
-                    "current_step": _with_whole_earlier_steps(resources, obligation, step_state),
+                    "current_step": step_state,
                     "confirmed_email_send_receipt": resumed_email,
                     "previous_attempt_failure": previous_failure,
                     "the_bench_refused": refused_before,

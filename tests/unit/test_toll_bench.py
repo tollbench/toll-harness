@@ -496,35 +496,15 @@ def test_deal_step_reply_posts_to_the_exact_step_thread():
     assert api.submissions == [("d1", "s1", "Thanks, I have it.", "reply-1")]
 
 
-def test_current_step_compacts_live_payload_without_dropping_action_fields():
-    provider = BookOfHousesTollBenchProvider(FakeApi())
+def test_current_step_is_the_benchs_answer_whole():
+    """0.74.0: no whitelist. Every key the bench sends arrives as sent, and
+    nothing the bench did not send is invented."""
+    api = FakeApi()
+    provider = BookOfHousesTollBenchProvider(api)
 
     result = provider.current_step("d1")
 
-    assert result["deal"]["id"] == "d1"
-    assert result["current_step"] == {
-        "id": "s1",
-        "number": None,
-        "title": None,
-        "state": "agent_working",
-        "ask": "APPROVE",
-        "outcome_promise": None,
-        "outcome_filed_at": None,
-        "declared_odds_at_bid": None,
-        "declared_odds_restated": None,
-        "declared_odds_drift": None,
-        "har_blocks": None,
-        "har_responses": None,
-        # RULE 230: what this step promised to hand back, and the files
-        # already on it. Always present, including zero.
-        "deliverable": None,
-        "file_receipts": [],
-        # 0.66.0: the bench's count of a step done in rounds (or a loop);
-        # None on a plain step and on an older bench.
-        "repeats": None,
-    }
-    assert result["step_thread"]["messages"] == []
-    assert result["access"]["grants"] == []
+    assert result == api.current_step("d1")
 
 
 def test_current_step_passes_open_ask_keys_through():

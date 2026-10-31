@@ -164,16 +164,6 @@ def test_the_check_in_reply_keeps_them_too():
     assert out['drafts_sent_back'][0]['approval_id'] == 'ap-1'
 
 
-def test_the_keys_are_always_present_even_when_empty():
-    provider, _api = _provider(current={'ok': True, 'current_step': {}})
-
-    out = provider.current_step('d-1')
-
-    assert out['owed_replies'] == []
-    assert out['acts'] == []
-    assert out['drafts_sent_back'] == []
-
-
 # ---------------------------------------------------------------------------
 # The idle-step fingerprint
 # ---------------------------------------------------------------------------
