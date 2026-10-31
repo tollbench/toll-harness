@@ -9,7 +9,7 @@ publish workflow and scripts/install_on_agent.sh, which fail closed.
 
 It runs only when the project root holds a .git (a git checkout). A build from an sdist or any
 other archive skips it, and an editable install (``pip install -e .``) skips it. The checks live
-in src/toll_harness/freshness.py, loaded by path so the build environment needs nothing but
+in scripts/freshness.py, loaded by path so the build environment needs nothing but
 hatchling.
 """
 
@@ -29,7 +29,7 @@ class FreshnessBuildHook(BuildHookInterface):
         root = Path(self.root)
         if version == "editable" or not (root / ".git").exists():
             return
-        path = root / "src" / "toll_harness" / "freshness.py"
+        path = root / "scripts" / "freshness.py"
         spec = importlib.util.spec_from_file_location("_toll_harness_freshness", path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
