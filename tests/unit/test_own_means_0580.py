@@ -18,7 +18,6 @@ was.
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -64,7 +63,7 @@ RECORD_SONG = {
     ),
 }
 DJ = (OwnMeans(name=RECORD_SONG["name"], can=RECORD_SONG["can"]),)
-# A want that publishes a tool list, so the W29 pass is live on it.
+# A want that publishes a tool list (it used to make the W29 pass live).
 TOOLED_BRIEF = {
     "want": "A hip hop song for my wife",
     "tools": [{"tool": "platform.draft", "provider": "", "one_line": "write a draft"}],
@@ -168,17 +167,15 @@ def test_no_own_means_is_no_line_and_the_instruction_unchanged():
 def test_the_form_instruction_is_unchanged_without_own_means():
     assert draft.form_instruction(()) is draft.FORM_INSTRUCTION
     assert draft.form_instruction(None) is draft.FORM_INSTRUCTION
-    # The sentence still stands where it stood: under the optional picks,
-    # above "write as many steps".
-    assert (draft.NO_TOOL_SENTENCE + "WRITE AS MANY STEPS") in draft.FORM_INSTRUCTION
+    # 0.74.0: the W29 "no tool, not yours" sentence is gone from the form.
+    assert "NEVER GIVE YOURSELF WORK ON A SERVICE" not in draft.FORM_INSTRUCTION
 
 
-def test_the_form_instruction_says_the_own_means_right_under_the_no_tool_sentence():
+def test_the_form_instruction_says_the_own_means_as_one_line():
     said = draft.form_instruction(DJ)
     line = own_means_line(DJ, OWN_MEANS_PLAN_RULE)
 
-    assert (draft.NO_TOOL_SENTENCE + line + "\nWRITE AS MANY STEPS") in said
-    assert said.replace(line + "\n", "", 1) == draft.FORM_INSTRUCTION
+    assert said == draft.FORM_INSTRUCTION + "\n" + line
     assert '`who`: "agent", with no `tool`, no `service:` and no `do_ask`' in said
 
 
@@ -200,7 +197,24 @@ def test_the_plan_form_ask_carries_the_own_means():
     assert out["ok"] is True, out
     ask = _ask_text(model)
     assert own_means_line(DJ, OWN_MEANS_PLAN_RULE) in ask
-    assert draft.NO_TOOL_SENTENCE + own_means_line(DJ, OWN_MEANS_PLAN_RULE) in ask
+
+
+def test_a_step_on_a_service_the_want_offers_no_tool_for_stays_as_written():
+    """0.74.0: the W29 demotion is gone. A step that names a tool the want does
+    not list (a LinkedIn post, a recording) goes to the door exactly as the
+    model wrote it -- still the agent's -- and the bench stamps the outside act
+    or the connector call. Own means or not, nothing is rewritten at home."""
+    linkedin = dict(FILLED_STEP, do_line="Post it on LinkedIn", who="agent",
+                    tool="linkedin.post.create")
+    recording = dict(FILLED_STEP, do_line="Record two versions", tool="record_song")
+    for own_means in (None, DJ):
+        _out, bench, _model = _plan_run(
+            own_means, steps=[dict(FILLED_STEP), linkedin, recording],
+            brief=TOOLED_BRIEF)
+        put = bench.puts[1]["form"]["steps"]
+        assert put[1]["who"] == "agent"
+        assert put[1]["tool"] == "linkedin.post.create"
+        assert put[2]["tool"] == "record_song"
 
 
 def test_the_plan_form_ask_is_unchanged_without_own_means():
@@ -211,46 +225,6 @@ def test_the_plan_form_ask_is_unchanged_without_own_means():
     assert draft.FORM_INSTRUCTION in ask
     assert "by your own means" not in ask
     assert _ask_text(model2) == ask
-
-
-def test_a_step_that_names_its_own_means_stays_the_agents():
-    # The safety net beside W29: the model wrote the name as a tool. The bench
-    # has no row for it, so the name comes off and the step stays the agent's.
-    recording = dict(FILLED_STEP, do_line="Record two versions", tool="record_song")
-    on_who = dict(FILLED_STEP, do_line="Record it again", who="service:Record_Song")
-    _out, bench, _model = _plan_run(DJ, steps=[dict(FILLED_STEP), recording, on_who],
-                                    brief=TOOLED_BRIEF)
-
-    put = bench.puts[1]["form"]["steps"]
-    assert put[1]["who"] == "agent" and "tool" not in put[1]
-    assert put[1]["do_line"] == "Record two versions"
-    assert put[2]["who"] == "agent"
-
-
-def test_without_own_means_that_step_is_still_handed_to_the_person():
-    # W29 is unchanged for every agent that declared nothing.
-    recording = dict(FILLED_STEP, do_line="Record two versions", tool="record_song")
-    _out, bench, _model = _plan_run(steps=[dict(FILLED_STEP), recording],
-                                    brief=TOOLED_BRIEF)
-
-    put = bench.puts[1]["form"]["steps"]
-    assert put[1]["who"] == "person" and "tool" not in put[1]
-
-
-def test_own_means_stay_yours_leaves_every_other_step_alone():
-    form = {"steps": [
-        {"who": "person", "tool": "record_song"},
-        {"who": "agent", "tool": ["platform.draft", "record_song"]},
-        {"who": "agent", "tool": "platform.draft"},
-        "not a step",
-    ]}
-    out, kept = draft.own_means_stay_yours(json.loads(json.dumps(form)), DJ)
-
-    assert kept == ["step 2 (record_song)"]
-    assert out["steps"][0] == {"who": "person", "tool": "record_song"}
-    assert out["steps"][1] == {"who": "agent", "tool": ["platform.draft"]}
-    assert out["steps"][2] == {"who": "agent", "tool": "platform.draft"}
-    assert draft.own_means_stay_yours(json.loads(json.dumps(form)), ()) == (form, [])
 
 
 # ---------------------------------------------------------------------------

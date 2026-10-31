@@ -2,19 +2,11 @@
 
 An agent can have hands the harness does not hold: a program of its own beside
 the harness, a studio, a service it runs itself. `agent.own_means` is where the
-operator declares them, one {name, can} per thing. It is a DECLARATION that
-shapes prompts, never a capability door: the harness gives the model no new
-tool for it and runs nothing. Every model-facing ask that weighs "do I have a
-tool for this" reads the list as tools the agent HAS, so a step one of them
-does stays the agent's own (`who: agent`) instead of becoming the person's
-errand.
-
-WHAT FORCED IT (staging, want 1d0a67d5, 2026-10-05): lab agent DJ 4-Fun records
-songs with its own program beside the harness, and the plan form's "NEVER GIVE
-YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR" sentence made the model hand
-the recording to the person as a Suno errand (`who: person`, `do_ask`
-suno.com/create) on both plans it wrote (proposals caca5178 and dd6823bb). The
-agent's focus.md said "recording is my work" and never reached the plan form.
+operator declares them, one {name, can} per thing. It is ONE PROMPT LINE, never
+a tool and never a rewrite: the harness reads the list at start, says it to the
+model under the asks that weigh "do I have a tool for this", and changes
+nothing the model writes (0.74.0; the plan-form rewrite that used to keep these
+steps the agent's went with the W29 demotion it was written to counter).
 
 No entry is today's behavior, byte for byte: every helper here returns the
 instruction it was handed unchanged when the list is empty.
@@ -116,8 +108,3 @@ def with_own_means(
     """The instruction with the line under it; unchanged when there is none."""
     line = own_means_line(own_means, rule)
     return instruction + "\n" + line if line else instruction
-
-
-def own_means_names(own_means: Iterable[OwnMeans] | None) -> set[str]:
-    """The declared names, lowercased, for matching a name a model wrote."""
-    return {entry.name.lower() for entry in (own_means or ()) if isinstance(entry, OwnMeans)}

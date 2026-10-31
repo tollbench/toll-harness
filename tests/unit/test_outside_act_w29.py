@@ -32,7 +32,6 @@ from tests.unit.test_step_ask import (
     _obj,
     _payload,
 )
-from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.step import (
     NEED_TOOLS,
     OUTSIDE_PARKED_SENTENCE,
@@ -199,64 +198,3 @@ def test_the_model_may_still_ask_for_its_tools():
     assert bench.statuses == [] and bench.replies == []
 
 
-# ---------------------------------------------------------------------------
-# (b) THE PLAN
-# ---------------------------------------------------------------------------
-def _form_with(*steps):
-    return {"overview": "x", "odds": 0.4, "span_days": 14, "steps": list(steps)}
-
-
-def test_a_step_on_a_service_with_no_tool_becomes_the_persons_own():
-    plan, moved = draft.person_does_what_the_agent_cannot(
-        _form_with(
-            {"verb": "makes", "do_line": "Design the invite", "who": "agent",
-             "tool": "canva.design.create", "declared_odds": 0.5},
-            {"verb": "sends", "do_line": "Send it", "who": "agent",
-             "tool": "gmail.message.send", "declared_odds": 0.6},
-        ),
-        BRIEF,
-    )
-
-    assert moved == ["step 1 (canva.design.create)"]
-    assert plan["steps"][0]["who"] == "person" and "tool" not in plan["steps"][0]
-    # The model's own words are untouched, and a tool the want DOES offer stays.
-    assert plan["steps"][0]["do_line"] == "Design the invite"
-    assert plan["steps"][1] == {"verb": "sends", "do_line": "Send it", "who": "agent",
-                                "tool": "gmail.message.send", "declared_odds": 0.6}
-
-
-def test_a_service_named_on_who_is_the_same_rule():
-    plan, moved = draft.person_does_what_the_agent_cannot(
-        _form_with({"verb": "books", "do_line": "Book the hall", "who": "service:Canva"}),
-        BRIEF,
-    )
-
-    assert moved == ["step 1 (Canva)"]
-    assert plan["steps"][0]["who"] == "person"
-
-
-def test_a_want_that_publishes_no_tool_list_is_left_alone():
-    # The same law pick_tools keeps: with no list, this package has no opinion.
-    plan, moved = draft.person_does_what_the_agent_cannot(
-        _form_with({"verb": "makes", "do_line": "Design it", "who": "agent",
-                    "tool": "canva.design.create"}),
-        {"want": "x"},
-    )
-
-    assert moved == [] and plan["steps"][0]["who"] == "agent"
-
-
-def test_a_step_already_the_persons_is_not_touched():
-    step = {"verb": "buys", "do_line": "Buy the template", "who": "person",
-            "do_ask": {"link": "https://example.org/buy", "cost_cents": 1200,
-                       "cost_note": "about $12"}}
-    plan, moved = draft.person_does_what_the_agent_cannot(_form_with(dict(step)), BRIEF)
-
-    assert moved == [] and plan["steps"][0] == step
-
-
-def test_the_form_ask_says_the_rule_in_the_models_own_words():
-    # The agents never learn our internal timing; they do read this sheet.
-    assert "NEVER GIVE YOURSELF WORK ON A SERVICE YOU HAVE NO TOOL FOR" in (
-        draft.FORM_INSTRUCTION)
-    assert '"person"' in draft.FORM_INSTRUCTION and "do_ask" in draft.FORM_INSTRUCTION
