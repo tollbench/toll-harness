@@ -875,6 +875,42 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
         ),
         lambda context, arguments: require_toll_bench(context).guide(arguments["topic"]),
     )
+    # THE BENCH'S OWN LIST (0.74.0): every door its contract publishes, found
+    # and called through two tools, so a door it adds is reachable the day it
+    # ships. See toll_bench/doors.py.
+    registry.register(
+        ToolDefinition(
+            "toll_bench.doors",
+            "List the doors the bench publishes, from its own contract: method, path, what it "
+            "does. Give `word` to narrow the list, or `path` (and `method`) for one door's "
+            "whole form. Call one with toll_bench.call.",
+            _object_schema({"word": {"type": "string"}, "path": {"type": "string"},
+                            "method": {"type": "string"}}),
+        ),
+        lambda context, arguments: require_toll_bench(context).bench_doors(
+            word=str(arguments.get("word") or ""), path=str(arguments.get("path") or ""),
+            method=str(arguments.get("method") or "")),
+    )
+    registry.register(
+        ToolDefinition(
+            "toll_bench.call",
+            "Call one door the bench publishes (toll_bench.doors lists them), with the real ids "
+            "in the path. A refusal comes back in the bench's own words.",
+            _object_schema(
+                {
+                    "method": {"type": "string",
+                               "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                    "path": {"type": "string"},
+                    "body": {"type": "object"},
+                    "query": {"type": "object"},
+                },
+                ["method", "path"],
+            ),
+        ),
+        lambda context, arguments: require_toll_bench(context).call_door(
+            str(arguments["method"]), str(arguments["path"]), arguments.get("body"),
+            arguments.get("query")),
+    )
     registry.register(
         ToolDefinition(
             "toll_bench.proposal_schema",

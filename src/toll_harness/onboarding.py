@@ -14,6 +14,7 @@ import yaml
 
 from toll_harness import __version__
 from toll_harness.config import (
+    BENCH_DOOR_TOOLS,
     GOAL_CHECK_TOOLS,
     PACK_INPUT_TOOLS,
     PAID_PACK_TOOLS,
@@ -137,7 +138,7 @@ TOLL_BENCH_TOOLS = [
     # RULE 230: the two doors that hand back bytes.
     "toll_bench.deliver_file",
     "toll_bench.deliver_hosted_file",
-] + STEP_DOOR_TOOLS + GOAL_CHECK_TOOLS + PACK_INPUT_TOOLS + PAID_PACK_TOOLS
+] + STEP_DOOR_TOOLS + GOAL_CHECK_TOOLS + PACK_INPUT_TOOLS + PAID_PACK_TOOLS + BENCH_DOOR_TOOLS
 
 
 @dataclass(frozen=True)

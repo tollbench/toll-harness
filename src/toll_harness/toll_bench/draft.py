@@ -135,7 +135,7 @@ MATERIALS_KEY = "what_your_operator_gave_you"
 # it carries the short form; the outline asks carry the whole sentence.
 MATERIALS_SENTENCE_SHORT = (
     "`what_your_operator_gave_you`, when present, is your operator's recipe "
-    "for this flow (get_flow_material reads a trimmed item whole): plan FROM "
+    "for this flow: plan FROM "
     "it, never ask the person for what it holds; a picture's `public_url` may "
     "be an option's `image_url`."
 )

@@ -9,7 +9,7 @@ from typing import Any
 
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks, draft
+from toll_harness.toll_bench import blocks, doors, draft
 from toll_harness.toll_bench.step import (
     LAST_FILING_KEY,
 )
@@ -307,6 +307,10 @@ class BookOfHousesTollBenchProvider:
         # minutes on 2026-09-04). Whose move a step is, is the bench's `turn`
         # (0.74.0: no rule-229 block memo here any more).
         self._act_kinds: dict[str, Any] | None = None
+        # 0.74.0: the bench's published doors, read from its contract once
+        # per process and again when a call names a door not on it.
+        self._contract: dict[str, Any] | None = None
+        self._doors: list[dict[str, Any]] | None = None
         self._last_step_id: str | None = None
         # The person's unanswered message ids per step, oldest first, as the
         # last current-step read (or reply 200) listed them. A reply that names
@@ -1837,6 +1841,60 @@ class BookOfHousesTollBenchProvider:
         body = {"end": True} if wait.get("end") else dict(wait)
         try:
             return self.api.declare_outside_wait(deal_id, step_id, body, idempotency_key)
+        except BookOfHousesApiError as error:
+            if 400 <= int(error.status or 0) < 500:
+                return self._door_refused(error)
+            raise
+
+    def _published_doors(self, refresh: bool = False) -> list[dict[str, Any]]:
+        if self._doors is None or refresh:
+            contract = self.api.read_contract()
+            self._contract = contract if isinstance(contract, dict) else {}
+            self._doors = doors.published_doors(self._contract)
+        return self._doors
+
+    def bench_doors(self, word: str = "", path: str = "", method: str = "") -> dict[str, Any]:
+        """The bench's own list of doors, or one door whole (0.74.0)."""
+        try:
+            listed = self._published_doors()
+        except BookOfHousesApiError as error:
+            return {"ok": False, "error": "contract_unreadable", "detail": error.message}
+        if path:
+            door = (doors.match_door(listed, method, path) if method else None) or next(
+                (row for row in listed if row["path"] == str(path).split("?", 1)[0]), None)
+            if door is None:
+                return {"ok": False, "error": "door_not_published", "path": path}
+            return {"ok": True, "door": doors.door_whole(door, self._contract or {})}
+        rows = [doors.door_row(row) for row in doors.find_doors(listed, word)]
+        return {"ok": True, "count": len(rows), "doors": rows}
+
+    def call_door(
+        self, method: str, path: str, body: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None, idempotency_key: str = "",
+    ) -> Any:
+        """Call one door the bench publishes (0.74.0). A door that is not on
+        its contract is never called; a refusal comes back in its own words."""
+        method = str(method or "GET").upper()
+        path = str(path or "").strip()
+        if "{" in path or "}" in path:
+            return {"ok": False, "error": "path_not_filled",
+                    "message": "Put the real ids in place of every {...} in the path."}
+        try:
+            door = doors.match_door(self._published_doors(), method, path)
+            if door is None:
+                door = doors.match_door(self._published_doors(refresh=True), method, path)
+        except BookOfHousesApiError as error:
+            return {"ok": False, "error": "contract_unreadable", "detail": error.message}
+        if door is None:
+            return {"ok": False, "error": "door_not_published",
+                    "message": f"{method} {path} is not a door this bench publishes; "
+                               "toll_bench.doors lists them."}
+        if method != "GET" and not idempotency_key:
+            idempotency_key = "door-" + hashlib.sha256(
+                json.dumps([method, path, body], sort_keys=True, default=str).encode()
+            ).hexdigest()[:32]
+        try:
+            return self.api.call_door(method, path, body, query, idempotency_key)
         except BookOfHousesApiError as error:
             if 400 <= int(error.status or 0) < 500:
                 return self._door_refused(error)

@@ -77,6 +77,8 @@ DEFAULT_TOOLS = [
 # tool was not offered" three times, and the loop guard parked the step.
 STEP_DOOR_TOOLS = [
     "toll_bench.propose_act",
+    # 0.74.0: the deal-step instruction names it; until now no list carried it.
+    "toll_bench.withdraw_act_declaration",
     "toll_bench.dismiss_reply",
     "toll_bench.wait_outside",
     "toll_bench.file_evidence",
@@ -100,6 +102,10 @@ PAID_PACK_TOOLS = [
     "toll_bench.reject_paid_pack_receipt",
     "toll_bench.paid_pack_handoff",
 ]
+
+# The bench's own list of doors (0.74.0): carried on every onboarded list, so
+# the doors the hand-written tools never covered reach the model.
+BENCH_DOOR_TOOLS = ["toll_bench.doors", "toll_bench.call"]
 
 # The toll_bench tools every onboarding before 0.56.2 wrote. A list holding
 # all of them is one onboarding wrote, not an operator's choice, so it gets
@@ -143,6 +149,13 @@ def with_pack_input_tools(tools: Any) -> Any:
     if not isinstance(tools, list) or not _ONBOARDED_BEFORE_GOAL_CHECKS <= set(tools):
         return tools
     return list(tools) + [name for name in PACK_INPUT_TOOLS if name not in tools]
+
+
+def with_bench_doors(tools: Any) -> Any:
+    """Add the bench's door list to complete onboarded lists, not hand-cut lists."""
+    if not isinstance(tools, list) or not _ONBOARDED_BEFORE_STEP_DOORS <= set(tools):
+        return tools
+    return list(tools) + [name for name in BENCH_DOOR_TOOLS if name not in tools]
 
 
 def with_paid_pack_tools(tools: Any) -> Any:
@@ -451,9 +464,8 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     tool_registry = build_standard_registry()
     if toll_bench_provider:
         tool_registry = add_toll_bench_tools(tool_registry)
-    enabled_tools = with_paid_pack_tools(with_pack_input_tools(with_goal_check_tools(
-        with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))
-    )))
+    enabled_tools = with_bench_doors(with_paid_pack_tools(with_pack_input_tools(
+        with_goal_check_tools(with_step_doors(runtime_config.get("tools", DEFAULT_TOOLS))))))
     if native:
         # Native agents do research in their own environment. Do not replace
         # their abilities with the reference runtime's web/browser/HTTP tools.

@@ -20,6 +20,7 @@ import yaml
 
 from toll_harness import __version__
 from toll_harness.config import (
+    BENCH_DOOR_TOOLS,
     build_model_adapter,
     build_runtime,
     default_config,
@@ -1065,6 +1066,10 @@ _DRAFT_SENT_BACK_INSTRUCTION = (
     "thread rather than re-filing."
 )
 
+# The bench's own list of doors (0.74.0) rides every agentic road, so a door
+# the hand-written tools never covered is still reachable there.
+_BENCH_DOORS = frozenset(BENCH_DOOR_TOOLS)
+
 _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
     # Handled deterministically before model dispatch, after message debt.
     "act_correction": {"instruction": "", "tools": frozenset()},
@@ -1152,7 +1157,10 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             {
                 "toll_bench.current_step",
                 "toll_bench.propose_act",
+                "toll_bench.withdraw_act_declaration",
                 "toll_bench.dismiss_reply",
+                # 0.74.0: the instruction names it; the road never carried it.
+                "toll_bench.wait_outside",
                 "toll_bench.file_outcome",
                 "toll_bench.get_pack_input",
                 # RULE 230: the two doors that hand back BYTES.
@@ -1168,6 +1176,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
             }
         )
         | _DEAL_WORK_TOOLS
+        | _BENCH_DOORS
         | _BOOKKEEPING_TOOLS,
     },
     "file_informed_plan": {
@@ -1191,6 +1200,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.withdraw_proposal",
             }
         )
+        | _BENCH_DOORS
         | _BOOKKEEPING_TOOLS,
     },
     # Server contract 2.29 raises this kind when the person sends one of your
@@ -1207,6 +1217,7 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.propose_act",
             }
         )
+        | _BENCH_DOORS
         | _BOOKKEEPING_TOOLS,
     },
     "unanswered_message": {

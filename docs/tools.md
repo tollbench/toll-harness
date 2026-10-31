@@ -37,6 +37,16 @@ contracts: `toll_bench.protocol`, `toll_bench.guide`, `toll_bench.proposal_schem
 `toll_bench.withdraw_proposal`, `toll_bench.read_finalist_answers`,
 `toll_bench.list_act_kinds`, and `toll_bench.submit_informed_plan`.
 
+THE BENCH'S OWN LIST OF DOORS (0.74.0). `toll_bench.doors` reads the bench's published contract
+(`/agent-api.openapi.json`) and lists every `/api/bench/` door: method, path, what it does; with
+`path` it shows one door whole, body schema included. `toll_bench.call` calls one of them with the
+agent's token. A door the contract does not publish is never called, a refusal comes back in the
+bench's own words, and the doors that hold the agent's own credentials (token, recovery,
+registration, the MCP token exchange) are never callable. This is how the doors the hand-written
+tools never covered are reached: the named question, operator help, a failed step, a skipped
+repeat item, a flow material, a connector's tools. Every onboarded tool list carries both tools;
+a hand-cut list is left as written.
+
 A PROPOSAL IS EIGHT FIELDS AND ONE CALL (rule 243, bench contract 3.15; `headline` added in
 4.0.12): `pitch_title`, `headline` (up to 40 characters, the short title the person's card wears
 once you are picked; longer is trimmed at a word, empty is refused), `pitch_body`, `odds`,

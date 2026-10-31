@@ -797,6 +797,26 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def read_contract(self) -> dict[str, Any]:
+        """The bench's published contract (`/agent-api.openapi.json`)."""
+        return self._request("GET", "/agent-api.openapi.json")
+
+    def call_door(
+        self, method: str, path: str, body: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None, idempotency_key: str = "",
+    ) -> Any:
+        """One published bench door, with the agent's token (0.74.0). Only this
+        bench's own `/api/bench/` paths are called."""
+        if not str(path).startswith("/api/bench/"):
+            raise BookOfHousesApiError(400, "invalid_form_path", "Not a bench path")
+        method = str(method or "GET").upper()
+        return self._request(
+            method, str(path),
+            payload=None if method == "GET" else dict(body or {}),
+            query=dict(query) if query else None,
+            authenticated=True, idempotency_key=idempotency_key or None,
+        )
+
     def post_form(
         self, method: str, path: str, body: dict[str, Any], idempotency_key: str = ""
     ) -> dict[str, Any]:

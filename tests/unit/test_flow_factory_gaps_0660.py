@@ -201,4 +201,5 @@ def test_the_form_ask_carries_the_materials():
 def test_every_plan_instruction_names_the_materials():
     for words in (draft.FORM_INSTRUCTION, draft.form_instruction(None)):
         assert draft.MATERIALS_KEY in words
-        assert "get_flow_material" in words
+        # 0.74.0: the form ask holds no tools, so it names none.
+        assert "get_flow_material" not in words
