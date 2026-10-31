@@ -53,6 +53,11 @@ NIA_1M = "claude-opus-5-5[1m]"
 SMALL_WINDOW = 32_768
 
 
+@pytest.fixture(autouse=True)
+def _no_fleet_window(monkeypatch):
+    monkeypatch.delenv(CONTEXT_WINDOW_ENV, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # 1. THE WINDOW IS A SETTING
 # ---------------------------------------------------------------------------

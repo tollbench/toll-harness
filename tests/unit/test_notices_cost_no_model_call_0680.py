@@ -72,7 +72,7 @@ def test_a_real_obligation_beside_the_notices_still_runs(monkeypatch):
         dispatched.append(obligation["kind"])
         return {"ok": True, "run": None, "dispatch": {"kind": "step_ask"}}
 
-    monkeypatch.setattr(cli, "platform_move", lambda *a: None)
+    monkeypatch.setattr(cli, "not_the_agents_move", lambda *a: None)
     monkeypatch.setattr(cli, "_refusal_brake_holds", lambda *a: None)
     monkeypatch.setattr(cli, "_step_ask_available", lambda *a: True)
     monkeypatch.setattr(cli, "_the_step_ask", step_ask)

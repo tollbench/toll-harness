@@ -24,18 +24,11 @@ import json
 from types import SimpleNamespace
 
 from tests.unit.test_market_watch import _completed_run
-from tests.unit.test_step_ask import OBLIGATION, _payload
 from tests.unit.test_toll_bench import FakeApi
 from toll_harness import cli
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.toll_bench.step import (
-    EARLIER_STEPS_CHAR_CAP,
     EARLIER_STEPS_KEY,
-    EARLIER_STEPS_TRIMMED,
-    MOVE_INSTRUCTIONS,
-    render_earlier_steps,
-    step_tail,
-    the_move,
 )
 
 # The bench's rows for Bree's deal, as current-step answered them that night.
@@ -67,137 +60,9 @@ CALENDAR = {
         "time_zone": "America/Los_Angeles", "message_id": None, "meet_link": None,
     }],
 }
-EMAILED = {
-    "number": 5, "step_id": "st-5", "title": "Email the invite to your friends",
-    "state": "approved", "approved_at": "2026-10-07T01:00:00Z",
-    "approval_cause": "person",
-    "hand_back": {
-        "receipt_id": "r-5", "kind": "file", "summary": "The flyer",
-        "text": None, "text_chars": None, "trimmed": None, "link": None,
-        "file_receipt_id": "fr-5", "filename": "flyer.pdf",
-        "filed_at": "2026-10-07T00:59:00Z",
-    },
-    "files": [{"file_receipt_id": "fr-5", "filename": "flyer.pdf", "sniffed_type": "pdf"}],
-    "act_results": [
-        {"act_id": "a-5", "kind": "email", "state": "executed", "to": "Grant",
-         "subject": "Potluck on the 17th", "words": "Come by at six.",
-         "executed_at": "2026-10-07T00:58:00Z", "message_id": "msg-77"},
-        {"act_id": "a-6", "kind": "email", "state": "scheduled", "to": "Ana",
-         "subject": "Reminder", "words": None, "scheduled_for": "2026-10-16"},
-    ],
-}
-
 
 def _size(lines):
     return sum(len(line) + 1 for line in lines)
-
-
-# ---------------------------------------------------------------------------
-# 1. The renderer: present, absent, empty, act lines, trimmed
-# ---------------------------------------------------------------------------
-def test_present_rows_become_a_head_per_step_with_the_hand_back_words_under_it():
-    # 0.62.0: the hand-back's own lines sit under its step, whole.
-    lines = render_earlier_steps([SIGNED, CALENDAR])
-    assert lines[0] == "Step 1 (Deal signed): nothing handed back"
-    assert lines[1] == (
-        "Step 3 (Add the chosen potluck dinner to your Google Calendar.), handed back:"
-    )
-    assert lines[2].startswith("    - Create events")
-    assert "Sat Oct 17, 6:00 PM to 9:00 PM" in lines[2]
-
-
-def test_absent_field_renders_nothing_and_an_empty_list_stays_an_empty_list():
-    # An older bench sends no field: nothing is rendered, no key is invented.
-    assert render_earlier_steps(None) is None
-    assert render_earlier_steps({"not": "a list"}) is None
-    # The bench's [] means nothing before this step is approved yet, which
-    # is not the same as not knowing.
-    assert render_earlier_steps([]) == []
-
-
-def test_an_act_result_is_its_own_did_line_with_the_time_and_the_ids():
-    lines = render_earlier_steps([CALENDAR])
-    did = lines[2]
-    assert did.startswith("  did: calendar_event to Google Calendar \"Potluck dinner\" ")
-    assert "2026-10-17T18:00:00..2026-10-17T21:00:00 America/Los_Angeles" in did
-    assert "event 0dfljrmht0t13s9s10nbkeok2s" in did
-    # The act's own words ride the line, newlines folded.
-    assert "Title: Potluck dinner When: Sat Oct 17" in did
-    assert "\n" not in did
-
-
-def test_a_sent_email_names_its_message_and_a_scheduled_one_its_date():
-    lines = render_earlier_steps([EMAILED])
-    assert lines[0] == "Step 5 (Email the invite to your friends): The flyer"
-    assert lines[1] == "  file: flyer.pdf pdf receipt fr-5"
-    assert lines[2] == ('  did: email to Grant "Potluck on the 17th" message msg-77'
-                        " : Come by at six.")
-    assert lines[3] == '  did: email [scheduled] to Ana "Reminder" scheduled for 2026-10-16'
-
-
-def test_over_the_cap_the_oldest_steps_go_first_and_the_block_says_so():
-    long_words = "x" * 280
-    rows = [
-        {**CALENDAR, "number": n, "step_id": f"st-{n}", "title": f"Step title {n}",
-         "hand_back": {**CALENDAR["hand_back"], "text": f"step {n} {long_words}"}}
-        for n in range(1, 21)
-    ]
-    lines = render_earlier_steps(rows)
-    assert lines[0].startswith(EARLIER_STEPS_TRIMMED)
-    assert "left out step 1, step 2" in lines[0]
-    assert _size(lines) <= EARLIER_STEPS_CHAR_CAP
-    kept = [line for line in lines if line.startswith("Step ")]
-    # The newest step is always kept; the oldest is the first to go.
-    assert kept[-1].startswith("Step 20 (Step title 20)")
-    assert not any(line.startswith("Step 1 (") for line in kept)
-    # Whole steps go, never a step's head without its words and acts.
-    assert lines[-1].startswith("  did: calendar_event")
-    assert lines[-2] == f"    step 20 {long_words}"
-
-
-def test_one_step_bigger_than_the_cap_shortens_its_free_text_and_says_so():
-    # 0.62.0: a step too big on its own loses free text, never a field; the
-    # whole of this one is free text.
-    long_row = {**CALENDAR, "hand_back": {**CALENDAR["hand_back"], "text": "y" * 900}}
-    lines = render_earlier_steps([long_row], cap=800)
-    assert lines[0].startswith(EARLIER_STEPS_TRIMMED)
-    assert "free text shortened on step 3" in lines[0]
-    assert _size(lines) <= 800
-    assert lines[1].startswith("Step 3 (")
-    assert lines[2].startswith("    yyy") and lines[2].endswith("\u2026")
-
-
-def test_under_the_cap_nothing_is_trimmed_and_rendering_twice_changes_nothing():
-    lines = render_earlier_steps([SIGNED, CALENDAR, EMAILED])
-    assert EARLIER_STEPS_TRIMMED not in lines
-    assert render_earlier_steps(lines) == lines
-    # A rendered, trimmed block re-trims from its own lines.
-    small = render_earlier_steps(lines, cap=500)
-    assert small[0].startswith(EARLIER_STEPS_TRIMMED) and _size(small) <= 500
-    assert "left out step 1, step 3" in small[0]
-    assert render_earlier_steps(small, cap=500) == small
-
-
-# ---------------------------------------------------------------------------
-# 2. The step ask's tail carries it, beside what the person said
-# ---------------------------------------------------------------------------
-def test_the_step_ask_tail_carries_the_rendered_block():
-    payload = _payload(earlier_steps=[SIGNED, CALENDAR])
-    tail = step_tail(payload, OBLIGATION, the_move(payload), [])
-    assert tail[EARLIER_STEPS_KEY] == render_earlier_steps([SIGNED, CALENDAR])
-    assert "event 0dfljrmht0t13s9s10nbkeok2s" in json.dumps(tail)
-
-
-def test_the_tail_has_no_earlier_steps_key_when_the_bench_sent_none():
-    payload = _payload()
-    tail = step_tail(payload, OBLIGATION, the_move(payload), [])
-    assert EARLIER_STEPS_KEY not in tail
-
-
-def test_the_hand_back_move_says_read_earlier_steps_and_ask_the_person():
-    words = MOVE_INSTRUCTIONS["hand_back"]
-    assert "earlier_steps" in words
-    assert "reply_step_message" in words
 
 
 # ---------------------------------------------------------------------------

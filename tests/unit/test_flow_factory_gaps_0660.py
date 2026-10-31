@@ -26,7 +26,6 @@ import urllib.request
 from toll_harness.email.book_of_houses import BookOfHousesApiClient
 from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
-from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS, step_tail, the_move
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
 
 
@@ -146,31 +145,6 @@ def test_current_step_keeps_the_rounds(monkeypatch):
     payload = _provider().current_step("deal-1")
     assert payload["current_step"]["repeats"] == ROUNDS
     assert payload["current_step"]["rounds_used"] == 0
-
-
-def test_the_step_tail_carries_the_rounds_only_when_there_are_any():
-    obligation = {"deal_id": "deal-1", "step_id": "step-6", "target_id": "want-1"}
-    with_rounds = {
-        "current_step": {"id": "step-6", "number": 6, "title": "Paint the pages",
-                         "state": "agent_working", "repeats": ROUNDS},
-        "deal": {"id": "deal-1", "target_goal_id": "want-1"},
-        "step_thread": {}, "acts": [], "declared_acts": [],
-    }
-    move = the_move(with_rounds, obligation)
-    tail = step_tail(with_rounds, obligation, move, [])
-    assert tail["step"]["repeats"] == ROUNDS
-    assert "last_round" in tail["step"]["repeats"]["say"]
-    plain = dict(with_rounds, current_step={"id": "step-6", "number": 6,
-                                            "title": "Write the story",
-                                            "state": "agent_working", "repeats": None})
-    tail = step_tail(plain, obligation, the_move(plain, obligation), [])
-    assert "repeats" not in tail["step"]
-
-
-def test_the_hand_back_instruction_says_what_a_round_is():
-    words = MOVE_INSTRUCTIONS["hand_back"]
-    assert "`step.repeats`" in words and "last_round: true" in words
-    assert "per_round" in words
 
 
 # ---------------------------------------------------------------------------

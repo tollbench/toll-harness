@@ -443,46 +443,6 @@ def test_guide_answers_plainly_when_nothing_is_cached_yet():
     assert result["instructions"]
 
 
-def test_deal_step_tools_enforce_pulse_and_outcome_boundaries():
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    invalid_pulse = provider.post_check_in(
-        "d1",
-        {"changed": "drafted", "now": "reviewing", "next": "file", "progress_percent": 60},
-        "pulse-1",
-    )
-    invalid_outcome = provider.file_outcome(
-        "t1",
-        {
-            "note": "Review this draft and approve it.",
-            "text": "draft",
-            "document": {"blocks": [{"type": "paragraph", "text": "draft"}]},
-        },
-        "outcome-1",
-    )
-    pulse = provider.post_check_in(
-        "d1",
-        {"changed": "drafted", "now": "done", "next": "file", "progress_percent": 100},
-        "pulse-2",
-    )
-    outcome = provider.file_outcome(
-        "t1",
-        {
-            "note": "Review this draft and approve it.",
-            "document": {"blocks": [{"type": "paragraph", "text": "draft"}]},
-        },
-        "outcome-2",
-    )
-
-    assert invalid_pulse["error"] == "invalid_work_pulse_progress"
-    assert invalid_outcome["error"] == "exactly_one_outcome_content_required"
-    assert pulse["ok"] is True
-    assert pulse["work_pulse"]["progress_percent"] == 100
-    assert outcome == {"ok": True, "filed": True}
-    assert len(api.submissions) == 2
-
-
 def test_deal_step_reply_posts_to_the_exact_step_thread():
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
@@ -629,21 +589,6 @@ def test_wait_outside_declares_the_wait_on_the_step(monkeypatch=None):
          "what": "Ruby picks one of the three times I sent her",
          "until": "2026-09-06"},
         "wait-1")]
-
-
-def test_wait_outside_refuses_an_unknown_kind_or_a_missing_sentence():
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    assert provider.wait_outside(
-        "d1", "s1", {"on": "vibes", "who": "Ruby", "what": "x"},
-        "w")["error"] == "unknown_wait_kind"
-    assert provider.wait_outside(
-        "d1", "s1", {"on": "email_reply", "who": "Ruby", "what": "  "},
-        "w")["error"] == "missing_wait_field"
-    assert provider.wait_outside(
-        "d1", "s1", {"on": "email_reply", "who": "Ruby", "what": "x",
-                     "reason": "extra"},
-        "w")["error"] == "invalid_wait_fields"
 
 
 def test_wait_outside_can_end_the_wait_without_the_other_fields():

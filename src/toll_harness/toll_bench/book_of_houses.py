@@ -1808,48 +1808,19 @@ class BookOfHousesTollBenchProvider:
     def post_check_in(
         self, deal_id: str, pulse: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
-        allowed = {"changed", "now", "next", "progress_percent", "blocker"}
-        if set(pulse) - allowed:
-            return {"ok": False, "error": "invalid_work_pulse_fields"}
-        if pulse.get("progress_percent") not in {0, 25, 50, 75, 100}:
-            return {"ok": False, "error": "invalid_work_pulse_progress"}
+        """A work pulse, as written; the 201 comes back whole (0.74.0: no field
+        allowlist and no answer whitelist -- the door judges the pulse, and the
+        debts, acts and replies that ride the 201 reach the model as sent).
+        `ask_not_open` keeps its structured answer: the door's sentence is the
+        unblocking move."""
         try:
-            result = self.api.post_check_in(deal_id, pulse, idempotency_key)
+            return self.api.post_check_in(deal_id, pulse, idempotency_key)
         except BookOfHousesApiError as error:
             if error.status == 422 and error.code == "ask_not_open":
-                # The walk refused the pulse: this step's ask is person-held
-                # and unopened, and the pulse reported no progress and no
-                # blocker. The unblocking move is to file the outcome (or
-                # pulse with real progress / an honest blocker).
-                return {
-                    "ok": False,
-                    "error": "ask_not_open",
-                    "move": error.message,
-                }
+                return {"ok": False, "error": "ask_not_open", "move": error.message}
+            if 400 <= int(error.status or 0) < 500:
+                return self._door_refused(error)
             raise
-        work_pulse = result.get("work_pulse") or {}
-        thread = result.get("step_thread") or {}
-        return {
-            "ok": result.get("ok", True),
-            "work_pulse": {
-                key: work_pulse.get(key)
-                for key in ("id", "step_id", "progress_percent", "posted_at", "next_due_at")
-            },
-            "pulse_cadence": result.get("pulse_cadence"),
-            "unread_from_person": thread.get("unread_from_person", 0),
-            "unanswered_elsewhere": thread.get("unanswered_elsewhere") or [],
-            # r216: this check-in just ended any declared wait (the server ends
-            # it, cause `agent`), so this reads null -- and the replies that
-            # arrived while it stood ride the same 201.
-            "waiting_outside": result.get("waiting_outside"),
-            "inbound_replies": result.get("inbound_replies") or [],
-            # r220: the debts and the acts ride the check-in 201 too, so an
-            # agent that pulses and never reads current_step still learns it
-            # owes somebody an answer and that a draft came back.
-            "owed_replies": result.get("owed_replies") or [],
-            "acts": result.get("acts") or [],
-            "drafts_sent_back": result.get("drafts_sent_back") or [],
-        }
 
     def wait_outside(
         self,
@@ -1859,38 +1830,46 @@ class BookOfHousesTollBenchProvider:
         idempotency_key: str,
     ) -> dict[str, Any]:
         """WAIT (rule 216): waiting on the outside world is a state, not
-        silence. You emailed someone off the platform and cannot go on until
-        they answer -- say so. The person's card stops saying "agent working",
-        and while the wait stands you take no check-in overdue marks and the
-        deal cannot end out of time. Pass end=True to end it yourself."""
-        allowed = {"on", "who", "what", "until", "end"}
-        unexpected = sorted(set(wait) - allowed)
-        if unexpected:
-            return {"ok": False, "error": "invalid_wait_fields",
-                    "unexpected_fields": unexpected}
-        if wait.get("end"):
-            return self.api.declare_outside_wait(
-                deal_id, step_id, {"end": True}, idempotency_key)
-        kind = str(wait.get("on") or "").strip().lower()
-        if kind not in {"email_reply", "third_party", "provider"}:
-            return {"ok": False, "error": "unknown_wait_kind",
-                    "kinds": ["email_reply", "third_party", "provider"]}
-        for field in ("who", "what"):
-            if not str(wait.get(field) or "").strip():
-                return {"ok": False, "error": "missing_wait_field", "field": field}
-        payload = {"on": kind, "who": str(wait["who"])[:80],
-                   "what": str(wait["what"])[:280]}
-        if wait.get("until"):
-            payload["until"] = str(wait["until"])
-        return self.api.declare_outside_wait(
-            deal_id, step_id, payload, idempotency_key)
+        silence. The wait goes to the door exactly as written (0.74.0: no field
+        allowlist -- the send-out slot's `service` and `usually_minutes` were
+        refused here though the bench's own form carries them). Pass end=True
+        to end it yourself. A refusal comes back in the door's own words."""
+        body = {"end": True} if wait.get("end") else dict(wait)
+        try:
+            return self.api.declare_outside_wait(deal_id, step_id, body, idempotency_key)
+        except BookOfHousesApiError as error:
+            if 400 <= int(error.status or 0) < 500:
+                return self._door_refused(error)
+            raise
 
-    # The fields each propose_act branch SHAPES (rules 219 and 223). Only
-    # those are kept out of the pass-through for that branch; every other key
-    # (`with` on a calendar event, repeat_item, whatever the bench adds) rides
-    # to the bench exactly as filed. Not a list of what the door takes.
-    # A meeting is intent only (rule 223): a slot, a time or an email body is
-    # never carried onto it, so every email and calendar field stays out.
+    def submit_step_form(
+        self, form: dict[str, Any], body: dict[str, Any], idempotency_key: str,
+        *, deal_id: str = "", step_id: str = "",
+    ) -> dict[str, Any]:
+        """ANY FORM THE BENCH PUBLISHES ON `submission.actions`, posted to its
+        own endpoint with its own method (0.74.0). The bench publishes sixteen
+        step forms -- send_out, extend_send_out, end_send_out, fail_step,
+        skip_repeat_item, end_wait and the rest -- and this is the one door all
+        of them go through, so a form the bench adds tomorrow works the day it
+        ships. Only a path on this bench's own API is ever called. A refusal
+        comes back in the door's own words."""
+        endpoint = str(form.get("endpoint") or form.get("call") or "").strip()
+        method = str(form.get("method") or "POST").strip().upper()
+        if " " in endpoint:
+            head, _, rest = endpoint.partition(" ")
+            if head.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                method, endpoint = head.upper(), rest.strip()
+        endpoint = endpoint.replace("{deal_id}", str(deal_id)).replace("{step_id}", str(step_id))
+        if not endpoint.startswith("/api/bench/"):
+            return {"ok": False, "error": "form_has_no_bench_endpoint",
+                    "message": "This form names no /api/bench/ endpoint to post to."}
+        try:
+            return self.api.post_form(method, endpoint, body, idempotency_key)
+        except BookOfHousesApiError as error:
+            if 400 <= int(error.status or 0) < 500:
+                return self._door_refused(error)
+            raise
+
     def refile_source_correction(
         self, deal_id: str, step_id: str, correction: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:

@@ -48,7 +48,7 @@ def test_dispatch_is_bounded_across_restarts_and_different_errors(tmp_path, monk
         calls.append(True)
         raise RuntimeError("different error " + str(len(calls)))
 
-    monkeypatch.setattr(cli, "platform_move", lambda *a: None)
+    monkeypatch.setattr(cli, "not_the_agents_move", lambda *a: None)
     monkeypatch.setattr(cli, "_refusal_brake_holds", lambda *a: None)
     monkeypatch.setattr(cli, "_step_ask_available", lambda *a: route == "step_ask")
     monkeypatch.setattr(cli, "_the_step_ask", invoke)

@@ -43,7 +43,7 @@ from toll_harness.toll_bench.step import StepAsk
 # Longer than any cap the old profile line or a prompt budget ever had, on
 # purpose: the whole of it must ride.
 SKILL = "Write the lyrics in the person's own words, with their names. " * 330
-REPLY = {"call": "reply_step_message", "reply": "On it."}
+REPLY = {"call": "post_step_message", "reply": "On it."}
 
 
 def _system(model, index=0):

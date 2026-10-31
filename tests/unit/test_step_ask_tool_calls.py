@@ -76,9 +76,9 @@ def test_the_same_answer_twice_carries_the_same_idempotency_key(tmp_path):
 def test_an_outcome_is_submitted_through_the_tool_call(tmp_path):
     bench = FakeBench()
     arguments = {key: value for key, value in CAFES.items() if key != "call"}
-    out = StepAsk(_cli(tmp_path, _call("file_outcome", arguments)), bench).run(
+    out = StepAsk(_cli(tmp_path, _call("submit_step_outcome", arguments)), bench).run(
         OBLIGATION, _payload(), brief=BRIEF)
-    assert out["ok"] is True and out["call"] == "file_outcome"
+    assert out["ok"] is True and out["call"] == "submit_step_outcome"
     assert bench.outcomes[0][0] == "t1" and bench.outcomes[0][1] == arguments
     assert bench.pulses == []  # this bench records completion on the outcome
 
@@ -87,9 +87,9 @@ def test_a_message_reply_is_one_tool_call(tmp_path):
     bench = FakeBench()
     spoke = _payload(step_thread={"messages": [{"id": "m1", "who": "person", "text": "Tue?"}],
                                   "unread_from_person": 1, "unanswered_elsewhere": []})
-    model = _cli(tmp_path, _call("reply_step_message", {"reply": "Tuesday works."}))
+    model = _cli(tmp_path, _call("post_step_message", {"reply": "Tuesday works."}))
     out = StepAsk(model, bench).run(OBLIGATION, spoke, brief=BRIEF)
-    assert out["ok"] and out["move"] == "answer_person"
+    assert out["ok"] and out["call"] == "post_step_message"
     assert bench.replies[0][:3] == ("d1", "s-1", "Tuesday works.")
 
 

@@ -97,12 +97,10 @@ def _resources(tools):
 # 1. The loop step's act form becomes a tool, repeat_item const and all
 # ---------------------------------------------------------------------------
 def test_the_loop_act_form_reaches_the_model_as_a_tool():
-    move = {"move": "file_act", "calls": ["propose_act", "reply_step_message"]}
     permitted = cli._permitted_step_state(
         _resources(with_step_doors(OLD_ONBOARDED)), _loop_payload())
-    tools = step_tools(move, permitted)
-    # 0.62.0: a move that writes from earlier material may fetch it.
-    assert list(tools) == ["propose_act", "reply_step_message", NEED_TOOLS]
+    tools = step_tools(permitted)
+    assert "propose_act" in tools and NEED_TOOLS in tools
     assert tools["propose_act"]["schema"]["properties"]["repeat_item"] == {"const": ITEM}
 
 
@@ -148,7 +146,7 @@ def test_doctor_names_the_missing_step_tools():
 # ---------------------------------------------------------------------------
 def test_a_missing_act_door_is_named_and_the_model_is_not_asked(caplog):
     bench = FakeBench()
-    model = _model({"call": "reply_step_message", "reply": "the tool was not offered"})
+    model = _model({"call": "post_step_message", "reply": "the tool was not offered"})
     permitted = cli._permitted_step_state(_resources(OLD_ONBOARDED), _loop_payload())
     with caplog.at_level(logging.WARNING):
         out = StepAsk(model, bench).run(OBLIGATION, permitted)

@@ -24,9 +24,8 @@ import pytest
 import yaml
 
 from tests.unit.test_onboarding import _answers
-from tests.unit.test_outside_act_w29 import OutsideBench, _outside
 from tests.unit.test_step_ask import BRIEF as STEP_BRIEF
-from tests.unit.test_step_ask import OBLIGATION, FakeBench, _payload
+from tests.unit.test_step_ask import OBLIGATION, FakeBench
 from tests.unit.test_step_ask import _model as _step_model
 from tests.unit.test_two_stages_r243_r245 import (
     FILLED_STEP,
@@ -43,7 +42,6 @@ from toll_harness.core.own_means import (
     OWN_MEANS_MAX,
     OWN_MEANS_NAME_MAX,
     OWN_MEANS_PLAN_RULE,
-    OWN_MEANS_RULE,
     OwnMeans,
     own_means_from_config,
     own_means_line,
@@ -52,7 +50,7 @@ from toll_harness.core.own_means import (
 )
 from toll_harness.onboarding import create_configuration
 from toll_harness.toll_bench import draft
-from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS, StepAsk
+from toll_harness.toll_bench.step import StepAsk
 
 RECORD_SONG = {
     "name": "record_song",
@@ -256,44 +254,12 @@ def test_the_proposal_ask_is_unchanged_without_own_means():
 # 5. The step ask: the two moves that weigh "do I have a tool for this"
 # ---------------------------------------------------------------------------
 def _step(payload, own_means=None, answer=None):
-    model = _step_model(answer or {"call": "reply_step_message", "reply": "On it."})
+    model = _step_model(answer or {"call": "post_step_message", "reply": "On it."})
     ask = StepAsk(model, FakeBench())
     if own_means is not None:
         ask.own_means = own_means
     ask.run(OBLIGATION, payload, brief=STEP_BRIEF)
     return _ask_text(model)
-
-
-def test_the_hand_back_move_carries_the_own_means():
-    text = _step(_payload(), DJ)
-    assert MOVE_INSTRUCTIONS["hand_back"] + "\n" + own_means_line(DJ) in text
-    assert OWN_MEANS_RULE in text
-
-
-def test_the_hand_back_move_is_unchanged_without_own_means():
-    text = _step(_payload())
-    assert MOVE_INSTRUCTIONS["hand_back"] in text and "by your own means" not in text
-    assert _step(_payload(), ()) == text
-
-
-def test_the_outside_work_move_carries_the_own_means():
-    # "IF YOU CANNOT DO IT AT ALL -- no tool for that service": the own means
-    # are what the agent has before it reaches for report_parked.
-    model = _step_model({"call": "file_outside_evidence", "summary": "Recorded it."})
-    ask = StepAsk(model, OutsideBench())
-    ask.own_means = DJ
-    ask.run(OBLIGATION, _outside(), brief=STEP_BRIEF)
-
-    assert MOVE_INSTRUCTIONS["outside_work"] + "\n" + own_means_line(DJ) in _ask_text(model)
-
-
-def test_answering_the_person_carries_no_own_means():
-    spoke = _payload(step_thread={
-        "messages": [{"id": "m1", "who": "person", "text": "Can it be faster?"}],
-        "unread_from_person": 1,
-        "unanswered_elsewhere": [],
-    })
-    assert "by your own means" not in _step(spoke, DJ)
 
 
 # ---------------------------------------------------------------------------

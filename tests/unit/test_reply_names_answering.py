@@ -161,10 +161,10 @@ def test_unanswered_on_step_reads_the_list_then_the_older_thread():
 def test_ricks_step_names_the_message_the_model_did_not():
     bench = PaidBench()
     out = StepAsk(
-        _model({"call": "reply_step_message", "reply": "Tuesday works, I'll book it."}),
+        _model({"call": "post_step_message", "reply": "Tuesday works, I'll book it."}),
         bench,
     ).run(OBLIGATION, _spoke("m-old", "871c5dbb"), brief=BRIEF)
-    assert out["ok"] and out["move"] == "answer_person"
+    assert out["ok"] and out["call"] == "post_step_message"
     assert bench.answering == ["871c5dbb"]
 
 
@@ -182,7 +182,7 @@ def test_a_reply_on_a_hand_back_with_nothing_owed_claims_nothing():
     bench = FakeBench()
     StepAsk(_model(), bench)._make_the_call(
         {"deal_id": "d1", "step_id": "s-1"},
-        {"call": "reply_step_message", "action": {}},
+        {"action": "post_step_message", "form": {}},
         {"reply": "Working on it."},
         _payload(),
     )
@@ -221,7 +221,7 @@ def test_an_unpaid_reply_is_logged_and_the_same_message_is_not_answered_again(ca
     bench = PaidBench(pays=False)
     with caplog.at_level(logging.WARNING, logger="toll_harness.step"):
         first = StepAsk(
-            _model({"call": "reply_step_message", "reply": "Tuesday works."}), bench,
+            _model({"call": "post_step_message", "reply": "Tuesday works."}), bench,
         ).run(OBLIGATION, _spoke("871c5dbb"), brief=BRIEF)
         # The next poll: same message still owed. Rick sent five more here.
         again = StepAsk(_model(), bench).run(OBLIGATION, _spoke("871c5dbb"), brief=BRIEF)
@@ -234,10 +234,10 @@ def test_an_unpaid_reply_is_logged_and_the_same_message_is_not_answered_again(ca
 
 def test_a_new_message_is_answered_even_while_an_old_one_is_held():
     bench = PaidBench(pays=False)
-    StepAsk(_model({"call": "reply_step_message", "reply": "Tuesday."}), bench).run(
+    StepAsk(_model({"call": "post_step_message", "reply": "Tuesday."}), bench).run(
         OBLIGATION, _spoke("871c5dbb"), brief=BRIEF)
     bench.pays = True
-    out = StepAsk(_model({"call": "reply_step_message", "reply": "And Wednesday."}),
+    out = StepAsk(_model({"call": "post_step_message", "reply": "And Wednesday."}),
                   bench).run(OBLIGATION, _spoke("871c5dbb", "m-new"), brief=BRIEF)
     assert out["ok"] and bench.answering == ["871c5dbb", "m-new"]
 

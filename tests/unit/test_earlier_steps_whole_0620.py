@@ -29,17 +29,10 @@ from tests.unit.test_toll_bench import FakeApi
 from toll_harness.email.book_of_houses import BookOfHousesApiClient
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.toll_bench.step import (
-    EARLIER_STEPS_CHAR_CAP,
     EARLIER_STEPS_KEY,
-    EARLIER_STEPS_TRIMMED,
-    HAND_BACK_INDENT,
-    MOVE_INSTRUCTIONS,
     NEED_TOOLS,
     ROAD_AGENTIC,
     StepAsk,
-    render_earlier_steps,
-    step_tools,
-    the_move,
 )
 from toll_harness.tools.registry import _validate, add_toll_bench_tools, build_standard_registry
 
@@ -70,8 +63,6 @@ MATCH_CARD = "\n".join([
 ])
 # The bench cut it just before the late field, as it did that day.
 KEPT = MATCH_CARD[: MATCH_CARD.index("\nmeet:")]
-TRIMMED_NOTE = (f"kept the first {len(KEPT)} of {len(MATCH_CARD)} characters; the whole "
-                "hand-back is steps[].outcome on history_url")
 
 PROFILE = {
     "number": 3, "step_id": "st-3", "title": "Write your founder profile from your answers",
@@ -85,22 +76,6 @@ PROFILE = {
     },
     "files": [], "act_results": [],
 }
-MATCH = {
-    "number": 4, "step_id": "st-4",
-    "title": "Find who on this week's list you should meet, and a time to meet in the lobby",
-    "state": "approved", "approved_at": "2026-10-06T20:53:41Z", "approval_cause": "person",
-    "hand_back": {
-        "receipt_id": "r-match", "kind": "document",
-        "summary": "Your match this week at SF Founder House",
-        "text": KEPT + " ...", "text_chars": len(MATCH_CARD),
-        "trimmed": TRIMMED_NOTE, "link": None, "file_receipt_id": None,
-        "filename": None, "filed_at": "2026-10-06T20:52:37Z",
-    },
-    "files": [{"file_receipt_id": "r-photo", "filename": "photo-of-maya.jpg",
-               "sniffed_type": "jpg"}],
-    "act_results": [],
-}
-
 
 def _size(lines):
     return sum(len(line) + 1 for line in lines)
@@ -164,66 +139,6 @@ def _card_step(number, extra=""):
     return {**PROFILE, "number": number, "step_id": f"st-{number}", "title": f"Find {number}",
             "hand_back": {**PROFILE["hand_back"], "receipt_id": f"r-{number}",
                           "text": card, "text_chars": len(card)}}
-
-
-def test_a_long_history_trims_oldest_first_and_names_what_was_trimmed():
-    rows = [_card_step(n) for n in range(1, 25)]
-    lines = render_earlier_steps(rows)
-    assert _size(lines) <= EARLIER_STEPS_CHAR_CAP
-    marker = lines[0]
-    assert marker.startswith(EARLIER_STEPS_TRIMMED)
-    assert "left out step 1, step 2" in marker
-    assert NEED_TOOLS in marker and "whole true" in marker
-    heads = [line for line in lines if line.startswith("Step ")]
-    left_out = [n for n in range(1, 25) if not any(h.startswith(f"Step {n} (") for h in heads)]
-    # Oldest first, whole steps only, and the marker names exactly those.
-    assert left_out == list(range(1, len(left_out) + 1))
-    assert ", ".join(f"step {n}" for n in left_out) in marker
-    # Every kept step is whole: its last field is there.
-    for head in heads:
-        number = head.split()[1]
-        assert HAND_BACK_INDENT + f"meet: Day {number}, 4:00 pm, lobby" in lines
-    # Rendering the trimmed block again changes nothing.
-    assert render_earlier_steps(lines) == lines
-    # Whole: nothing left out, no marker.
-    whole = render_earlier_steps(rows, cap=None)
-    assert not whole[0].startswith(EARLIER_STEPS_TRIMMED)
-    assert sum(line.startswith("Step ") for line in whole) == 24
-
-
-def test_one_step_too_big_keeps_every_field_whole_and_shortens_its_free_text():
-    paragraph = "Meet in the lobby by the front desk. " * 80
-    row = {**MATCH, "hand_back": {**MATCH["hand_back"], "trimmed": None,
-                                  "text": MATCH_CARD + "\n" + paragraph}}
-    lines = render_earlier_steps([PROFILE, row], cap=1_200)
-    marker = lines[0]
-    assert "left out step 3" in marker and "free text shortened on step 4" in marker
-    for field in MATCH_FIELDS:
-        assert HAND_BACK_INDENT + field in lines
-    short = [line for line in lines if line.startswith(HAND_BACK_INDENT + "Meet in the lobby")]
-    assert short and all(len(line) <= len(HAND_BACK_INDENT) + 160 for line in short)
-    assert render_earlier_steps(lines, cap=1_200) == lines
-
-
-# ---------------------------------------------------------------------------
-# 4. need_tools on every move that writes from earlier material
-# ---------------------------------------------------------------------------
-def test_need_tools_is_offered_on_every_move_that_writes_from_earlier_material():
-    file_act = _email_step_payload([])
-    refile = _payload(acts=[{"act_id": "a1", "kind": "email", "state": "sent_back",
-                             "note": "Put the lobby time in"}])
-    reply = _payload(owed_replies=[{"id": "r1"}])
-    for payload, name in ((file_act, "file_act"), (refile, "refile_act"),
-                          (reply, "answer_reply"), (_payload(), "hand_back")):
-        move = the_move(payload)
-        assert move["move"] == name
-        assert NEED_TOOLS in step_tools(move, payload), name
-        assert "earlier_steps" in MOVE_INSTRUCTIONS[name]
-    # Chat with the person is not a deliverable and takes no detour.
-    spoke = _payload(step_thread={"messages": [{"id": "m1", "who": "person", "text": "hi"}],
-                                  "unread_from_person": 1, "unanswered_elsewhere": []})
-    move = the_move(spoke)
-    assert move["move"] == "answer_person" and NEED_TOOLS not in step_tools(move, spoke)
 
 
 def test_need_tools_on_the_email_step_takes_the_old_road():

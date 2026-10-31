@@ -38,8 +38,6 @@ from toll_harness.toll_bench.step import (
     ROAD_AGENTIC,
     ROAD_STEP_ASK,
     StepAsk,
-    step_tools,
-    the_move,
 )
 
 TEXT = {"type": "string", "minLength": 1}
@@ -94,39 +92,6 @@ class OutsideBench(FakeBench):
         return {"ok": True, "worker_status": {"state": state}}
 
 
-# ---------------------------------------------------------------------------
-# (a) THE WALK
-# ---------------------------------------------------------------------------
-def test_an_approved_outside_act_is_the_agents_move_not_the_old_road():
-    # The line that forced it: this returned {"move": None, "road": agentic}
-    # and the model was handed the whole instruction sheet and did nothing.
-    move = the_move(_outside(), OBLIGATION)
-
-    assert move["move"] == "outside_work"
-    assert move["calls"] == ["file_outside_evidence", "reply_step_message", "report_parked"]
-
-
-def test_a_bench_with_no_evidence_form_still_takes_the_old_road():
-    # There is nothing to ask for: an older bench publishes no door for the
-    # work to come back through.
-    move = the_move(_outside(evidence=False), OBLIGATION)
-
-    assert move["move"] is None and move["road"] == ROAD_AGENTIC
-
-
-def test_the_move_carries_the_evidence_door_the_thread_and_the_parked_report():
-    payload = _outside()
-    tools = step_tools(the_move(payload, OBLIGATION), payload)
-
-    assert set(tools) == {"file_outside_evidence", "reply_step_message",
-                          "report_parked", NEED_TOOLS}
-    # The parked report is narrowed to the one thing the model says here.
-    parked = tools["report_parked"]["schema"]
-    assert parked["properties"]["state"] == {"const": "parked"}
-    assert parked["required"] == ["state", "round", "reason"]
-    assert parked["properties"]["reason"]["maxLength"] == 280
-
-
 def test_the_work_comes_back_through_the_evidence_door():
     bench = OutsideBench()
     model = _model({"call": "file_outside_evidence",
@@ -136,7 +101,7 @@ def test_the_work_comes_back_through_the_evidence_door():
     out = StepAsk(model, bench).run(OBLIGATION, _outside(), brief=BRIEF)
 
     assert out["ok"] is True and out["road"] == ROAD_STEP_ASK
-    assert out["move"] == "outside_work" and out["call"] == "file_outside_evidence"
+    assert out["move"] == "file_outside_evidence" and out["call"] == "file_outside_evidence"
     assert bench.evidence[0][:3] == (
         "d1", "s-1", "Made the invite in a drawing app and exported a PNG.")
     assert bench.evidence[0][3] == ["https://example.org/invite.png"]

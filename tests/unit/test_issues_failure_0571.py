@@ -12,7 +12,6 @@ from __future__ import annotations
 from toll_harness import cli
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
-from toll_harness.toll_bench.step import _act_row
 
 
 class _Api:
@@ -79,10 +78,3 @@ def test_a_standing_refusal_keeps_issues_and_failure():
     assert body["failure"] == failure
 
 
-def test_an_act_row_keeps_failure_and_lines():
-    row = _act_row({"act_id": "a1", "kind": "calendar_event",
-                    "state": "failed",
-                    "failure": {"code": "x", "vendor_message": "m", "slot": "start"},
-                    "lines": ["one", "two"]})
-    assert row["failure"]["slot"] == "start"
-    assert row["lines"] == ["one", "two"]

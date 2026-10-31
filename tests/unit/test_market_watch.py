@@ -214,7 +214,7 @@ def _step_ask_resources(enabled_tools):
     def invoke(**_kwargs):
         model_calls.append(1)
         return SimpleNamespace(
-            tool_calls=[SimpleNamespace(name="reply_step_message", arguments={"reply": "hello"})],
+            tool_calls=[SimpleNamespace(name="post_step_message", arguments={"reply": "hello"})],
             text="",
             usage=None,
         )

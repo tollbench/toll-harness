@@ -1,42 +1,31 @@
 """THE STEP ASK -- one step of a signed plan is one small question and one call.
 
 WHAT FORCED THIS MODULE (Steven, 2026-09-09, 19:55): "It's just stepping
-through the plan. why would that cost so much? ... fix that please."
+through the plan. why would that cost so much? ... fix that please." One deal
+step had cost 261,749 input tokens over twenty calls on the old road.
 
-Measured on the fleet that morning (one fleet unit, market.log, 10:36 local): one
-deal-step dispatch handed the model a 10,002-character goal and 32 tools,
-opened at 12,675 input tokens, and went round twenty times at about 13,000
-each -- 261,749 input tokens on ONE step, and it hit the iteration cap
-without filing anything. A bid, by then, cost about 9,000 input tokens for a
-whole ten-call draft loop (0.35.4 to 0.35.6): a prefix the provider caches
-and a small tail per ask. The step was still the old road -- the runtime's
-whole instruction sheet, every tool, and every tool result glued into the
-conversation and re-sent on every call.
+0.74.0 (harness thinness audit, item 9): THE STEP IS THE BENCH'S FORMS. The
+harness no longer decides whose move a step is or which of seven moves it is.
+It reads three things off the current-step answer and relays them:
 
-So a deal step is asked the way a plan is written. THREE THINGS:
+  1. WHOSE TURN. `turn.whose_turn` (contract 4.0.7) says it: `agent` is a
+     move; anything else starts no model call. The person's own words come
+     first: an unanswered message or an owed reply is always the agent's to
+     answer. Only a bench that sends no `turn` at all falls back to the step's
+     own `state`.
+  2. ONE TOOL PER FORM. Every row on `submission.actions` is a tool, named by
+     the bench, with the bench's own schema, posted to its own endpoint; the
+     worker-status form is `report_parked`; a send-out's `moves` are tools too;
+     a file step's `deliver_file` reads a file the model made in its own
+     workdir. `need_tools` is always there: it hands the step to the old road.
+  3. THE BENCH'S PAYLOAD, WHOLE. The tail is the current-step answer as the
+     bench sent it -- `turn`, `instruction`, `recommended_action`,
+     `prerequisites`, `earlier_steps`, `repeats`, `sent_out`, `rewound`, the
+     person's words -- minus only the forms, which are the tools.
 
-  1. WHOSE MOVE IS IT. A block the platform runs (rule 229), an act waiting
-     on the person's Allow, an act the platform is executing, a step the
-     person is reviewing, a declared wait on the outside world (rule 216) --
-     none of those is the agent's to move, and none of them starts a model
-     run. `platform_move` names the reason in a few words and the dispatch
-     logs one line.
-  2. ONE MOVE, ONE CALL. When the move IS the agent's -- answer a reply the
-     bench says is owed, answer the person, re-file an act that came back,
-     file a declared act, hand the step back -- `the_move` names it and the
-     tail carries ONLY this step: its title, ask and promise, what changed
-     since the last look and the one thing to produce. The model gets the
-     calls that move allows as TOOLS, one per form the bench publishes on
-     `submission.actions`, with the bench's schema; it answers with exactly
-     one tool call, checked against that full schema, and the runtime makes
-     the call, done. The prefix is `draft.stable_prefix`, byte for byte, so the
-     provider cache is shared with the bid loop.
-  3. THE OLD ROAD IS STILL THERE for a move this ask cannot shape: a step
-     that hands back bytes or a link (rule 230), an approved `outside` act
-     the agent goes and does itself, a message debt on a step whose words
-     are not on the current-step payload, and any step the model says needs
-     a live search, a browser, a file or a tool (`need_tools`). The dispatch
-     says which road it took, every time.
+One call; post; a refusal comes back as `the_bench_refused` on the one more
+ask. The reply machinery (0.56.1: a reply names what it answers) and the park
+report (W29: an outside step never ends in silence) are kept.
 """
 from __future__ import annotations
 
@@ -45,7 +34,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -64,49 +53,15 @@ from toll_harness.toll_bench.draft import (
 
 _LOGGER = logging.getLogger("toll_harness.step")
 
-# The keys of a step row that are the platform's own machinery: the first to
-# come off a row this module clips. The agent's words never do.
-_HEAVY_STEP_KEYS = ("service_setup", "statement", "har_blocks", "examples")
-
-
-def _fit(value: Any, budget: int) -> Any:
-    """A row small enough to hand over: the machinery keys come off first."""
-    if value is None:
-        return None
-    text = json.dumps(value, separators=(",", ":"), default=str)
-    if len(text) <= budget or not isinstance(value, dict):
-        return value
-    trimmed = dict(value)
-    for key in _HEAVY_STEP_KEYS:
-        if key in trimmed:
-            trimmed.pop(key)
-            if len(json.dumps(trimmed, separators=(",", ":"), default=str)) <= budget:
-                break
-    return trimmed
-
-# The one-ball state that means the agent holds the step.
+# The one-ball state that means the agent holds the step (the fallback when a
+# bench sends no `turn`).
 AGENT_STEP_STATE = "agent_working"
-# An act in one of these states is waiting on the person's Allow, or the
-# platform is carrying it out. Nothing of the agent's moves it.
-HELD_ACT_STATES = frozenset({"pending", "held", "approved"})
-# The act came back with the person's words on it: the step is the agent's.
-RETURNED_ACT_STATES = frozenset({"sent_back", "denied", "failed", "stopped"})
-# The platform did it; what is left is the agent's outcome quoting the receipt.
-DONE_ACT_STATES = frozenset({"executed", "sent"})
-OUTSIDE_KIND = "outside"
-# Acts the agent files itself at the act door. A block kind (meeting, and
-# whatever else the registry publishes a declaration for) is the platform's
-# to file when the step opens, so it is never on this list.
-AGENT_FILED_ACT_KINDS = frozenset({"email", "calendar_event"})
-# A deliverable on one of these channels is bytes, not words (rule 230), and
-# needs the run folder and the delivery doors: the old road.
-BYTES_CHANNELS = frozenset({"file", "link"})
 
-# W29 (prod deal 4f061f54 step 3, 17 September). The bench's own names for the
-# two doors an approved outside act needs: the one that brings the work back,
-# and the one that says out loud that nobody is working on it.
+# The bench's names for the forms this module adds plumbing to.
 OUTSIDE_EVIDENCE_ACTION = "file_outside_evidence"
-WORKER_STATUS_ACTION = "report_worker_status"
+STEP_MESSAGE_ACTION = "post_step_message"
+OUTCOME_ACTION = "submit_step_outcome"
+DELIVER_FILE_ACTION = "deliver_file"
 # What the harness posts on the thread when it parks a step itself, because
 # the model made no call at all. The model's own sentence is better and is
 # used when there is one; this is the floor, and silence is not an option.
@@ -119,161 +74,174 @@ OUTSIDE_PARKED_SENTENCE = (
 ROAD_STEP_ASK = "step_ask"
 ROAD_AGENTIC = "agentic"
 NEED_TOOLS = "need_tools"
+REPORT_PARKED = "report_parked"
 
-# 0.60.0: the person's words ride WHOLE and ALL of them -- every message of
-# theirs on the step, every reason they sent a draft back, the step's own
-# promise -- with no count limit and no clip (the bench caps a message on its
-# side). Steven, 2026-10-06: "I dont want the harness to hobble, we want to
-# make sure the agents have full capabilites." Only machinery is limited.
-ACT_LIMIT = 4
-MATERIAL_LIMIT = 8
-# 0.64.0: what a sent-back hand-back carries into the tail (contract 2.43):
-# the person's own words in `reason` and what a legal revision has to be.
-WORK_SENT_BACK_KEYS = ("receipt_id", "title", "reason", "expected")
-# The cards the outcome door took off the last filing on this step
-# (`finds_refused`, `finds_taken`), kept by the provider, named here.
+# Keys the provider and the old road still read by name.
+EARLIER_STEPS_KEY = "earlier_steps"
 LAST_FILING_KEY = "your_last_filing"
+# Where `cli._permitted_step_state` lists the forms the agent's tool list
+# turned off: [{"action": bench action, "tools": [the tool names missing]}].
+FORMS_TURNED_OFF = "forms_turned_off"
+_REPLY_IN_ENDPOINT = re.compile(r"/replies/([^/]+)/dismiss$")
+# A file deliver_file reads stays under the platform's own per-file cap.
+DELIVER_FILE_MAX_BYTES = 50 * 1024 * 1024
 
+STEP_DOOR = (
+    "THIS IS NOT A PLAN ROUND. The plan is signed and you are walking ONE step "
+    "of it. Below is the bench's own answer for this step, whole: `turn` and "
+    "`submission.instruction` say the one move that is yours, "
+    "`recommended_action` names the form, and every form is a tool you are "
+    "given. Make exactly ONE call. If the person wrote to you and it is "
+    "unanswered, answer them first with post_step_message. If you cannot do "
+    "this step at all, call report_parked and say why in one plain sentence. "
+    "If it needs a live search, a browser, a file you have not made yet, or a "
+    "tool you were not given, call need_tools. Never ask for a password, code, "
+    "session or cookie."
+)
 
-def _kind(act: Any) -> str:
-    return str((act or {}).get("kind") or "").strip().lower()
+REFUSED_INSTRUCTION = (
+    "Your last answer was refused; the bench's words are in "
+    "`the_bench_refused`. Fix exactly what they name and make the call once more."
+)
 
+PULSE_DUE_INSTRUCTION = (
+    "A progress pulse is due (rule 100): if you are not filing the outcome now, "
+    "post one honest pulse."
+)
 
-def _state(act: Any) -> str:
-    return str((act or {}).get("state") or "").strip().lower()
-
-
-def _wait_is_over(wait: dict[str, Any], now: datetime | None = None) -> bool:
-    """A declared wait that has ended, or whose own `until` has passed."""
-    if wait.get("ended_at") or wait.get("ended"):
-        return True
-    until = wait.get("until")
-    if not until:
-        return False
-    try:
-        due = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if due.tzinfo is None:
-        due = due.replace(tzinfo=timezone.utc)
-    return due <= (now or datetime.now(timezone.utc))
+NEED_TOOLS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"why": {"type": "string", "minLength": 1}},
+    "required": ["why"],
+}
+DELIVER_FILE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "minLength": 1,
+                 "description": "The file you made, under your own working directory."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 80,
+                  "description": "The item's real name as the person's card wears it."},
+        "filename": {"type": "string"},
+    },
+    "required": ["path", "title"],
+}
+_OPEN_SCHEMA: dict[str, Any] = {"type": "object"}
 
 
 # ---------------------------------------------------------------------------
-# 1. WHOSE MOVE IS IT
+# 1. WHOSE TURN
 # ---------------------------------------------------------------------------
-def platform_move(payload: Any, owned: Any = None) -> str | None:
-    """Why this step is NOT the agent's to move right now, in a few words.
+_PARTY_WORDS = {"agent": "agent", "you": "human", "outside": "outside"}
 
-    None means the agent has a move. `owned` is the provider's rule-229 memo
-    for this step ({"kinds": {kind: state}}) -- a block the platform filed
-    and will close -- fed by the same current_step read that produced
-    `payload`. The person's new words always come first: a message, an owed
-    reply, or an act that came back is the agent's move whatever else is
-    standing on the step.
-    """
+
+def turn_of(payload: Any) -> dict[str, Any] | None:
+    """The bench's `turn` on this answer (root, else `submission.turn`)."""
     if not isinstance(payload, dict):
         return None
-    step = payload.get("current_step") or {}
-    thread = payload.get("step_thread") or {}
-    if (
-        thread.get("unread_from_person")
-        or thread.get("unanswered_elsewhere")
-        or payload.get("owed_replies")
-    ):
+    turn = payload.get("turn")
+    if isinstance(turn, dict):
+        return turn
+    submission = payload.get("submission")
+    turn = submission.get("turn") if isinstance(submission, dict) else None
+    return turn if isinstance(turn, dict) else None
+
+
+def whose_turn(payload: Any) -> str | None:
+    """`agent`, `human`, `outside`, or None (no turn: not started or closed).
+
+    Read off `turn.whose_turn`, else the retiring `turn.party`. Only a bench
+    that sends no `turn` at all falls back to the step's own state, and a
+    payload that says neither is the agent's to look at (as it always was)."""
+    turn = turn_of(payload)
+    if turn is not None:
+        whose = str(turn.get("whose_turn") or "").strip().lower()
+        if whose:
+            return whose
+        party = str(turn.get("party") or "").strip().lower()
+        return _PARTY_WORDS.get(party)
+    step = (payload or {}).get("current_step") if isinstance(payload, dict) else None
+    state = str((step or {}).get("state") or "").strip().lower()
+    return "agent" if state in ("", AGENT_STEP_STATE) else "human"
+
+
+def not_the_agents_move(payload: Any) -> str | None:
+    """Why this step starts no model call, in the bench's words; None when it
+    is the agent's to move. The person's words always come first."""
+    if not isinstance(payload, dict):
         return None
-    acts = [act for act in payload.get("acts") or [] if isinstance(act, dict)]
-    # The server sends acts oldest first; the newest one is where the step is.
-    if acts and _state(acts[-1]) in RETURNED_ACT_STATES:
+    if unanswered_on_step(payload) or payload.get("owed_replies"):
         return None
-    state = str(step.get("state") or "").strip().lower()
-    if state and state != AGENT_STEP_STATE:
-        # waiting_on_you and its kin: the person holds the ask.
-        return f"step state {state}, the person's"
-    if isinstance(owned, dict) and owned.get("kinds"):
-        kinds = owned["kinds"]
-        return (
-            ", ".join(f"{kind} block {kinds[kind]}" for kind in sorted(kinds))
-            + " (rule 229)"
-        )
-    for act in reversed(acts):
-        kind, act_state = _kind(act), _state(act)
-        if act_state not in HELD_ACT_STATES:
-            continue
-        if kind == OUTSIDE_KIND and act_state == "approved":
-            return None  # the person tapped Allow: the agent goes and does it
-        if act_state == "approved":
-            return f"{kind} act approved, the platform is carrying it out"
-        return f"{kind} act {act_state}, waiting on the person's Allow"
-    wait = payload.get("waiting_outside")
-    if (
-        isinstance(wait, dict)
-        and wait
-        and not payload.get("inbound_replies")
-        and not _wait_is_over(wait)
-    ):
-        who = wait.get("who") or wait.get("on") or "a reply"
-        return f"waiting outside on {who} (rule 216)"
-    return None
+    thread = payload.get("step_thread") if isinstance(payload.get("step_thread"), dict) else {}
+    if thread.get("unanswered_elsewhere"):
+        return None
+    whose = whose_turn(payload)
+    if whose == "agent":
+        return None
+    turn = turn_of(payload) or {}
+    words = turn.get("why") or turn.get("label") or turn.get("state")
+    return f"turn {whose or 'none'}" + (f": {words}" if words else "")
 
 
 # ---------------------------------------------------------------------------
-# 2. THE MOVE, AND THE ONE CALL THAT MAKES IT
+# 2. ONE TOOL PER FORM
 # ---------------------------------------------------------------------------
-def _unfiled_declared_kinds(payload: dict[str, Any]) -> list[str]:
-    """Kinds the signed plan declared on this step that the agent has not filed."""
-    filed = {_kind(act) for act in payload.get("acts") or [] if isinstance(act, dict)}
-    out: list[str] = []
-    for entry in payload.get("declared_acts") or []:
-        if not isinstance(entry, dict):
+def _form_words(form: dict[str, Any]) -> str:
+    words = [str(form.get("result") or "")]
+    if form.get("template") is not None:
+        words.append("Template: " + json.dumps(form["template"], default=str))
+    if form.get("field_notes"):
+        words.append("Fields: " + json.dumps(form["field_notes"], default=str))
+    if form.get("prerequisites"):
+        words.append("Prerequisites: " + json.dumps(form["prerequisites"], default=str))
+    return " ".join(word for word in words if word)
+
+
+def _tool_name(name: str, taken: dict[str, Any]) -> str:
+    base = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_") or "form"
+    candidate, index = base, 1
+    while candidate in taken:
+        index += 1
+        candidate = f"{base}_{index}"
+    return candidate
+
+
+def step_tools(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Tool name -> {action, schema, form}: one tool per form the bench
+    publishes on this step, generated at run time. Two forms of one name (two
+    owed replies, two declared acts) are two tools, `propose_act`,
+    `propose_act_2`. The schema is the bench's, whole."""
+    submission = payload.get("submission") if isinstance(payload.get("submission"), dict) else {}
+    tools: dict[str, dict[str, Any]] = {}
+    for form in submission.get("actions") or []:
+        if not isinstance(form, dict) or not form.get("action"):
             continue
-        kind = _kind(entry)
-        if kind not in AGENT_FILED_ACT_KINDS or kind in filed:
+        action = str(form["action"])
+        schema = form.get("schema") if isinstance(form.get("schema"), dict) else None
+        if action == DELIVER_FILE_ACTION:
+            schema = DELIVER_FILE_SCHEMA
+        if schema is None:
             continue
-        try:
-            if int(entry.get("filed") or 0) > 0:
-                continue
-        except (TypeError, ValueError):
-            pass
-        out.append(kind)
-    return out
-
-
-def outside_evidence_form(payload: Any) -> dict[str, Any] | None:
-    """The bench's `file_outside_evidence` form on this step, or None.
-
-    Published on `submission.actions` since the server's f5e7085f2 (rule 232,
-    W26). A bench that does not publish it has no door for the work to come
-    back through, and the step takes the old road as it always did.
-    """
-    submission = (payload or {}).get("submission") if isinstance(payload, dict) else None
-    for action in (submission or {}).get("actions") or []:
-        if (isinstance(action, dict)
-                and action.get("action") == OUTSIDE_EVIDENCE_ACTION
-                and isinstance(action.get("schema"), dict)):
-            return action
-    return None
-
-
-def worker_status_form(payload: Any) -> dict[str, Any] | None:
-    """The bench's worker-status form on this step, or None. It rides
-    `submission.worker_status`, beside `actions` rather than in it."""
-    submission = (payload or {}).get("submission") if isinstance(payload, dict) else None
-    form = (submission or {}).get("worker_status")
-    if isinstance(form, dict) and isinstance(form.get("schema"), dict):
-        return form
-    return None
+        tools[_tool_name(action, tools)] = {"action": action, "schema": schema, "form": form}
+    status = submission.get("worker_status")
+    if isinstance(status, dict) and isinstance(status.get("schema"), dict):
+        tools[REPORT_PARKED] = {"action": REPORT_PARKED,
+                                "schema": parked_schema(status["schema"]), "form": status}
+    sent_out = payload.get("sent_out") if isinstance(payload.get("sent_out"), dict) else {}
+    for move in sent_out.get("moves") or []:
+        if not isinstance(move, dict) or not move.get("move") or not move.get("call"):
+            continue
+        name = _tool_name(f"sent_out_{move['move']}", tools)
+        form = {"action": name, "endpoint": move.get("call"), "template": move.get("body"),
+                "result": f"The send-out move `{move['move']}`, as the bench offers it."}
+        tools[name] = {"action": name, "schema": _OPEN_SCHEMA, "form": form,
+                       "body": move.get("body") if isinstance(move.get("body"), dict) else {}}
+    tools[NEED_TOOLS] = {"action": NEED_TOOLS, "schema": NEED_TOOLS_SCHEMA, "form": {}}
+    return tools
 
 
 def parked_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """The worker-status form, narrowed to the one report this move makes.
-
-    `running` is the runtime's own word and is reported by the watch loop, not
-    by the model; the only thing the model says here is that it has stopped,
-    and why. The reason rides the same call: the door ignores a field it does
-    not read, and the words also go on the thread where the person can see
-    them.
-    """
+    """The worker-status form, narrowed to the one report this move makes:
+    stopped, and why. `running` is the runtime's own word, never the model's."""
     properties = dict(schema.get("properties") or {})
     properties["state"] = {"const": "parked"}
     properties["reason"] = {"type": "string", "minLength": 1, "maxLength": 280}
@@ -281,288 +249,20 @@ def parked_schema(schema: dict[str, Any]) -> dict[str, Any]:
             "required": ["state", "round", "reason"]}
 
 
-def the_move(payload: dict[str, Any], obligation: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The one thing the agent produces on this step, and the calls that file it.
-
-    {"move": name, "calls": [...]} for a move the small ask shapes;
-    {"move": None, "road": "agentic", "why": ...} for one it cannot.
-    """
-    obligation = obligation or {}
-    step = payload.get("current_step") or {}
-    thread = payload.get("step_thread") or {}
-    step_id = str(step.get("id") or "")
-    if payload.get("owed_replies"):
-        return {"move": "answer_reply", "calls": ["propose_act", "dismiss_reply"]}
-    asked_step = str(obligation.get("step_id") or "")
-    if thread.get("unread_from_person"):
-        if asked_step and step_id and asked_step != step_id:
-            return {
-                "move": None,
-                "road": ROAD_AGENTIC,
-                "why": f"the person's words are on step {asked_step}, not on this payload",
-            }
-        return {"move": "answer_person", "calls": ["reply_step_message"]}
-    if thread.get("unanswered_elsewhere"):
-        return {
-            "move": None,
-            "road": ROAD_AGENTIC,
-            "why": "the person wrote on another step and its words are not on this payload",
-        }
-    acts = [act for act in payload.get("acts") or [] if isinstance(act, dict)]
-    if acts and _state(acts[-1]) in RETURNED_ACT_STATES:
-        return {"move": "refile_act", "calls": ["propose_act", "reply_step_message"]}
-    if any(_kind(act) == OUTSIDE_KIND and _state(act) == "approved" for act in acts):
-        # W29 (prod deal 4f061f54, 17 September). WHAT FORCED IT: the person
-        # tapped Allow, the bench said "Agent working ... file what you
-        # brought back" on every poll for seven minutes, and this branch sent
-        # the step to the old road, where the model filed nothing, posted
-        # nothing and never reported itself parked. The step was failed by
-        # hand. An approved outside act IS the agent's move, so it is asked
-        # as one: bring the work back, say you cannot and be parked in the
-        # same round, or ask for tools and take the old road deliberately.
-        if outside_evidence_form(payload) is not None:
-            return {
-                "move": "outside_work",
-                "calls": ["file_outside_evidence", "reply_step_message", "report_parked"],
-            }
-        return {
-            "move": None,
-            "road": ROAD_AGENTIC,
-            "why": "an approved outside act and no evidence form on this bench",
-        }
-    deliverable = step.get("deliverable")
-    if isinstance(deliverable, dict):
-        channel = str(deliverable.get("channel") or "").strip().lower()
-        if channel in BYTES_CHANNELS:
-            return {
-                "move": None,
-                "road": ROAD_AGENTIC,
-                "why": f"the step hands back a {channel} (rule 230), which takes the run folder",
-            }
-    if _unfiled_declared_kinds(payload):
-        return {"move": "file_act", "calls": ["propose_act", "reply_step_message"]}
-    return {
-        "move": "hand_back",
-        "calls": ["file_outcome", "reply_step_message", "wait_outside", "post_check_in"],
-    }
-
-
-# The tail's opening, and what each move is asked for. Short by design: the
-# rules of the game are the prefix's job, and the bench's own refusal comes
-# back verbatim when a call is refused.
-#
-# 0.62.0: every move that writes words from earlier material (an act, a
-# re-filed act, a reply outside, the hand-back) is told the same thing: what
-# the earlier steps handed back is in `earlier_steps`, whole and field by
-# field, and is already the agent's; a fact the block says was trimmed is
-# fetched with need_tools, never asked of the person.
-EARLIER_MATERIAL_INSTRUCTION = (
-    "Read `earlier_steps` first: what your earlier steps handed back, each "
-    "card field on its own line and whole, and what their acts did. A name, "
-    "an address, a time or a place in it is already yours: use it and never "
-    "ask the person for it. If the block opens with \"(earlier steps "
-    "trimmed\" and what you need was left out, answer need_tools to read it "
-    "whole rather than ask anyone."
-)
-STEP_DOOR = (
-    "THIS IS NOT A PLAN ROUND. The plan is signed and you are walking ONE step "
-    "of it. Below: the step, what changed since you last looked, and the one "
-    "move that is yours. Make exactly ONE call with the tools you are given "
-    "and nothing else. Never write 'click Approve to send' or 'from your mailbox' to the "
-    "person; never ask for a password, code, session or cookie; no bare URLs "
-    "in a pulse."
-)
-
-MOVE_INSTRUCTIONS: dict[str, str] = {
-    "answer_reply": (
-        "Someone outside answered your email and the bench says you owe them a "
-        "reply before anything else moves on this step (rule 220). Answer in "
-        "their thread with the propose_act tool for that reply -- the bench "
-        "fills to and subject from the thread. If it is not a question (spam, "
-        "a bounce, an out-of-office) use the dismiss_reply tool for that reply "
-        "and say why in one plain sentence. " + EARLIER_MATERIAL_INSTRUCTION
-    ),
-    "answer_person": (
-        "The person wrote on this step and nothing has gone back. Answer them, "
-        "plainly, and nothing else this round, with reply_step_message. This is "
-        "chat: it does not close the step and does not open an ask."
-    ),
-    "refile_act": (
-        "That act came back and is DEAD: never re-file the same words and "
-        "never wait on it. If the PERSON sent it back or said no, their "
-        "reason is in `note`. If it FAILED instead, nobody said no -- read "
-        "`error` (and `words` for what the act itself said) for why. File "
-        "ONE changed act that answers that reason with a propose_act tool. "
-        "If it is not something you can act on, say so on the thread with "
-        "reply_step_message instead. " + EARLIER_MATERIAL_INSTRUCTION
-    ),
-    "file_act": (
-        "Your signed plan declared an act on this step and it is not filed "
-        "yet; the bench refuses the outcome until it is (acts_not_filed). File "
-        "it with the propose_act tool for its kind; an email names its "
-        "recipient by `contact_ref` from the_person_said.people. The person "
-        "approves it word for word and Book of Houses sends it; you never send "
-        "it and never ask them to. If you do not know the recipient, ask the "
-        "person with reply_step_message. " + EARLIER_MATERIAL_INSTRUCTION
-    ),
-    "outside_work": (
-        "The person tapped Allow on an outside act: this piece of the work is "
-        "yours to go and do YOURSELF, off this site, in your own name (rule "
-        "232). Nothing on this step moves until you bring it back.\n"
-        "IF YOU HAVE DONE IT, file what you brought back with "
-        "file_outside_evidence: what you did in your own plain words, who you "
-        "dealt with, how it ended, and up to five links the person can open.\n"
-        "IF YOU HAVE A TOOL FOR IT and have not used it yet, answer "
-        "need_tools and say which service; you will be handed your tools and "
-        "asked again.\n"
-        "IF YOU CANNOT DO IT AT ALL -- no tool for that service, no browser, "
-        "no phone -- DO NOT SIT SILENT and do not wait for yourself. Answer "
-        "report_parked with the reason in one plain sentence: that stops the "
-        "clock out loud, posts your sentence on the step so the person reads "
-        "it, and hands them the decision. Silence on this step is the one "
-        "answer that is always wrong."
-    ),
-    "hand_back": (
-        "Hand this step back: write the thing the step promised, from what is "
-        "in front of you, and file it with file_outcome. Read `earlier_steps` "
-        "first: what your earlier steps handed back, each card field on its "
-        "own line and whole, and what their acts did -- a date, a place, a "
-        "link, a file -- is already yours. If "
-        "`deliverable.fields` is named, the document carries a `cards` block: "
-        "items are objects keyed by exactly those field names, at least "
-        "min_count of them, every value filled. `step.control.closes` says "
-        "what the person does with them, and `your_last_filing`, when there, "
-        "names the cards the door took off: replace them. If an act on this "
-        "step reads sent or executed, quote its receipt in the document and "
-        "send nothing yourself. If an act carries `read_results`, any list "
-        "you promised comes from those items, never from memory. If you "
-        "asked someone outside and nothing can move until "
-        "they answer, use wait_outside. If `step.repeats` reads cadence "
-        "rounds, this filing is ONE ROUND: hand in what this round holds "
-        "(`per_round` says how many pieces), and send `last_round: true` "
-        "only on the round that finishes the step -- `repeats.say` names "
-        "the round you are on. If a fact only the person can give is "
-        "in neither what they said nor earlier_steps, ask them for it with "
-        "reply_step_message rather than guess or give up. If this step cannot be done without a "
-        "live search, a browser, a file or a tool, or without an earlier step "
-        "the block says was trimmed, use need_tools and nothing else."
-    ),
-}
-
-# The two moves that weigh "do I have a tool for this": handing the step back
-# (or asking for tools), and an approved outside act (or parking it). The
-# agent's own means (agent.yaml `agent.own_means`, 0.58.0) ride these two,
-# under the move's own words, and no other.
-OWN_MEANS_MOVES = frozenset({"hand_back", "outside_work"})
-
-PULSE_DUE_INSTRUCTION = (
-    "A progress pulse is due (rule 100). If you are filing the outcome now, "
-    "the pulse rides with it. If you are not, post one honest pulse with "
-    "post_check_in -- never flat progress with no blocker on an ask the person "
-    "cannot see yet."
-)
-
-REFUSED_INSTRUCTION = (
-    "Your last answer was refused; the words are in `the_bench_refused`. "
-    "Fix exactly what it names and make the call once more."
-)
-
-# The bench's action name for each call this module makes.
-BENCH_ACTIONS: dict[str, str] = {
-    "propose_act": "propose_act",
-    "dismiss_reply": "dismiss_reply",
-    "reply_step_message": "post_step_message",
-    "post_check_in": "post_work_pulse",
-    "wait_outside": "wait_outside",
-    "file_outcome": "submit_step_outcome",
-    "file_outside_evidence": OUTSIDE_EVIDENCE_ACTION,
-}
-# The moves that may answer need_tools and take the old road on purpose
-# (0.62.0 added the three that write words out of earlier material: an act,
-# a re-filed act and a reply outside). WHAT FORCED IT: SF Founder House,
-# 2026-10-06, step 5. Its copy of the match card was cut, file_act and
-# refile_act offered no way to fetch the rest, so it asked the persons on the
-# thread; one refile_act answer was refused as malformed (market.log 14:00:01
-# PDT), which the walk worker read as a need_tools the move did not offer. A
-# move that writes from earlier material can always fetch it instead.
-NEED_TOOLS_MOVES = frozenset(
-    {"hand_back", "outside_work", "file_act", "refile_act", "answer_reply"}
-)
-NEED_TOOLS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"why": {"type": "string", "minLength": 1}},
-    "required": ["why"],
-}
-# Where `cli._permitted_step_state` lists the forms the agent's tool list
-# turned off: [{"action": bench action, "tools": [the tool names missing]}].
-FORMS_TURNED_OFF = "forms_turned_off"
-_REPLY_IN_ENDPOINT = re.compile(r"/replies/([^/]+)/dismiss$")
-
-
-# The moves whose first call IS the move: without it the other tools can only
-# talk about the work, never do it.
-_DOOR_OR_NOTHING = frozenset({"file_act", "refile_act", "answer_reply", "outside_work"})
-
-
-def missing_door(call: str, payload: dict[str, Any]) -> str:
-    """One plain line naming the form a move needed and why it is not here."""
-    action = BENCH_ACTIONS.get(call, call)
-    submission = payload.get("submission")
-    off = submission.get(FORMS_TURNED_OFF) if isinstance(submission, dict) else None
-    for row in off or []:
-        if isinstance(row, dict) and row.get("action") == action:
-            tools = ", ".join(str(tool) for tool in row.get("tools") or [])
-            return (f"{call} is not on this agent's tool list; add {tools} to "
-                    "runtime.tools in agent.yaml (the bench published the "
-                    f"{action} form)")
-    return f"the bench published no {action} form with a schema on this step"
-
-
-def step_tools(move: dict[str, Any], payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Tool name -> {call, schema, action}: one tool per form the bench
-    publishes for a call this move allows. Two forms for one call (two owed
-    replies, two declared acts) are two tools, `propose_act`, `propose_act_2`.
-    The schema is the bench's, whole."""
-    submission = payload.get("submission")
-    actions = submission.get("actions") if isinstance(submission, dict) else None
-    tools: dict[str, dict[str, Any]] = {}
-    for call in move.get("calls") or []:
-        forms = [
-            action for action in actions or []
-            if isinstance(action, dict)
-            and action.get("action") == BENCH_ACTIONS.get(call)
-            and isinstance(action.get("schema"), dict)
-        ]
-        for index, action in enumerate(forms, start=1):
-            name = call if index == 1 else f"{call}_{index}"
-            tools[name] = {"call": call, "schema": action["schema"], "action": action}
-    if "report_parked" in (move.get("calls") or []):
-        # The parked report is not on `actions`; it rides `submission.
-        # worker_status`, so it is picked up by name rather than by the loop.
-        form = worker_status_form(payload)
-        if form is not None:
-            tools["report_parked"] = {
-                "call": "report_parked",
-                "schema": parked_schema(form["schema"]),
-                "action": form,
-            }
-    if tools and move.get("move") in NEED_TOOLS_MOVES:
-        tools[NEED_TOOLS] = {"call": NEED_TOOLS, "schema": NEED_TOOLS_SCHEMA, "action": {}}
-    return tools
-
-
 def _definition(name: str, tool: dict[str, Any]) -> ToolDefinition:
-    action = tool["action"]
-    words = [str(action.get("result") or "")]
-    if action.get("template") is not None:
-        words.append("Template: " + json.dumps(action["template"], default=str))
-    if action.get("field_notes"):
-        words.append("Fields: " + json.dumps(action["field_notes"], default=str))
-    if tool["call"] == NEED_TOOLS:
-        words = ["This step needs a live search, a browser, a file or a tool, "
-                 "or the whole record of an earlier step that `earlier_steps` "
-                 "says was trimmed. Say which in `why`."]
-    return ToolDefinition(name, " ".join(word for word in words if word), tool["schema"])
+    if tool["action"] == NEED_TOOLS:
+        words = ("This step needs a live search, a browser, a file or a tool you "
+                 "were not given, or the bench's whole record of an earlier step. "
+                 "Say which in `why`; the step goes to the road that has them.")
+    elif tool["action"] == REPORT_PARKED:
+        words = ("Say out loud that you have stopped and why, in one plain sentence: "
+                 "it stops the clock and posts your sentence on the step for the person.")
+    elif tool["action"] == DELIVER_FILE_ACTION:
+        words = ("Hand the person a file you made: `path` under your own working "
+                 "directory, `title` the item's real name. " + _form_words(tool["form"]))
+    else:
+        words = _form_words(tool["form"])
+    return ToolDefinition(name, words, tool["schema"])
 
 
 def _schema_problem(arguments: Any, schema: dict[str, Any]) -> str | None:
@@ -580,524 +280,30 @@ def _schema_problem(arguments: Any, schema: dict[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# 3. THE TAIL -- only this step
+# 3. THE TAIL -- the bench's payload, whole, minus the forms
 # ---------------------------------------------------------------------------
-def what_changed(previous: Any, current: Any) -> list[str]:
-    """What is new on the step since the last dispatched look, in plain lines.
-
-    `previous` and `current` are the fingerprint bases the dispatch keeps
-    (`cli._deal_step_fingerprint`), parsed. No previous look: one line says so.
-    """
-    if not isinstance(current, dict):
-        return []
-    if not isinstance(previous, dict):
-        return ["first look at this step"]
-    lines: list[str] = []
-    old_ids = set(previous.get("message_ids") or [])
-    new_ids = [mid for mid in current.get("message_ids") or [] if mid not in old_ids]
-    if new_ids:
-        names = ", ".join(map(str, new_ids))
-        lines.append(f"{len(new_ids)} new message(s) from the person: {names}")
-    if (current.get("unread_from_person") or 0) != (previous.get("unread_from_person") or 0):
-        lines.append(f"unread_from_person is now {current.get('unread_from_person') or 0}")
-    old_acts = {
-        tuple(item[:2])
-        for item in previous.get("acts") or []
-        if isinstance(item, (list, tuple))
-    }
-    for item in current.get("acts") or []:
-        if isinstance(item, (list, tuple)) and tuple(item[:2]) not in old_acts:
-            act_id, state = (list(item) + [None, None])[:2]
-            lines.append(f"act {act_id} is now {state}")
-    old_owed = {
-        tuple(item[:1])
-        for item in previous.get("owed_replies") or []
-        if isinstance(item, (list, tuple))
-    }
-    for item in current.get("owed_replies") or []:
-        if isinstance(item, (list, tuple)) and tuple(item[:1]) not in old_owed:
-            lines.append(f"a reply is owed: {item[0]}")
-    old_dead = {
-        tuple(item[:1])
-        for item in previous.get("drafts_sent_back") or []
-        if isinstance(item, (list, tuple))
-    }
-    for item in current.get("drafts_sent_back") or []:
-        if isinstance(item, (list, tuple)) and tuple(item[:1]) not in old_dead:
-            lines.append(f"draft {item[0]} came back")
-    materials_now = current.get("released_materials_count") or 0
-    materials_then = previous.get("released_materials_count") or 0
-    if materials_now != materials_then:
-        lines.append(
-            f"released materials: {materials_now} (was {materials_then})"
-        )
-    if current.get("grants") != previous.get("grants"):
-        lines.append("the deal's grants changed")
-    return lines or ["nothing new from the person since the last look"]
+_FORM_KEYS = ("actions", "worker_status")
 
 
-def _clip(value: Any, limit: int) -> Any:
-    """`_fit` sheds a step's heavy keys; this clips the WORDS. A person can
-    paste a page into a message, and one page is more than a tail."""
-    if isinstance(value, str):
-        return value if len(value) <= limit else value[: limit - 1] + "\u2026"
-    if isinstance(value, dict):
-        return {key: _clip(item, limit) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_clip(item, limit) for item in value]
-    return value
-
-
-def _person_messages(thread: dict[str, Any]) -> list[Any]:
-    """Every message of the person's on the step, whole (0.60.0)."""
-    return [
-        item for item in thread.get("messages") or []
-        if isinstance(item, dict) and item.get("who") != "agent"
-    ]
-
-
-def _act_row(act: dict[str, Any]) -> dict[str, Any]:
-    # `note` is the person's own reason on sent_back/denied/retired. A FAILED
-    # act (no_evidence, recipient_bounced, ...) carries no `note` at all --
-    # the bench's agent_view_for_step puts that reason in `error` (and, off
-    # the email kind, the act's own detail lines in `words`; a family act's
-    # `progress` says how far it got). Dropping those three here left the
-    # reason nowhere the model could read: agent Kai reported "the failure
-    # reason is missing" three times on a failed act and was parked, when the
-    # reason was sitting in `error` on the very payload this row is built
-    # from (2026-09-25).
-    row = {
-        key: act.get(key)
-        for key in ("act_id", "kind", "state", "note", "error", "words", "progress", "next",
-                    "failure", "lines")
-        if act.get(key) is not None
-    }
-    for key in ("to", "subject", "with", "summary", "receipt", "sent_at", "executed_at"):
-        if act.get(key) is not None:
-            row[key] = _fit(act.get(key), 200)
-    row = _clip(row, 400)
-    # 0.60.0: the act is machinery and stays clipped, but `note` is the
-    # PERSON's own reason for sending it back or saying no: it rides whole.
-    if act.get("note") is not None:
-        row["note"] = act.get("note")
-    # 0.65.1 (contract 4.1.44): `read_results` is a read run's own data on
-    # this act -- one entry per run, `{run, tool, ran, count, items, facts,
-    # trimmed}` (a calendar read's `items` are events: start, end, all_day,
-    # title, status, busy, id). The bench already trims it to 50 items /
-    # 8,000 characters before it ever reaches here, so it rides WHOLE, never
-    # re-clipped at 400 like the rest of this row -- a second clip would cut
-    # a calendar read down to a couple of events and the agent would invent
-    # the rest of the list it promised. Dropping it from the key allowlist
-    # above is exactly how the failed-act `error` field went missing for Kai
-    # (0.56.3): a key the bench adds and this row drops does not exist. Kept
-    # present (as `[]`) whenever the bench sent the key at all, including
-    # empty, so "no reads ran" and "an older bench that never sends this" are
-    # tellable apart; absent only on a bench that never sent it.
-    if act.get("read_results") is not None:
-        row["read_results"] = act.get("read_results")
-    return row
-
-
-def _material_row(item: Any) -> Any:
-    if not isinstance(item, dict):
-        return item
-    return {
-        key: item.get(key)
-        for key in ("file_id", "id", "filename", "name", "title", "kind", "size_bytes")
-        if item.get(key) is not None
-    }
-
-
-# ---------------------------------------------------------------------------
-# 3a. WHAT THE EARLIER STEPS SETTLED (0.58.3; whole, field by field, 0.62.0)
-# ---------------------------------------------------------------------------
-# WHAT FORCED IT: 2026-10-05, 20:16-20:28 local, lab agent Bree, deal 30bd9ebf
-# step 4 ("make a print-ready PDF flyer"). Three runs failed with "the
-# confirmed dinner date, start time ... are missing" while the bench's
-# `earlier_steps` (contract 4.1.14) carried step 3's calendar act: "Potluck
-# dinner, Sat Oct 17, 6:00 PM to 9:00 PM", with its event id. The provider's
-# whitelist dropped the field, so it never reached the model. It now rides
-# every current_step read, rendered here: one block per earlier step, its
-# hand-back and a line per file and per act it ran.
-#
-# 0.62.0, WHAT FORCED IT: 2026-10-06, lab agent SF Founder House, deal
-# fa84c12c and its twin, step 5 ("Email your match an introduction with the
-# lobby meeting time"). Step 4's approved match card was 982 characters and
-# its `meet` field sat near the end. The bench kept the first 592 (honest:
-# `trimmed` said so and named history_url); this renderer then folded the
-# card onto one line and clipped it at 300, and the file_act move offered no
-# need_tools. So the brain never saw the lobby time, asked the persons for it
-# on the thread (five messages across the two deals) and filed both emails
-# without it. Now:
-#   * the provider fills a hand-back the bench trimmed from the whole receipt
-#     (steps[].outcome on history_url), read once per receipt;
-#   * a hand-back renders line by line under its step, each card field on its
-#     own line, never folded and never clipped;
-#   * over the cap the OLDEST steps go first, whole; a step still too big on
-#     its own has its free text shortened, never a field; the block then opens
-#     with one line naming what was left out and how to read it all whole.
-EARLIER_STEPS_KEY = "earlier_steps"
-# About 1,500 tokens: the realistic six-step deal (four earlier steps, two
-# cards) renders at about 2,000 characters, so a long deal fits whole too.
-EARLIER_STEPS_CHAR_CAP = 6_000
-# The trim line opens with this, so a rendered block is read back the same.
-EARLIER_STEPS_TRIMMED = "(earlier steps trimmed"
-EARLIER_STEPS_WHOLE_HOW = (
-    "Nothing is lost: answer need_tools, and on that road read "
-    "toll_bench.current_step with whole true for every earlier step whole."
-)
-# A hand-back's own lines sit under their step at this indent; files and acts
-# sit at two spaces. Both mark a line as belonging to the step above it.
-HAND_BACK_INDENT = "    "
-_EARLIER_TITLE_CHARS = 80
-_EARLIER_SUMMARY_CHARS = 200
-_EARLIER_ACT_CHARS = 300
-_EARLIER_FIELD_CHARS = 80
-# What a line of free text keeps when its step has to be shortened to fit.
-_FREE_TEXT_SUMMARY_CHARS = 160
-# The bench flattens a card to `field: value` lines (har_document): a short
-# name, a colon, a space and the value. A line that reads that way is a field
-# and is never cut; anything else on a hand-back is free text.
-_CARD_FIELD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _'/&.-]{0,39}: \S")
-_STEP_HEAD = re.compile(r"^Step (\S+) \(")
-
-
-def _one_line(value: Any, limit: int) -> str:
-    """The words on one line, newlines folded, clipped with an ellipsis."""
-    text = " ".join(str(value or "").split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
-
-
-def _when(act: dict[str, Any]) -> str:
-    starts, ends = act.get("starts_at"), act.get("ends_at")
-    if not starts and not ends:
-        return ""
-    span = f"{starts or '?'}..{ends}" if ends else str(starts)
-    zone = act.get("time_zone")
-    return f"{span} {zone}" if zone else span
-
-
-def _earlier_act_line(act: dict[str, Any]) -> str:
-    """'  did: <kind> to <to> "<subject>" <when | ids> : <words>'."""
-    parts = [str(act.get("kind") or "act")]
-    if act.get("state") and str(act.get("state")) != "executed":
-        parts.append(f"[{act.get('state')}]")
-    if act.get("to"):
-        parts.append("to " + _one_line(act.get("to"), _EARLIER_FIELD_CHARS))
-    if act.get("subject"):
-        parts.append('"' + _one_line(act.get("subject"), _EARLIER_FIELD_CHARS) + '"')
-    when = _when(act)
-    if when:
-        parts.append(when)
-    elif act.get("scheduled_for"):
-        parts.append(f"scheduled for {act.get('scheduled_for')}")
-    for key, label in (("event_id", "event"), ("message_id", "message"),
-                       ("meet_link", "meet")):
-        if act.get(key):
-            parts.append(f"{label} {act.get(key)}")
-    line = "did: " + " ".join(parts)
-    if act.get("words"):
-        line += " : " + _one_line(act.get("words"), _EARLIER_ACT_CHARS)
-    # Indented under its step; the indent is also how a rendered act line is
-    # told from a step line when the block is rendered again.
-    return "  " + _one_line(line, _EARLIER_ACT_CHARS + 2 * _EARLIER_FIELD_CHARS + 60)
-
-
-def bench_trimmed(back: Any) -> bool:
-    """True when the bench says it cut this hand-back's words: `trimmed` is
-    the sentence naming how much it kept, null when the words are whole (the
-    whole receipt is steps[].outcome on history_url)."""
-    return isinstance(back, dict) and bool(back.get("trimmed"))
-
-
-def _hand_back_lines(back: dict[str, Any]) -> list[str]:
-    """A hand-back's words one line per line they were written in: the bench
-    writes a card as one `field: value` line per field, and each stays its own
-    line, whole. Spaces inside a line are folded; nothing is clipped."""
-    lines = [" ".join(part.split()) for part in str(back.get("text") or "").splitlines()]
-    lines = [line for line in lines if line]
-    if back.get("link"):
-        lines.append(f"link {back.get('link')}")
-    if lines and bench_trimmed(back):
-        # The provider fills a trimmed hand-back from the whole receipt; this
-        # is what is left when it could not, said where the cut is.
-        cut = _one_line(back.get("trimmed") or "the bench cut these words", 200)
-        lines.append(f"(cut here: {cut}. {EARLIER_STEPS_WHOLE_HOW})")
-    return lines
-
-
-def _earlier_step_lines(row: dict[str, Any]) -> list[str]:
-    """One earlier step: its head line, its hand-back's own lines under it,
-    then a line per file and per act."""
-    title = _one_line(row.get("title"), _EARLIER_TITLE_CHARS) or "untitled"
-    head = f"Step {row.get('number', '?')} ({title})"
-    if str(row.get("state") or "") == "ended":
-        head += " [ended]"
-    back = row.get("hand_back") if isinstance(row.get("hand_back"), dict) else None
-    lines: list[str] = []
-    if back:
-        below = _hand_back_lines(back)
-        if below:
-            head += ", handed back:"
-            lines = [HAND_BACK_INDENT + line for line in below]
-        else:
-            said = back.get("summary") or back.get("filename") or ""
-            head += ": " + (
-                _one_line(said, _EARLIER_SUMMARY_CHARS)
-                or f"handed back a {back.get('kind') or 'receipt'}"
-            )
-    else:
-        head += ": nothing handed back"
-    lines.insert(0, head)
-    for item in row.get("files") or []:
-        if isinstance(item, dict) and (item.get("filename") or item.get("file_receipt_id")):
-            kind = f" {item.get('sniffed_type')}" if item.get("sniffed_type") else ""
-            lines.append(
-                f"  file: {item.get('filename') or 'unnamed'}{kind} "
-                f"receipt {item.get('file_receipt_id')}"
-            )
-    for act in row.get("act_results") or []:
-        if isinstance(act, dict):
-            lines.append(_earlier_act_line(act))
-    return lines
-
-
-def _step_number(group: list[str]) -> str:
-    found = _STEP_HEAD.match(group[0]) if group else None
-    return found.group(1) if found else "?"
-
-
-def _marker_steps(marker: str, label: str) -> list[str]:
-    """The step numbers a trim line names after `label`."""
-    found = re.search(re.escape(label) + r" ((?:step [^,;.\s]+(?:, )?)+)", marker)
-    return re.findall(r"step ([^,;.\s]+)", found.group(1)) if found else []
-
-
-def _trim_line(dropped: list[str], shortened: list[str]) -> str:
-    parts = []
-    if dropped:
-        parts.append("left out " + ", ".join(f"step {n}" for n in dropped))
-    if shortened:
-        parts.append("free text shortened on " + ", ".join(f"step {n}" for n in shortened))
-    return (f"{EARLIER_STEPS_TRIMMED} to fit: {'; '.join(parts)}. Every card "
-            f"field shown is whole. {EARLIER_STEPS_WHOLE_HOW})")
-
-
-def _free_text_shortened(group: list[str]) -> list[str]:
-    """The step with each line of its hand-back's free text cut to a short
-    head. A card field is never touched, nor the head, a file or an act."""
-    out = group[:1]
-    for line in group[1:]:
-        words = line[len(HAND_BACK_INDENT):] if line.startswith(HAND_BACK_INDENT) else None
-        if (words is None or _CARD_FIELD.match(words) or words.startswith("(cut here:")
-                or len(words) <= _FREE_TEXT_SUMMARY_CHARS):
-            out.append(line)
-        else:
-            out.append(HAND_BACK_INDENT + _one_line(words, _FREE_TEXT_SUMMARY_CHARS))
-    return out
-
-
-def _unique(items: list[str]) -> list[str]:
-    return list(dict.fromkeys(items))
-
-
-def render_earlier_steps(
-    rows: Any, cap: int | None = EARLIER_STEPS_CHAR_CAP
-) -> list[str] | None:
-    """The bench's `earlier_steps` as lines the model reads, or None.
-
-    None when the bench sent no list (an older bench): nothing is rendered.
-    [] when it sent an empty one: nothing before this step is approved yet,
-    which is not the same as not knowing. Lines already rendered (a string
-    per line) pass through, so rendering twice changes nothing.
-
-    Every earlier step's hand-back renders WHOLE, field by field (0.62.0).
-    Over `cap` characters the OLDEST steps go first, whole steps only; a step
-    still bigger than the cap on its own has its free text shortened, never a
-    card field, and may stay over the cap rather than lose one. Either way the
-    block opens with a line starting EARLIER_STEPS_TRIMMED that names the
-    steps left out and shortened and how to read them whole. `cap=None` is
-    everything, whole: what toll_bench.current_step answers with whole true.
-    """
-    if not isinstance(rows, list):
-        return None
-    groups: list[list[str]] = []
-    dropped: list[str] = []
-    shortened: list[str] = []
-    for row in rows:
-        if isinstance(row, dict):
-            groups.append(_earlier_step_lines(row))
-        elif isinstance(row, str) and row:
-            if row.startswith(EARLIER_STEPS_TRIMMED):
-                dropped += _marker_steps(row, "left out")
-                shortened += _marker_steps(row, "free text shortened on")
-            elif row.startswith("  ") and groups:
-                groups[-1].append(row)
-            else:
-                groups.append([row])
-
-    def size() -> int:
-        body = sum(len(line) + 1 for group in groups for line in group)
-        if dropped or shortened:
-            body += len(_trim_line(_unique(dropped), _unique(shortened))) + 1
-        return body
-
-    if cap is not None:
-        while len(groups) > 1 and size() > cap:
-            dropped.append(_step_number(groups.pop(0)))
-        if groups and size() > cap:
-            shorter = _free_text_shortened(groups[-1])
-            if shorter != groups[-1]:
-                groups[-1] = shorter
-                shortened.append(_step_number(shorter))
-    lines = [line for group in groups for line in group]
-    if dropped or shortened:
-        return [_trim_line(_unique(dropped), _unique(shortened)), *lines]
-    return lines
-
-
-def step_tail(
-    payload: dict[str, Any],
-    obligation: dict[str, Any],
-    move: dict[str, Any],
-    changed: list[str],
-    *,
-    pulse_due: bool = False,
-    refused: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Everything the model needs for THIS move on THIS step, and nothing else."""
-    step = payload.get("current_step") or {}
-    deal = payload.get("deal") or {}
-    thread = payload.get("step_thread") or {}
-    acts = [act for act in payload.get("acts") or [] if isinstance(act, dict)]
-    tail: dict[str, Any] = {
-        "ids": {
-            "deal_id": deal.get("id") or obligation.get("deal_id"),
-            "step_id": step.get("id") or obligation.get("step_id"),
-            "target_id": deal.get("target_goal_id") or obligation.get("target_id"),
-        },
-        "step": {
-            "number": step.get("number"),
-            "title": step.get("title"),
-            "ask": step.get("ask"),
-            "outcome_promise": step.get("outcome_promise"),
-            "state": step.get("state"),
-            "deliverable": step.get("deliverable"),
-            # 0.64.0: what the person does with the hand-back (contract
-            # 4.1.1), in the bench's own words on `closes`.
-            "control": step.get("control"),
-        },
-        "person_sees_control": payload.get("person_sees_control"),
-        "open_ask_move": _fit(payload.get("open_ask_move"), 300),
-        "pulse": _fit(payload.get("latest_work_pulse"), 400),
-        "changed_since_last_look": list(changed or []),
-        "from_the_person": _person_messages(thread),
-        "owed_replies": [
-            _clip(_fit(item, 1200), 1200) for item in (payload.get("owed_replies") or [])[:3]
-        ],
-        "acts": [_act_row(act) for act in acts[-ACT_LIMIT:]],
-        "declared_acts": [
-            _fit(item, 800) for item in (payload.get("declared_acts") or [])[:ACT_LIMIT]
-        ],
-        "drafts_sent_back": [
-            {
-                "approval_id": item.get("approval_id") or item.get("id"),
-                "sent_back_reason": item.get("sent_back_reason"),
-            }
-            for item in (payload.get("drafts_sent_back") or [])
-            if isinstance(item, dict)
-        ],
-        "released_materials": [
-            _material_row(item)
-            for item in (payload.get("released_materials") or [])[:MATERIAL_LIMIT]
-        ],
-        "released_materials_count": payload.get("released_materials_count", 0),
-        "waiting_outside": _fit(payload.get("waiting_outside"), 300),
-        "inbound_replies": [
-            _clip(_fit(item, 800), 800) for item in (payload.get("inbound_replies") or [])[:2]
-        ],
-        "your_move": move.get("move"),
-        "calls_you_may_make": list(move.get("calls") or []),
-    }
-    # 0.66.0 (bench contract 4.1.42): a step done in rounds, or a loop, in the
-    # bench's own count -- `say` names the round and says when to send
-    # last_round. Rides only when the bench sent one; a plain step has none.
-    if isinstance(step.get("repeats"), dict) and step.get("repeats"):
-        tail["step"]["repeats"] = step["repeats"]
-    # 0.64.0: who reads this step's list (a later who step whose `from_step`
-    # is this step, contract 4.1.9), what the person sent back here and why
-    # (the note behind "None of these fit"), and the cards the door took off
-    # the last filing on this step. Each rides only when it says something.
-    read_by = payload.get("read_by")
-    if isinstance(read_by, list) and read_by:
-        tail["read_by"] = [_fit(row, 600) for row in read_by[:3]]
-    sent_back = payload.get("work_sent_back")
-    if isinstance(sent_back, list) and sent_back:
-        tail["work_sent_back"] = [
-            {key: item.get(key) for key in WORK_SENT_BACK_KEYS if key in item}
-            for item in sent_back[-ACT_LIMIT:]
-            if isinstance(item, dict)
+def step_tail(payload: dict[str, Any], *, pulse_due: bool = False,
+              refused: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The current-step answer as the bench sent it, minus the forms (they are
+    the tools; their names stay as `forms_as_tools`), plus the bench's own
+    refusal of the last try when there was one."""
+    tail = {key: value for key, value in payload.items() if key != "submission"}
+    submission = payload.get("submission")
+    if isinstance(submission, dict):
+        kept = {key: value for key, value in submission.items() if key not in _FORM_KEYS}
+        kept["forms_as_tools"] = [
+            str(form.get("action")) for form in submission.get("actions") or []
+            if isinstance(form, dict) and form.get("action")
         ]
-    if isinstance(payload.get(LAST_FILING_KEY), dict) and payload[LAST_FILING_KEY]:
-        tail[LAST_FILING_KEY] = payload[LAST_FILING_KEY]
-    if isinstance(payload.get("submission"), dict):
-        tail["submission"] = submission_for_tail(payload["submission"])
-    if obligation.get("kind") == "draft_sent_back" and obligation.get("sent_back_reason"):
-        tail["sent_back_reason"] = obligation.get("sent_back_reason")
-    # LAW A (Steven, 2026-09-09): what the person said and picked rides the
-    # tail of the step ask, verbatim, when the bench sent it. It is the one
-    # thing a shed never drops: without it a stateless agent on step 3 of
-    # "connect two people by email" wrote john.doe@example.com.
-    said = payload.get(PERSON_SAID_KEY)
-    if isinstance(said, list):
-        tail[PERSON_SAID_KEY] = list(said)
-    # 0.58.3: what this deal's earlier steps handed back and what their acts
-    # did (contract 4.1.14), beside what the person said. Absent on an older
-    # bench, and then absent here too. Capped where it is rendered, never shed.
-    earlier = render_earlier_steps(payload.get(EARLIER_STEPS_KEY))
-    if earlier is not None:
-        tail[EARLIER_STEPS_KEY] = earlier
+        tail["submission"] = kept
     if pulse_due:
         tail["pulse_due"] = True
     if refused:
-        tail["the_bench_refused"] = _fit(refused, 1500)
+        tail["the_bench_refused"] = refused
     return tail
-
-
-# What a form carries that is the harness's business, never the model's: where
-# it goes and how. A tail never carries these (0.63.1).
-_FORM_KEYS = ("actions", "worker_status")
-_HARNESS_KEYS = ("refresh",)
-
-
-def submission_for_tail(submission: dict[str, Any]) -> dict[str, Any]:
-    """The bench's `submission` block as the tail carries it (0.63.1): every
-    key but the forms (`actions`, `worker_status`) and the refresh address;
-    the forms' names stay, as `actions_as_tools`.
-
-    WHAT FORCED IT: lab agent DJ 4-Fun, 2026-10-12. Its lyrics step ask ran
-    to 13,303 characters against the 8,000 budget, and about 6,800 of them
-    were those forms: the very ones `step_tools` hands the model as its tools,
-    each whole (schema, result, template, field notes). The tail sent every
-    form a second time. Nothing the model reads is lost: a form this move may
-    use is a tool (`report_parked` is the worker-status form), a form it may
-    not use is no call it can make, and endpoints, methods and headers are the
-    harness's business. `step_tools` still reads the payload's own block,
-    untouched.
-    """
-    out = {key: value for key, value in submission.items()
-           if key not in _FORM_KEYS and key not in _HARNESS_KEYS}
-    names: list[str] = []
-    actions = submission.get("actions")
-    for action in actions if isinstance(actions, list) else []:
-        if isinstance(action, dict) and action.get("action"):
-            names.append(str(action["action"]))
-    status = submission.get("worker_status")
-    if isinstance(status, dict) and status.get("action"):
-        names.append(str(status["action"]))
-    if isinstance(actions, list) or names:
-        out["actions_as_tools"] = names
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +417,7 @@ def note_unpaid_reply(
 # 4. THE ASK
 # ---------------------------------------------------------------------------
 class StepAsk:
-    """One deal step: whose move, one small question, one call to the bench."""
+    """One deal step: whose turn, one small question, one call to the bench."""
 
     def __init__(self, model: Any, provider: Any, *, logger: logging.Logger | None = None):
         self.model = model
@@ -1231,16 +437,14 @@ class StepAsk:
         # What the agent does by its own means (0.58.0); empty changes nothing.
         self.own_means: tuple[OwnMeans, ...] = ()
         # The operator's standing instructions (0.59.0): one labeled block,
-        # the whole text, beside the system text of every move's ask. Empty
-        # changes nothing.
+        # the whole text, beside the system text of every ask. Empty changes
+        # nothing.
         self.operator_instructions: str = ""
 
     # -- the model ---------------------------------------------------------
     def _ask(
         self, instruction: str, tail: dict[str, Any], what: str, tools: list[ToolDefinition]
     ) -> Any:
-        # 0.74.0: the tail goes whole. Nothing is shed to fit a per-ask
-        # budget; the run-level budget (core/budget.py) guards a raw adapter.
         body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
         text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
         self.calls += 1
@@ -1271,8 +475,6 @@ class StepAsk:
         cached = cached_input_tokens(usage)
         if cached:
             self.cached_tokens += cached
-        # ONE LINE PER MODEL CALL (0.68.0): the deal and step, the prompt's
-        # size, the answer's size and what stopped it.
         self.log.info(
             "step ask %s deal=%s step=%s: %s; prompt %d chars (prefix %d "
             "cacheable, tail %d, ~%d tokens; cached %s); %s",
@@ -1326,43 +528,55 @@ class StepAsk:
         answer: dict[str, Any],
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        call = tool["call"]
+        """Post the one call. The forms that carry harness plumbing (a reply
+        that names what it answers, the outcome's pulse and cost slot, the
+        parked report, a file's bytes, the provider's own doors) go through
+        their own methods; every other form posts to its own endpoint."""
+        action = tool["action"]
+        form = tool.get("form") or {}
         deal_id = str(ids.get("deal_id") or "")
         step_id = str(ids.get("step_id") or "")
-        key = self._key(step_id, call, answer)
+        key = self._key(step_id, action, answer)
+        provider = self.provider
         try:
-            if call == "propose_act":
-                result = self.provider.propose_act(deal_id, step_id, answer, key)
-            elif call == "dismiss_reply":
-                found = _REPLY_IN_ENDPOINT.search(str(tool["action"].get("endpoint") or ""))
-                result = self.provider.dismiss_reply(
-                    deal_id, step_id, found.group(1) if found else "",
-                    {"reason": str(answer.get("reason") or "")}, key,
-                )
-            elif call == "reply_step_message":
+            if action == STEP_MESSAGE_ACTION:
                 result = self._reply(
-                    deal_id, step_id, str(answer.get("reply") or "")[:4000], key,
+                    deal_id, step_id, str(answer.get("reply") or ""), key,
                     answering_for(unanswered_on_step(payload), answer.get("answering")),
                 )
-            elif call == "post_check_in":
-                result = self.provider.post_check_in(deal_id, answer, key)
-            elif call == "wait_outside":
-                result = self.provider.wait_outside(deal_id, step_id, answer, key)
-            elif call == "file_outside_evidence":
-                result = self.provider.file_evidence(
-                    deal_id, step_id,
-                    summary=str(answer.get("summary") or ""),
-                    links=list(answer.get("links") or []),
-                    receipt_ids=list(answer.get("receipt_ids") or []),
-                )
-            elif call == "report_parked":
+            elif action == OUTCOME_ACTION:
+                result = self._file_the_outcome(ids, answer, payload, key)
+            elif action == REPORT_PARKED:
                 result = self._park_the_step(
                     deal_id, step_id, answer.get("round"),
                     str(answer.get("reason") or ""), key,
                     answering=answering_for(unanswered_on_step(payload)),
                 )
+            elif action == DELIVER_FILE_ACTION:
+                result = self._deliver_file(deal_id, step_id, answer)
+            elif action == "propose_act":
+                result = provider.propose_act(deal_id, step_id, answer, key)
+            elif action == "dismiss_reply":
+                found = _REPLY_IN_ENDPOINT.search(str(form.get("endpoint") or ""))
+                result = provider.dismiss_reply(
+                    deal_id, step_id, found.group(1) if found else "",
+                    {"reason": str(answer.get("reason") or "")}, key,
+                )
+            elif action == "post_work_pulse":
+                result = provider.post_check_in(deal_id, answer, key)
+            elif action == "wait_outside":
+                result = provider.wait_outside(deal_id, step_id, answer, key)
+            elif action == OUTSIDE_EVIDENCE_ACTION:
+                result = provider.file_evidence(
+                    deal_id, step_id,
+                    summary=str(answer.get("summary") or ""),
+                    links=list(answer.get("links") or []),
+                    receipt_ids=list(answer.get("receipt_ids") or []),
+                )
             else:
-                result = self._file_the_outcome(ids, answer, payload, key)
+                body = {**(tool.get("body") or {}), **answer}
+                result = provider.submit_step_form(
+                    form, body, key, deal_id=deal_id, step_id=step_id)
         except Exception as error:  # noqa: BLE001 - a refusal is an answer, not a crash
             result = {
                 "ok": False,
@@ -1372,7 +586,7 @@ class StepAsk:
             }
         if isinstance(result, dict) and not result.get("ok", True):
             result = dict(result, failure="server_rejected")
-        return result
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
 
     def _reply(
         self, deal_id: str, step_id: str, words: str, key: str,
@@ -1388,8 +602,7 @@ class StepAsk:
             except TypeError as error:
                 if "answering" not in str(error):
                     raise
-                # A provider written before 0.56.1 takes no `answering`. The
-                # reply still goes; the log says the debt was not named.
+                # A provider written before 0.56.1 takes no `answering`.
                 self.log.warning(
                     "step %s: this provider's reply_step_message takes no "
                     "`answering`; message %s was not named", step_id, answering,
@@ -1405,14 +618,9 @@ class StepAsk:
         answering: str | list[str] | None = None,
     ) -> dict[str, Any]:
         """SAY IT TWICE, IN ONE ROUND (W29): stopped, and why, where the
-        person can read it.
-
-        The worker-status door is machine-facing -- it moves nothing, owns no
-        review round and the person never sees it -- so a parked report alone
-        is still silence as far as the person is concerned. The same sentence
-        goes on the step thread. The thread is what makes this honest, so a
-        refused status report does not stop it and does not fail the move.
-        """
+        person can read it. The worker-status door is machine-facing, so the
+        same sentence goes on the step thread; a refused status report does not
+        stop that and does not fail the move."""
         words = (reason or "").strip() or OUTSIDE_PARKED_SENTENCE
         try:
             number = int(round_number)
@@ -1423,25 +631,25 @@ class StepAsk:
                 deal_id, step_id, "parked", number, reason=words)
         except Exception:  # noqa: BLE001 - visibility must never fail the move
             self.log.warning("could not report parked on step %s", step_id)
-        # A parked explanation IS an answer when the person is owed one; with
-        # nothing owed it claims nothing.
-        return self._reply(deal_id, step_id, words[:4000], key, answering)
+        return self._reply(deal_id, step_id, words, key, answering)
 
     def _file_the_outcome(
         self, ids: dict[str, Any], answer: dict[str, Any], payload: dict[str, Any], key: str
     ) -> dict[str, Any]:
-        """The 100% pulse, then the outcome. A first pulse of 100 is legal on
-        the bench (Steven, 2026-08-25); a pulse already at 100 is not repeated."""
+        """The 100% pulse, then the outcome -- unless the bench records the
+        completion on the outcome itself (`completion_recorded_on_outcome`)."""
         outcome = dict(answer)
         outcome.setdefault("step_ref", str(ids.get("step_id") or ""))
         latest = payload.get("latest_work_pulse") or {}
         try:
             at_full = int(latest.get("progress_percent") or 0) >= 100
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             at_full = False
-        automatic = (payload.get("submission") or {}).get("completion_recorded_on_outcome") is True
+        submission = payload.get("submission")
+        submission = submission if isinstance(submission, dict) else {}
+        automatic = submission.get("completion_recorded_on_outcome") is True
         if not at_full and not automatic:
-            note = str(outcome.get("note") or "")[:280]
+            note = str(outcome.get("note") or "")
             pulse = {
                 "changed": note or "Finished the step's work",
                 "now": "Filing the handover",
@@ -1465,6 +673,35 @@ class StepAsk:
                     )
         return result
 
+    def _deliver_file(self, deal_id: str, step_id: str, answer: dict[str, Any]) -> dict[str, Any]:
+        """A file the model made, read out of its own working directory and
+        handed to the bench's file door. Nothing outside that directory is
+        read, and nothing over the platform's own per-file cap is sent."""
+        root = getattr(self.model, "workdir", None)
+        if not root:
+            return {"ok": False, "error": "no_workdir",
+                    "message": "This model has no working directory to read a file from; "
+                               "use need_tools and deliver it on the old road."}
+        base = Path(root).resolve()
+        wanted = Path(str(answer.get("path") or ""))
+        path = (wanted if wanted.is_absolute() else base / wanted).resolve()
+        if base not in path.parents and path != base:
+            return {"ok": False, "error": "path_outside_workdir",
+                    "message": f"{answer.get('path')} is not under {base}."}
+        if not path.is_file():
+            return {"ok": False, "error": "file_not_found",
+                    "message": f"There is no file at {answer.get('path')}."}
+        if path.stat().st_size > DELIVER_FILE_MAX_BYTES:
+            return {"ok": False, "error": "file_too_large",
+                    "message": "The platform takes 50 MB per file."}
+        return self.provider.deliver_file(
+            deal_id,
+            filename=str(answer.get("filename") or path.name),
+            content=path.read_bytes(),
+            title=str(answer.get("title") or ""),
+            step_ref=step_id or None,
+        )
+
     def _note(self, call: Any, result: dict[str, Any]) -> None:
         self.trail.append({
             "call": call,
@@ -1485,122 +722,108 @@ class StepAsk:
         pulse_due: bool = False,
         refused: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """One step, one move, one call (asked twice at most: once, and once
-        more with the bench's refusal). Says which road when it is not this one.
+        """One step, one call (asked twice at most: once, and once more with
+        the bench's refusal). Says which road when it is not this one.
 
         `refused` is the bench's refusal from a PREVIOUS cycle on this same
-        state: it rides the first ask, so the second try in the harness's three
-        starts from what the bench said rather than from a blank slate.
-        """
-        move = the_move(payload, obligation)
+        state: it rides the first ask. `changed` is accepted for older callers;
+        the bench's own `what_changed` rides the payload."""
         step = payload.get("current_step") or {}
+        deal = payload.get("deal") or {}
         number = step.get("number")
-        if not move.get("move"):
-            return {"ok": False, "road": ROAD_AGENTIC, "why": move.get("why"), "model_calls": 0}
-        if move["move"] == "answer_person":
-            latest = answering_for(unanswered_on_step(payload))
-            if isinstance(latest, str) and reply_is_held(latest):
-                # 0.56.1: the last reply that named this message came back
-                # unpaid. Answering it again is how Rick sent six; hold, say
-                # so, and let a new message (or the hold running out) move it.
-                self.log.warning(
-                    "step %s: message %s was answered and the bench did not "
-                    "mark it paid; not answering it again this cycle",
-                    number, latest,
-                )
-                return {
-                    "ok": True,
-                    "road": ROAD_STEP_ASK,
-                    "move": move["move"],
-                    "call": None,
-                    "held": latest,
-                    "why": f"a reply naming {latest} already landed unpaid",
-                    "tool_count": 0,
-                    "result": {"ok": True, "held": latest},
-                    "model_calls": 0,
-                    "prompt_chars": 0,
-                    "prefix_chars": 0,
-                    "input_tokens": 0,
-                    "cached_tokens": 0,
-                    "trail": [],
-                }
+        ids = {
+            "deal_id": deal.get("id") or obligation.get("deal_id"),
+            "step_id": step.get("id") or obligation.get("step_id"),
+            "target_id": deal.get("target_goal_id") or obligation.get("target_id"),
+        }
+        self.ids = ids
+        thread = payload.get("step_thread") if isinstance(payload.get("step_thread"), dict) else {}
+        if thread.get("unanswered_elsewhere") and not unanswered_on_step(payload):
+            return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,
+                    "why": "the person wrote on another step and its words are not on "
+                           "this payload"}
+        why = not_the_agents_move(payload)
+        if why:
+            return {"ok": True, "road": ROAD_STEP_ASK, "move": None, "call": None,
+                    "why": why, "result": {"ok": True, "not_yours": why},
+                    "tool_count": 0, "model_calls": 0, "prompt_chars": 0,
+                    "prefix_chars": 0, "input_tokens": 0, "cached_tokens": 0,
+                    "trail": []}
+        owed = unanswered_on_step(payload)
+        latest = owed[-1] if owed else None
+        if latest and reply_is_held(latest):
+            # 0.56.1: the last reply that named this message came back unpaid.
+            # Answering it again is how Rick sent six; hold, say so, and let a
+            # new message (or the hold running out) move it.
+            self.log.warning(
+                "step %s: message %s was answered and the bench did not mark it "
+                "paid; not answering it again this cycle", number, latest)
+            return {"ok": True, "road": ROAD_STEP_ASK, "move": None, "call": None,
+                    "held": latest, "why": f"a reply naming {latest} already landed unpaid",
+                    "result": {"ok": True, "held": latest}, "tool_count": 0,
+                    "model_calls": 0, "prompt_chars": 0, "prefix_chars": 0,
+                    "input_tokens": 0, "cached_tokens": 0, "trail": []}
+        submission = payload.get("submission")
+        submission = submission if isinstance(submission, dict) else {}
+        recommended = str(submission.get("recommended_action") or "")
+        off = {
+            str(row.get("action")): [str(tool) for tool in row.get("tools") or []]
+            for row in submission.get(FORMS_TURNED_OFF) or [] if isinstance(row, dict)
+        }
+        if recommended and recommended in off:
+            # 0.56.2: THE BENCH'S OWN NEXT DOOR IS OFF THIS AGENT'S TOOL LIST.
+            # Asking anyway hands the model chat alone, and it spends the loop
+            # guard's tries writing "the tool was not offered" to the person
+            # (Rick, deal 40b6df58). Say what is missing, once, and ask nothing.
+            why = (f"{recommended} is not on this agent's tool list; add "
+                   f"{', '.join(off[recommended])} to runtime.tools in agent.yaml "
+                   f"(the bench published the {recommended} form)")
+            self.log.warning("step ask step %s: %s; not asking the model", number, why)
+            return {"ok": True, "road": ROAD_STEP_ASK, "move": None, "call": None,
+                    "missing_form": recommended, "why": why,
+                    "result": {"ok": True, "missing_form": recommended}, "tool_count": 0,
+                    "model_calls": 0, "prompt_chars": 0, "prefix_chars": 0,
+                    "input_tokens": 0, "cached_tokens": 0, "trail": []}
+        tools = step_tools(payload)
+        if len(tools) == 1:  # need_tools alone: the bench published no form
+            return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,
+                    "why": "the bench publishes no form on this step"}
         caches = bool(getattr(self.model, "caches_a_stable_prefix", lambda: False)())
         # 0.59.0: the operator's standing instructions ride beside the system
-        # text on every move, WHOLE, the same bytes on both tries. They sit
-        # outside the tail measured below, so they never make it shed or warn.
+        # text on every ask, WHOLE, the same bytes on both tries.
         self.prefix = with_operator_block(
             stable_prefix(brief, act_kinds, with_tools=caches),
             self.operator_instructions,
         )
-        instruction = MOVE_INSTRUCTIONS[move["move"]]
-        if move["move"] in OWN_MEANS_MOVES:
-            instruction = with_own_means(instruction, self.own_means)
-        if pulse_due and move["move"] == "hand_back":
-            instruction = instruction + " " + PULSE_DUE_INSTRUCTION
+        instruction = with_own_means("", self.own_means).strip()
+        if pulse_due:
+            instruction = (instruction + " " + PULSE_DUE_INSTRUCTION).strip()
         if isinstance(payload.get(PERSON_SAID_KEY), list):
-            # LAW A: the one instruction line rides the tail with the block;
-            # the prefix does not move.
-            instruction = instruction + "\n" + PERSON_SAID_INSTRUCTION
-        tail = step_tail(
-            payload, obligation, move, changed or [], pulse_due=pulse_due, refused=refused
-        )
-        ids = dict(tail["ids"])
-        self.ids = ids
-        tools = step_tools(move, payload)
-        if not tools:
-            return {"ok": False, "road": ROAD_AGENTIC, "model_calls": 0,
-                    "why": f"the bench publishes no form for the {move['move']} calls"}
-        door = (move.get("calls") or [None])[0]
-        if door and door not in tools and move["move"] in _DOOR_OR_NOTHING:
-            # 0.56.2: THE MOVE'S OWN DOOR IS NOT HERE. Asking anyway hands the
-            # model chat alone, and it spends the loop guard's tries writing
-            # "the tool was not offered" to the person (Rick, deal 40b6df58).
-            # Say what is missing, once, and ask nothing.
-            why = missing_door(door, payload)
-            self.log.warning("step ask %s step %s: %s; not asking the model",
-                             move["move"], number, why)
-            return {
-                "ok": True,
-                "road": ROAD_STEP_ASK,
-                "move": move["move"],
-                "call": None,
-                "missing_form": door,
-                "why": why,
-                "tool_count": len(tools),
-                "result": {"ok": True, "missing_form": door},
-                "model_calls": 0,
-                "prompt_chars": 0,
-                "prefix_chars": 0,
-                "input_tokens": 0,
-                "cached_tokens": 0,
-                "trail": [],
-            }
+            instruction = (instruction + "\n" + PERSON_SAID_INSTRUCTION).strip()
         definitions = [_definition(name, tool) for name, tool in tools.items()]
         name: str | None = None
         result: dict[str, Any] = {}
-        # Asked twice at most: once, and once more with the refusal.
+        last_refusal = refused
         for attempt in (1, 2):
             if attempt == 2:
                 self.log.warning(
-                    "step ask %s step %s: %s refused (%s %s); asking once more with the refusal",
-                    move["move"], number, name, result.get("failure"), result.get("error"),
+                    "step ask step %s: %s refused (%s %s); asking once more with the refusal",
+                    number, name, result.get("failure"), result.get("error"),
                 )
-                tail = step_tail(
-                    payload, obligation, move, changed or [], pulse_due=pulse_due, refused=result
-                )
+                last_refusal = result
+            tail = step_tail(payload, pulse_due=pulse_due, refused=last_refusal)
+            words = instruction
+            if last_refusal:
+                words = (REFUSED_INSTRUCTION + " " + instruction).strip()
             response = self._ask(
-                (REFUSED_INSTRUCTION + " " + instruction)
-                if (refused or attempt == 2) else instruction,
-                tail,
-                f"{move['move']} step {number}" + (" again" if attempt == 2 else ""),
-                definitions,
+                words, tail, f"step {number}" + (" again" if attempt == 2 else ""), definitions
             )
             picked = self._one_call(response, tools)
             if isinstance(picked, dict):
                 name, result = picked.get("call"), picked
             else:
                 name, answer = picked
-                if tools[name]["call"] == NEED_TOOLS:
+                if tools[name]["action"] == NEED_TOOLS:
                     return {
                         "ok": False,
                         "road": ROAD_AGENTIC,
@@ -1613,27 +836,26 @@ class StepAsk:
             if result.get("ok"):
                 break
         ok = bool(result.get("ok"))
-        if not ok and move["move"] == "outside_work" and name != "report_parked":
-            # W29: THE ONE STEP THAT MAY NOT END IN SILENCE. The model
-            # answered with nothing, with a tool it was not given, or with
-            # arguments the door refused, twice. Whatever it was, nobody is
-            # doing this work and the person is owed that sentence in this
-            # same poll, not after seven minutes of nothing.
+        outside = any(tool["action"] == OUTSIDE_EVIDENCE_ACTION for tool in tools.values())
+        if not ok and outside and name != REPORT_PARKED:
+            # W29: THE ONE STEP THAT MAY NOT END IN SILENCE. An approved
+            # outside act whose work never came back: nobody is doing it, and
+            # the person is owed that sentence in this same poll.
             self.log.warning(
-                "step ask outside_work step %s: no call landed (%s); parking the step",
+                "step ask step %s: no call landed on the outside work (%s); parking the step",
                 number, result.get("failure") or result.get("error"),
             )
             self._park_the_step(
                 str(ids.get("deal_id") or ""), str(ids.get("step_id") or ""),
                 step.get("rounds_used"), "",
-                self._key(str(ids.get("step_id") or ""), "report_parked", result),
+                self._key(str(ids.get("step_id") or ""), REPORT_PARKED, result),
                 answering=answering_for(unanswered_on_step(payload)),
             )
             result = dict(result, parked=True)
         self.log.info(
-            "step ask %s step %s: %s %s after %d model call(s); prefix %d chars sent "
-            "once and cached, tails %d chars (~%d tokens), input tokens %s, cached input %s",
-            move["move"], number, name,
+            "step ask step %s: %s %s after %d model call(s); prefix %d chars, tails %d "
+            "chars (~%d tokens), input tokens %s, cached input %s",
+            number, name,
             "made" if ok else f"refused ({result.get('failure')} {result.get('error')})",
             self.calls, len(self.prefix), self.prompt_chars,
             (len(self.prefix) + self.prompt_chars) // 4,
@@ -1642,7 +864,7 @@ class StepAsk:
         out = {
             "ok": ok,
             "road": ROAD_STEP_ASK,
-            "move": move["move"],
+            "move": tools[name]["action"] if name in tools else None,
             "call": name,
             "tool_count": len(definitions),
             "result": result,

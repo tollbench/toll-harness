@@ -34,8 +34,6 @@ from toll_harness.toll_bench.step import (
     ROAD_AGENTIC,
     StepAsk,
     step_tail,
-    the_move,
-    what_changed,
 )
 from toll_harness.tools.registry import build_standard_registry
 
@@ -220,7 +218,7 @@ OBLIGATION = {
 }
 
 CAFES = {
-    "call": "file_outcome",
+    "call": "submit_step_outcome",
     "step_ref": "s-1",
     "note": "Three quiet cafes with hours. Approve to close the step.",
     "document": {"title": "Three quiet cafes", "blocks": [
@@ -231,64 +229,6 @@ CAFES = {
         ]},
     ]},
 }
-
-
-# ---------------------------------------------------------------------------
-# 1. The move ladder
-# ---------------------------------------------------------------------------
-def test_the_move_is_read_off_the_step_in_the_persons_order():
-    assert the_move(_payload(owed_replies=[{"id": "r1"}]))["move"] == "answer_reply"
-    spoke = _payload(step_thread={
-            "messages": [{"id": "m1", "who": "person", "text": "hi"}],
-            "unread_from_person": 1,
-            "unanswered_elsewhere": [],
-        })
-    assert the_move(spoke)["move"] == "answer_person"
-    back = _payload(acts=[{
-                "act_id": "a1",
-                "kind": "email",
-                "state": "sent_back",
-                "note": "wrong time",
-            }])
-    assert the_move(back)["move"] == "refile_act"
-    declared = _payload(declared_acts=[{"kind": "email", "filed": 0, "held": 0, "executed": 0}])
-    assert the_move(declared)["move"] == "file_act"
-    assert the_move(_payload())["move"] == "hand_back"
-
-
-def test_the_moves_the_ask_cannot_shape_name_the_old_road():
-    bytes_step = _payload()
-    bytes_step["current_step"]["deliverable"] = {
-        "channel": "file",
-        "family": "video",
-        "types": ["mp4"],
-    }
-    assert the_move(bytes_step)["road"] == ROAD_AGENTIC
-    outside = _payload(acts=[{"act_id": "a1", "kind": "outside", "state": "approved"}])
-    assert the_move(outside)["road"] == ROAD_AGENTIC
-    elsewhere = _payload(step_thread={
-            "messages": [],
-            "unread_from_person": 0,
-            "unanswered_elsewhere": [{"step_id": "s-0", "unread_from_person": 1}],
-        })
-    assert "not on this payload" in the_move(elsewhere)["why"]
-
-
-def test_what_changed_names_the_new_words_and_the_moved_acts():
-    before = json.loads(cli._deal_step_fingerprint(_payload()))
-    after = json.loads(cli._deal_step_fingerprint(_payload(
-        step_thread={
-            "messages": [{"id": "m1", "who": "person"}],
-            "unread_from_person": 1,
-            "unanswered_elsewhere": [],
-        },
-        acts=[{"act_id": "a1", "kind": "email", "state": "sent_back", "note": "no"}],
-    )))
-    lines = what_changed(before, after)
-    assert any("m1" in line for line in lines)
-    assert "act a1 is now sent_back" in lines
-    assert what_changed(None, after) == ["first look at this step"]
-    assert what_changed(before, before) == ["nothing new from the person since the last look"]
 
 
 # ---------------------------------------------------------------------------
@@ -307,12 +247,13 @@ def test_a_hand_back_is_one_small_ask_and_one_call_with_nothing_carried():
         changed=["first look"],
     )
 
-    assert out["ok"] is True and out["road"] == "step_ask" and out["call"] == "file_outcome"
+    assert out["ok"] is True and out["road"] == "step_ask" and out["call"] == "submit_step_outcome"
     assert out["model_calls"] == 1
-    # ONE user message carrying no tool result, and only this move's tools.
+    # ONE user message carrying no tool result; one tool per published form.
     [invocation] = model.invocations
     assert [tool.name for tool in invocation["tools"]] == [
-        "file_outcome", "reply_step_message", "wait_outside", "post_check_in", NEED_TOOLS]
+        "post_step_message", "post_work_pulse", "propose_act", "wait_outside",
+        "submit_step_outcome", "dismiss_reply", NEED_TOOLS]
     assert len(invocation["messages"]) == 1
     assert all(block.get("type") == "text" for block in invocation["messages"][0].content)
     prompt_chars = len(invocation["system"]) + sum(
@@ -335,18 +276,6 @@ def test_the_step_prefix_is_the_bid_loops_prefix_byte_for_byte():
     plain = _model(CAFES, caching=False)
     StepAsk(plain, FakeBench()).run(OBLIGATION, _payload(), brief=BRIEF, act_kinds=kinds)
     assert plain.invocations[0]["system"] == draft.SHORT_FRONT_DOOR
-
-
-def test_the_tail_carries_only_this_step():
-    tail = step_tail(_payload(), OBLIGATION, the_move(_payload()), ["first look"])
-    assert tail["ids"] == {"deal_id": "d1", "step_id": "s-1", "target_id": "t1"}
-    assert tail["step"]["title"] == "Find three quiet cafes with their hours"
-    assert tail["step"]["deliverable"]["fields"] == ["name", "address", "hours"]
-    assert tail["your_move"] == "hand_back"
-    assert "file_outcome" in tail["calls_you_may_make"]
-    assert tail["changed_since_last_look"] == ["first look"]
-    # Nothing of the deal's other steps, no brief, no plan.
-    assert "steps" not in tail and "brief" not in tail and "plan" not in tail
 
 
 def test_a_pulse_already_at_100_is_not_repeated():
@@ -383,17 +312,6 @@ def test_two_refusals_end_the_ask_with_the_benchs_error():
     assert out["model_calls"] == 2
 
 
-def test_a_call_that_is_not_the_move_is_refused_before_the_bench_sees_it():
-    bench = FakeBench()
-    out = StepAsk(_model(CAFES, CAFES), bench).run(
-        OBLIGATION,
-        _payload(owed_replies=[{"id": "r1", "from": "ruby@x"}]),
-        brief=BRIEF,
-    )
-    assert out["ok"] is False and out["error"] == "disallowed_tool"
-    assert bench.outcomes == []
-
-
 def test_need_tools_hands_the_step_to_the_old_road():
     out = StepAsk(
         _model({"call": NEED_TOOLS, "why": "I need to search the web"}),
@@ -413,10 +331,10 @@ def test_answering_the_person_is_one_reply_call():
             "unanswered_elsewhere": [],
         })
     out = StepAsk(
-        _model({"call": "reply_step_message", "reply": "Tuesday works, I'll book it."}),
+        _model({"call": "post_step_message", "reply": "Tuesday works, I'll book it."}),
         bench,
     ).run(OBLIGATION, spoke, brief=BRIEF)
-    assert out["ok"] and out["move"] == "answer_person"
+    assert out["ok"] and out["move"] == "post_step_message"
     assert bench.replies[0][:3] == ("d1", "s-1", "Tuesday works, I'll book it.")
 
 
@@ -432,7 +350,7 @@ def test_an_owed_reply_is_answered_in_its_thread():
                 "body_text": "Tuesday at 2."}),
         bench,
     ).run(OBLIGATION, owed, brief=BRIEF)
-    assert out["ok"] and out["move"] == "answer_reply"
+    assert out["ok"] and out["move"] == "propose_act"
     assert bench.acts[0][2] == {"kind": "email", "in_reply_to": "r1", "body_text": "Tuesday at 2."}
 
 
@@ -455,10 +373,10 @@ def test_a_returned_act_is_refiled_once_changed():
         _model(dict(act, call="propose_act")),
         bench,
     ).run(OBLIGATION, back, brief=BRIEF)
-    assert out["ok"] and out["move"] == "refile_act"
+    assert out["ok"] and out["move"] == "propose_act"
     assert bench.acts[0][2] == act
     # The tail carried the person's own words on the dead act.
-    tail = step_tail(back, OBLIGATION, the_move(back), [])
+    tail = step_tail(back)
     assert tail["acts"][0]["note"] == "make it 11-11:30"
 
 
@@ -538,33 +456,12 @@ def test_the_dispatch_files_a_hand_back_through_the_step_ask(caplog):
 
     assert result["ok"] is True and result["run"] is None
     assert result["dispatch"]["kind"] == "deal_step_step_ask"
-    assert result["dispatch"]["move"] == "hand_back"
-    assert result["dispatch"]["call"] == "file_outcome"
+    assert result["dispatch"]["move"] == "submit_step_outcome"
+    assert result["dispatch"]["call"] == "submit_step_outcome"
     assert "goal" not in observed  # the old road never ran
     assert len(bench.outcomes) == 1
     assert cli._IDLE_STEP_MEMO["s-1"] == cli._deal_step_fingerprint(_payload())
     assert "model call 1: prompt 1500 input tokens" in caplog.text
-    cli._IDLE_STEP_MEMO.clear()
-
-
-def test_a_file_deliverable_takes_the_old_road_without_a_model_call(caplog):
-    _clean()
-    payload = _payload()
-    payload["current_step"]["deliverable"] = {
-        "channel": "file",
-        "family": "video",
-        "types": ["mp4"],
-    }
-    model = _model(CAFES)
-    resources, observed = _resources(payload, model)
-
-    with caplog.at_level(logging.INFO, logger="toll_harness.cli"):
-        result = cli._process_market_attention(resources, wait=20)
-
-    assert result["dispatch"]["kind"] == "deal_step"
-    assert '"s-1"' in observed["goal"]
-    assert model.invocations == []
-    assert "hands back a file (rule 230)" in caplog.text and "the old road" in caplog.text
     cli._IDLE_STEP_MEMO.clear()
 
 
@@ -699,26 +596,6 @@ THE_PERSON_SAID = [
 ]
 
 
-def test_the_tail_carries_what_the_person_said_verbatim():
-    from toll_harness.toll_bench import step as step_module
-    with_it = _payload(the_person_said=THE_PERSON_SAID)
-    tail = step_tail(with_it, OBLIGATION, the_move(with_it), [])
-    assert tail["the_person_said"] == THE_PERSON_SAID
-    # an older bench that sends nothing changes nothing
-    bare = step_tail(_payload(), OBLIGATION, the_move(_payload()), [])
-    assert "the_person_said" not in bare
-    assert step_module.PERSON_SAID_INSTRUCTION == draft.PERSON_SAID_INSTRUCTION
-
-
-def test_move_prompts_name_tools_and_carry_no_json_call_shapes():
-    from toll_harness.toll_bench.step import MOVE_INSTRUCTIONS, PULSE_DUE_INSTRUCTION
-
-    for instruction in [*MOVE_INSTRUCTIONS.values(), PULSE_DUE_INSTRUCTION]:
-        assert '{"call"' not in instruction
-        assert '"to": "..."' not in instruction
-    assert "`contact_ref`" in MOVE_INSTRUCTIONS["file_act"]
-
-
 def test_the_prefix_is_byte_identical_with_and_without_it_and_the_line_rides_the_tail():
     from toll_harness.toll_bench import step as step_module
     kinds = FakeBench().list_act_kinds()
@@ -781,9 +658,8 @@ def test_provider_preserves_server_contract_and_review_round():
     result = provider.current_step("d1")
     assert result["submission"] == packet["submission"]
     assert result["current_step"]["rounds_used"] == 2
-    tail = step_tail(result, OBLIGATION, the_move(result, OBLIGATION), [])
-    # 0.63.1: the forms ride as tools, so the tail keeps their names only.
+    tail = step_tail(result)
+    # The forms ride as tools, so the tail keeps their names only.
     kept = {k: v for k, v in packet["submission"].items()
             if k not in ("actions", "worker_status")}
-    assert tail["submission"] == dict(kept, actions_as_tools=["propose_act",
-                                                              "report_worker_status"])
+    assert tail["submission"] == dict(kept, forms_as_tools=["propose_act"])

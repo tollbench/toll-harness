@@ -206,26 +206,20 @@ this one, chosen by the bench, in the same form being filled -- and nothing of o
 
 A signed deal is walked one step at a time, and a step the agent can move is ONE small ask and
 ONE call (`toll_bench/step.py`). The prefix is the plan loop's, byte for byte, so the provider's
-cache is shared. The tail carries only this step: its title, ask and promise, what changed since
-the last look, the person's own words whole, the acts and the one move that is the agent's,
-with the bench's forms for that move as the tools. A move the small ask cannot shape (bytes to
-hand back, a message on another step) takes the old road, the whole agentic run, and the log says
-why.
+cache is shared.
 
-WHAT THE EARLIER STEPS HANDED BACK RIDES EVERY STEP, WHOLE (0.62.0). `earlier_steps` is one block
-per earlier approved step: its head line, then its hand-back line by line, each card field
-(`field: value`, the way the bench flattens a card) on its own line, never folded and never
-clipped; then a line per file and per act. The bench trims a hand-back at 600 characters on the
-current-step answer and says so in `trimmed`; the provider then reads that receipt whole from the
-bench's history (`current-step?full=1`), once per receipt. The block is capped at 6,000
-characters. Over the cap the OLDEST steps go first, whole steps only; a step still too big on its
-own has its free text shortened, never a card field. The block then opens with one line naming
-what was left out and how to read it whole. Measured on a six-step deal (step 5, two cards before
-it) the tail is about 10,500 characters, about 2,600 tokens, against about 9,100 before 0.62.0,
-when the step-4 card lost its last fields.
+THE STEP IS THE BENCH'S FORMS (0.74.0). Whose move a step is, is the bench's `turn.whose_turn`:
+`agent` is a move, anything else starts no model call (the person's unanswered message or an owed
+reply is always the agent's to answer; only a bench that sends no `turn` falls back to the step's
+`state`). Every form on `submission.actions` is a tool by the bench's own name with the bench's own
+schema, posted to its own endpoint (`submit_step_form`); the worker-status form is `report_parked`;
+a send-out's `moves` are tools; a file step's `deliver_file` reads a file the model made in its own
+working directory; `need_tools` hands the step to the old road. The tail is the current-step answer
+as the bench sent it -- `turn`, `instruction`, `recommended_action`, `prerequisites`,
+`earlier_steps`, `repeats`, `sent_out`, `rewound`, the person's words -- minus only the forms. A
+refusal rides the one more ask as `the_bench_refused`. An outside step whose work never lands is
+parked out loud (W29), and a reply always names what it answers (0.56.1).
 
-FETCH, NEVER ASK. Every move that writes words out of earlier material -- `hand_back`, `file_act`,
-`refile_act`, `answer_reply`, and `outside_work` -- may answer `need_tools` instead of making its
-one call. That hands the step to the old road on purpose, where the goal carries every earlier step
-whole and `toll_bench.current_step` with `whole: true` reads them again. A fact a card already
-carries is never asked of the person.
+FETCH, NEVER ASK. `need_tools` is offered on every step. That hands the step to the old road on
+purpose, where `toll_bench.current_step` with `whole: true` reads the bench's own `?full=1` answer
+with every earlier hand-back whole. A fact a card already carries is never asked of the person.

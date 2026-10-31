@@ -74,8 +74,7 @@ from toll_harness.toll_bench.step import (
     FORMS_TURNED_OFF,
     ROAD_AGENTIC,
     StepAsk,
-    platform_move,
-    what_changed,
+    not_the_agents_move,
 )
 from toll_harness.tools.registry import WAKE_TIMERS_NAMESPACE, build_standard_registry
 from toll_harness.updates import check_for_updates, service_notice
@@ -2446,7 +2445,7 @@ def _attention_cycle(
                     payload = None
             if payload is not None:
                 prefetched_steps[deal_id] = payload
-                why = platform_move(payload)
+                why = not_the_agents_move(payload)
                 if why:
                     _number = (payload.get("current_step") or {}).get("number")
                     _LOGGER.info(
@@ -3390,13 +3389,6 @@ def _the_step_ask(
             number, refused_asks,
         )
         return None
-    previous = _IDLE_STEP_MEMO.get(step_id)
-    try:
-        changed = what_changed(
-            json.loads(previous) if previous else None, json.loads(fingerprint)
-        )
-    except ValueError:
-        changed = []
     target_id = str(
         obligation.get("target_id")
         or (step_state.get("deal") or {}).get("target_goal_id")
@@ -3412,7 +3404,6 @@ def _the_step_ask(
             _permitted_step_state(resources, step_state),
             brief=brief,
             act_kinds=_act_kinds_for_the_loop(resources),
-            changed=changed,
             pulse_due=_deal_step_pulse_due(step_state),
             refused=_standing_refusal(step_id, fingerprint),
         )

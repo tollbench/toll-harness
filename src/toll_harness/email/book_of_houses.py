@@ -797,6 +797,18 @@ class BookOfHousesApiClient:
             idempotency_key=idempotency_key,
         )
 
+    def post_form(
+        self, method: str, path: str, body: dict[str, Any], idempotency_key: str = ""
+    ) -> dict[str, Any]:
+        """A bench-published form, posted to its own path (0.74.0). Only this
+        bench's own `/api/bench/` paths are called."""
+        if not str(path).startswith("/api/bench/"):
+            raise BookOfHousesApiError(400, "invalid_form_path", "Not a bench path")
+        return self._request(
+            str(method or "POST").upper(), str(path), payload=dict(body or {}),
+            authenticated=True, idempotency_key=idempotency_key or None,
+        )
+
     def current_step(self, deal_id: str, full: bool = False) -> dict[str, Any]:
         """The deal's current step. `full=True` is the bench's history_url
         (`?full=1`): every step as walked, each receipt's words whole on

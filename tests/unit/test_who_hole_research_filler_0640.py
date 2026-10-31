@@ -51,10 +51,8 @@ from toll_harness.toll_bench.draft import (
 )
 from toll_harness.toll_bench.step import (
     LAST_FILING_KEY,
-    MOVE_INSTRUCTIONS,
     StepAsk,
     step_tail,
-    the_move,
 )
 
 
@@ -233,7 +231,7 @@ def _research_payload(fields=FIELDS, **over):
 
 
 FINDS = {
-    "call": "file_outcome",
+    "call": "submit_step_outcome",
     "step_ref": "s-1",
     "note": "Two hosts who fit. Pick who to call.",
     "document": {"title": "Podcast hosts", "blocks": [{"type": "cards", "items": [
@@ -243,40 +241,6 @@ FINDS = {
          "source_url": "https://example.org/model-weekly/about"},
     ]}]},
 }
-
-
-def test_the_research_step_is_a_hand_back_and_the_tail_carries_its_readers():
-    payload = _research_payload(read_by=[], work_sent_back=[])
-    move = the_move(payload, OBLIGATION)
-    assert move["move"] == "hand_back"
-    tail = step_tail(payload, OBLIGATION, move, [])
-    assert tail["step"]["deliverable"]["fields"] == FIELDS
-    assert tail["step"]["control"] == CONTROL
-    # Empty readers cost the ask nothing.
-    assert "read_by" not in tail and "work_sent_back" not in tail
-    assert LAST_FILING_KEY not in tail
-
-
-def test_the_cards_file_with_the_fields_the_step_payload_carries():
-    bench = FakeBench()
-    ask = StepAsk(_model(FINDS), bench)
-
-    out = ask.run(OBLIGATION, _research_payload(), brief={})
-
-    assert out["ok"] is True, out
-    assert out["call"] == "file_outcome"
-    (_target, outcome, _key), = bench.outcomes
-    items = outcome["document"]["blocks"][0]["items"]
-    assert [sorted(item) for item in items] == [sorted(FIELDS)] * 2
-    # The template the tool carries is the step's own, field for field.
-    tool = ask.model.invocations[0]["tools"]
-    described = " ".join(t.description for t in tool if t.name == "file_outcome")
-    for name in FIELDS:
-        assert f'"{name}"' in described
-    # And the model was told what the person does with them.
-    asked = ask.model.invocations[0]["messages"][0].content[0]["text"]
-    assert "pick_people" in asked and "own_list" in asked
-    assert "step.control.closes" in MOVE_INSTRUCTIONS["hand_back"]
 
 
 def test_a_card_missing_a_field_the_step_named_is_refused_by_the_schema_not_filed():
@@ -289,20 +253,6 @@ def test_a_card_missing_a_field_the_step_named_is_refused_by_the_schema_not_file
     assert out["ok"] is False
     assert out["failure"] == "invalid_arguments"
     assert bench.outcomes == []
-
-
-def test_later_readers_and_the_persons_send_back_ride_the_tail():
-    read_by = [{"step": 3, "kind": "who", "note": "Step 3 is the who step, and the "
-                "person picks the people it reaches from what this step hands back."}]
-    sent_back = [{"receipt_id": "r-1", "title": "Podcast hosts", "was_document": True,
-                  "reason": "None of these fit: I want newsletters, not podcasts.",
-                  "expected": "a changed list"}]
-    payload = _research_payload(read_by=read_by, work_sent_back=sent_back)
-    tail = step_tail(payload, OBLIGATION, the_move(payload, OBLIGATION), [])
-    assert tail["read_by"] == read_by
-    assert tail["work_sent_back"] == [{"receipt_id": "r-1", "title": "Podcast hosts",
-                                       "reason": sent_back[0]["reason"],
-                                       "expected": "a changed list"}]
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +312,7 @@ def test_the_cards_the_door_took_off_ride_the_next_read_of_that_step():
     assert filed["ok"] is True and filed["finds_refused"] == REFUSED
     again = provider.current_step("d1")
     assert again[LAST_FILING_KEY] == {"finds_refused": REFUSED, "note": LAST_FILING_NOTE}
-    tail = step_tail(again, OBLIGATION, the_move(again, OBLIGATION), [])
+    tail = step_tail(again)
     assert tail[LAST_FILING_KEY]["finds_refused"] == REFUSED
 
     # A filing with nothing off clears it.
