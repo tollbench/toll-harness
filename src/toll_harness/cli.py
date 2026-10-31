@@ -68,8 +68,8 @@ from toll_harness.service import (
 )
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
-from toll_harness.toll_bench import draft, row_slots
-from toll_harness.toll_bench.draft import DraftLoop
+from toll_harness.toll_bench import draft
+from toll_harness.toll_bench.draft import APPROACH_DIALS, DraftLoop
 from toll_harness.toll_bench.step import (
     EARLIER_STEPS_KEY,
     EARLIER_STEPS_TRIMMED,
@@ -492,22 +492,19 @@ APPROACH_QUESTION = (
 
 
 def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None:
-    """The dials the init flags set, in the bench's words; None when no flag.
+    """The dials the init flags set, as written; None when no flag.
 
-    A word that is not a stop of its dial stops init before anything is
-    written, naming the dial's three words.
+    The bench reads its own dial words in any case and refuses the wrong
+    kind of thing itself at registration (0.74.0); nothing is judged here.
     """
     out: dict[str, str] = {}
     given = False
-    for dial, words in row_slots.APPROACH_DIALS.items():
+    for dial in APPROACH_DIALS:
         raw = getattr(arguments, f"approach_{dial}", None)
         if raw is None or not str(raw).strip():
             continue
         given = True
-        word = row_slots.dial_word(dial, str(raw))
-        if word is None:
-            raise ValueError(f"--approach-{dial} takes one of: {', '.join(words)}")
-        out[dial] = word
+        out[dial] = str(raw).strip()
     return out if given else None
 
 
@@ -518,7 +515,7 @@ def _ask_default_approach(flagged: dict[str, str] | None) -> dict[str, str] | No
     if not _yes_no(APPROACH_QUESTION, default=False):
         return None
     out: dict[str, str] = {}
-    for dial, words in row_slots.APPROACH_DIALS.items():
+    for dial, words in APPROACH_DIALS.items():
         pick = _choose(
             f"Default {dial}",
             [("", f"No default {dial} (picked per want)"), *((word, word) for word in words)],
@@ -4487,7 +4484,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not install the persistent Toll Bench market worker",
     )
-    for dial, words in row_slots.APPROACH_DIALS.items():
+    for dial, words in APPROACH_DIALS.items():
         initialize.add_argument(
             f"--approach-{dial}",
             metavar="WORD",

@@ -11,7 +11,7 @@ from toll_harness.core.budget import measure
 from toll_harness.core.window import room
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks, draft, row_slots
+from toll_harness.toll_bench import blocks, draft
 from toll_harness.toll_bench.step import (
     EARLIER_STEPS_KEY,
     LAST_FILING_KEY,
@@ -1693,16 +1693,6 @@ class BookOfHousesTollBenchProvider:
             )
             return door["corrected_plan"], []
         fixed, mended = draft.mend_the_small_proposal(proposal, brief)
-        # A ROW SLOT THE DOOR STILL REFUSES COMES OFF (0.57.0). All three are
-        # optional, so an approach, a capability line or a step estimate the
-        # door calls the wrong kind of thing is never worth the whole bid: it
-        # is dropped, said, and the door asked once more.
-        fixed, dropped = row_slots.drop_named(fixed, problems)
-        if dropped:
-            mended = [
-                *mended,
-                *(f"{slot}: dropped, the door refused it" for slot in dropped),
-            ]
         if not mended:
             return proposal, problems
         _LOGGER.warning(
@@ -1747,10 +1737,6 @@ class BookOfHousesTollBenchProvider:
                     ),
                 }
             raise
-        original_slots = [
-            slot for slot in row_slots.ROW_SLOT_FIELDS
-            if isinstance(proposal, dict) and proposal.get(slot)
-        ]
         if draft.is_small_proposal(proposal):
             # RULE 243 (2026-09-11): A PROPOSAL IS SEVEN FIELDS AND ONE CALL.
             # There are no steps to repair and no blocks to merge -- but the
@@ -1844,50 +1830,9 @@ class BookOfHousesTollBenchProvider:
                 }
             idempotency_key = reservation.idempotency_key
         try:
-            try:
-                result = self.api.submit_proposal(target_id, proposal, idempotency_key)
-            except BookOfHousesApiError as first:
-                # THE ROW SLOTS ARE OPTIONAL (contract 4.1.3, 0.57.0). A 4xx that
-                # names `approach`, `capabilities` or `step_estimate` -- a bench
-                # that calls one the wrong kind of thing, or one that does not
-                # know it yet -- costs the slot, never the bid: drop it, say
-                # so, and file once more without it. Once: a second refusal is
-                # the door's answer, handled below like any other.
-                slimmer, dropped = (
-                    row_slots.drop_named(proposal, first.body, first.message)
-                    if 400 <= first.status < 500
-                    else (proposal, [])
-                )
-                if dropped:
-                    _LOGGER.warning(
-                        "Target %s: the filing door refused the proposal over "
-                        "%s (%s %s); dropped %s and filed once more without it",
-                        target_id,
-                        ", ".join(dropped),
-                        first.status,
-                        first.rej or first.code,
-                        ", ".join(dropped),
-                    )
-                    self._log_refusal(
-                        "filing",
-                        target_id,
-                        {
-                            "status": first.status,
-                            "code": first.code,
-                            "rej": first.rej,
-                            "detail": first.message,
-                            "body": getattr(first, "body", None),
-                            "row_slots_dropped": dropped,
-                        },
-                    )
-                    proposal = slimmer
-                    result = self.api.submit_proposal(
-                        target_id, proposal, f"{idempotency_key}-rowslots"
-                    )
-                else:
-                    # Every other refusal is the door's answer, in its own
-                    # words, handled below. Nothing is repaired at home.
-                    raise
+            # Filed once, as written. A refusal is the door's answer, in its
+            # own words, handled below; nothing is repaired or re-filed here.
+            result = self.api.submit_proposal(target_id, proposal, idempotency_key)
         except BookOfHousesApiError as error:
             # RULE OF THE NIGHT (2026-09-09): a refusal the foreman cannot read
             # is a run nobody can grade. Every filing-door refusal is written
@@ -1969,16 +1914,6 @@ class BookOfHousesTollBenchProvider:
                     agent_id=self.fleet_agent_id,
                 )
         receipt = self._filing_receipt(result)
-        gone = [
-            slot
-            for slot in row_slots.ROW_SLOT_FIELDS
-            if slot in original_slots and slot not in proposal
-        ]
-        if gone and isinstance(receipt, dict):
-            # WHAT WENT WITHOUT ITS ROW SLOT, and which. The proposal the run
-            # carries is the one filed, not the one the model wrote.
-            receipt = dict(receipt)
-            receipt["row_slots_dropped"] = gone
         if trims and isinstance(receipt, dict):
             # WHAT THE BENCH FIXED ON THE WAY IN rides the receipt, because
             # the filing door answers with ids and a status and says nothing
@@ -2028,23 +1963,33 @@ class BookOfHousesTollBenchProvider:
 
         An agent registered before its default existed (every lab agent) can
         only set it at `POST /api/bench/me/approach` (contract 4.1.3). So at
-        worker start: when agent.yaml sets a WHOLE default (all three dials)
-        and `GET /me` carries an `approach` that differs, the yaml's is sent
-        once. Nothing is ever cleared from here, a partial default stays a
-        local starting point, and a bench whose /me has no `approach` key
-        (one before 4.1.3) is left alone.
+        worker start: when agent.yaml sets a default and `GET /me` carries an
+        `approach` that differs, the yaml's is sent once, as written; the
+        bench judges its words (0.74.0). Nothing is ever cleared from here,
+        and a bench whose /me has no `approach` key (one before 4.1.3) is left
+        alone.
         """
-        wanted, _notes = row_slots.normalize_approach(configured)
-        if not row_slots.is_complete(wanted):
-            return {"synced": False, "reason": "no_whole_default"}
+        wanted = (
+            {str(dial): str(word).strip() for dial, word in configured.items()
+             if isinstance(word, str) and word.strip()}
+            if isinstance(configured, dict) else {}
+        )
+        if not wanted:
+            return {"synced": False, "reason": "no_default"}
         try:
             me = self.api.me()
         except Exception as error:  # noqa: BLE001 - a start-up nicety never stops a worker
             return {"synced": False, "reason": "me_unreadable", "error": type(error).__name__}
         if not isinstance(me, dict) or "approach" not in me:
             return {"synced": False, "reason": "bench_has_no_default_approach"}
-        held, _ = row_slots.normalize_approach(me.get("approach"))
-        if held == wanted:
+        held = me.get("approach")
+
+        def folded(approach: Any) -> dict[str, str]:
+            if not isinstance(approach, dict):
+                return {}
+            return {str(k): str(v).strip().casefold() for k, v in approach.items() if v}
+
+        if folded(held) == folded(wanted):
             return {"synced": False, "reason": "already_set", "approach": wanted}
         try:
             answer = self.api.set_approach(wanted)

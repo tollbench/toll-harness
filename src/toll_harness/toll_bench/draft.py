@@ -96,7 +96,6 @@ from toll_harness.models.base import (
     was_cut_off,
     what_came_back,
 )
-from toll_harness.toll_bench import row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
 
@@ -2450,12 +2449,21 @@ PROPOSAL_FIELDS = (
 # agent's capability lines and "Your part: N steps". Steven: "we need to get
 # them to choose a strategy then design it based on that." So the ask below
 # puts the APPROACH FIRST and asks for the rest to follow it. All three are
-# OPTIONAL at the door: a proposal without them still files, and
-# `row_slots` settles their spelling and drops what it cannot settle.
-ROW_SLOT_FIELDS = row_slots.ROW_SLOT_FIELDS
+# OPTIONAL at the door: a proposal without them still files. They go to the
+# door as the model wrote them; the bench reads its own words in any case and
+# trims or refuses in its own words (0.74.0).
+ROW_SLOT_FIELDS: tuple[str, ...] = ("approach", "capabilities", "step_estimate")
+# The dials' words, as the bench's proposal schema publishes them. Said to the
+# model; never used to judge an answer.
+APPROACH_DIALS: dict[str, tuple[str, str, str]] = {
+    "risk": ("Careful", "Middle risk", "Aggressive"),
+    "finish": ("Scrappy", "Middle finish", "Polished"),
+    "path": ("Proven path", "Middle path", "Creative"),
+}
+CAPABILITY_LINE_MAX = 60
 APPROACH_WORDS = "; ".join(
     f"{dial}: {', '.join(words[:-1])} or {words[-1]}"
-    for dial, words in row_slots.APPROACH_DIALS.items()
+    for dial, words in APPROACH_DIALS.items()
 )
 
 PROPOSAL_INSTRUCTION = (
@@ -2526,7 +2534,7 @@ PROPOSAL_INSTRUCTION = (
     "that is not on that list is named on the STEP that uses it, as an "
     "outside act, never here. File [] when you need none.\n"
     "`capabilities` -- one or two short lines, up to "
-    f"{row_slots.CAPABILITY_LINE_MAX} characters each, in your own words: what "
+    f"{CAPABILITY_LINE_MAX} characters each, in your own words: what "
     "YOU bring to THIS want that another agent may not, e.g. \"Calendar and "
     "Gmail audit\" or \"Hires and manages human assistants\". Draw on "
     "`your_profile` when it is there. Not a generic skill list.\n"
@@ -2816,12 +2824,10 @@ def read_proposal(answer: dict[str, Any], notes: list[str] | None = None) -> dic
     the door's to refuse in its own words.
 
     THE ROW SLOTS ARE OPTIONAL (contract 4.1.3). `approach`, `capabilities`
-    and `step_estimate` are read when the answer carries them, in the door's
-    spelling (`row_slots`), and simply left off when it does not -- the old
-    eight-field answer still reads whole. What could not be settled is said
-    in `notes` when the caller passes a list for it. The approach may come
-    back PARTIAL here; the draft loop completes it from the agent's default
-    or drops it (`row_slots.complete_approach`).
+    and `step_estimate` are read when the answer carries them, exactly as
+    written, and simply left off when it does not -- the old eight-field
+    answer still reads whole. `notes` is accepted for older callers and left
+    untouched: nothing is settled here (0.74.0).
     """
     if not isinstance(answer, dict):
         return {}
@@ -2870,19 +2876,15 @@ def read_proposal(answer: dict[str, Any], notes: list[str] | None = None) -> dic
     tools = [tool for tool in tools if tool]
     if tools:
         out["tools_needed"] = tools
-    slots, said = row_slots.read_row_slots(holder)
-    if holder is not answer:
+    for slot in ROW_SLOT_FIELDS:
         # "Approach first" can put the approach BESIDE a wrapped proposal:
         # {"approach": {...}, "proposal": {...}}. A slot the wrapper lacks is
         # read off the outside.
-        outside, said_outside = row_slots.read_row_slots(answer)
-        for key, value in outside.items():
-            if key not in slots:
-                slots[key] = value
-                said.extend(line for line in said_outside if line.startswith(key))
-    out.update(slots)
-    if notes is not None:
-        notes.extend(said)
+        value = holder.get(slot)
+        if value in (None, "", [], {}) and holder is not answer:
+            value = answer.get(slot)
+        if value not in (None, "", [], {}):
+            out[slot] = value
     return out
 
 
@@ -2907,11 +2909,6 @@ def mend_the_small_proposal(
 
     And a fourth that is never a refusal:
 
-      * THE ROW SLOTS (contract 4.1.3). `approach`, `capabilities` and
-        `step_estimate` are put in the door's spelling, and one that cannot
-        be settled -- a half-filled approach or estimate -- comes off rather
-        than being refused for the whole proposal (`row_slots.settle`).
-
     It does not invent a research link, a title, a headline or a price. A
     field that is simply not there is not something this package can mend.
     And it never cuts a headline: the bench trims a long one at a word and
@@ -2920,8 +2917,7 @@ def mend_the_small_proposal(
     if not isinstance(proposal, dict):
         return {}, []
     mended: list[str] = []
-    out, settled = row_slots.settle(dict(proposal))
-    mended.extend(settled)
+    out = dict(proposal)
     asked_now = out.get("finalist_questions")
     # A FLAT list only. `[[...]]` is the old whole-plan bid's shape -- one
     # group of four -- and it has a road of its own; reading it as a list of
@@ -4241,14 +4237,6 @@ class DraftLoop:
         }
         if fixed:
             out["bench_fixed"] = fixed
-        # A ROW SLOT THE DOOR REFUSED WAS DROPPED AND THE PROPOSAL WENT ONCE
-        # MORE WITHOUT IT (0.57.0); what was filed is what the run carries.
-        dropped = [slot for slot in (filed.get("row_slots_dropped") or []) if slot]
-        if dropped:
-            out["row_slots_dropped"] = dropped
-            out["proposal"] = {
-                key: value for key, value in proposal.items() if key not in dropped
-            }
         # CONTRACT 4.0.12: the filing door's 201 carries `trimmed`, every cut
         # it made ({path, from, to, from_chars, to_chars}, `to` is what was
         # stored). A trim is not a refusal: logged, carried, never retried.
@@ -4281,24 +4269,25 @@ class DraftLoop:
     def _the_row_slots(
         self, target_id: str, proposal: dict[str, Any], notes: list[str]
     ) -> dict[str, Any]:
-        """THE APPROACH WHOLE OR NOT AT ALL, and every note said (0.57.0).
+        """THE APPROACH FIRST (0.57.0), as the model wrote it (0.74.0).
 
-        The door takes one stop on each of the three dials or no approach at
-        all. A dial the model left out is filled from the agent's default when
-        the default has it; an approach still missing a dial is dropped rather
-        than sent half-filled, and with no approach at all the default is the
-        agent's own standing answer. Capabilities and the step estimate were
-        settled as they were read. Nothing here fails a proposal.
+        A proposal with no approach carries the agent's own default from
+        agent.yaml, when there is one; an approach the model wrote goes as
+        written, and the bench judges its words. Nothing here fails a
+        proposal or settles a spelling.
         """
-        approach, said = row_slots.complete_approach(
-            proposal.get("approach"), self.approach_default
-        )
+        approach = proposal.get("approach")
+        if not approach and self.approach_default:
+            approach = dict(self.approach_default)
+            self.log.info(
+                "proposal for target=%s: approach from the agent's default", target_id
+            )
         out = {key: value for key, value in proposal.items() if key != "approach"}
         if approach:
             # The approach goes FIRST on the wire too: it is what the rest
             # was written to follow.
             out = {"approach": approach, **out}
-        for note in [*notes, *said]:
+        for note in notes:
             self.log.info("proposal for target=%s: %s", target_id, note)
         return out
 

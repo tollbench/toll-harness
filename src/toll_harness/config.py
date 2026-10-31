@@ -36,11 +36,27 @@ from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.storage.secrets import FileSecretStore
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
-from toll_harness.toll_bench.row_slots import configured_approach
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
 from toll_harness.tools.web import BasicWebProvider
 
 _LOGGER = logging.getLogger("toll_harness.config")
+
+
+def approach_from_config(config: Any) -> dict[str, str] | None:
+    """agent.yaml `strategy.approach` ({risk, finish, path}, each optional),
+    exactly as written, or None. The bench reads its own dial words in any
+    case and refuses the wrong kind of thing itself; nothing is settled or
+    dropped here (0.74.0)."""
+    strategy = config.get("strategy") if isinstance(config, dict) else None
+    approach = strategy.get("approach") if isinstance(strategy, dict) else None
+    if not isinstance(approach, dict):
+        return None
+    out = {
+        str(dial): value.strip()
+        for dial, value in approach.items()
+        if isinstance(value, str) and value.strip()
+    }
+    return out or None
 
 DEFAULT_TOOLS = [
     "state.load",
@@ -485,11 +501,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         toll_bench_provider.cost_ledger = cost_ledger
         # 0.73.0: the brief a tool hands back is sized from the same window.
         toll_bench_provider.context_window_tokens = getattr(model, "context_window_tokens", None)
-    approach_default, approach_notes = configured_approach(config)
-    for note in approach_notes:
-        # A word that is not a stop is dropped and said, never a load error:
-        # the default is a starting point, and an agent without one still bids.
-        _LOGGER.warning("agent.yaml strategy: %s", note)
+    approach_default = approach_from_config(config)
     return RuntimeResources(
         runtime=runtime,
         store=store,
