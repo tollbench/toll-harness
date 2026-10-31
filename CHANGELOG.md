@@ -19,7 +19,82 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
-## [Unreleased]
+## 0.74.0 — The thin core, 2026-10-31
+
+What forced it: the heat logs of 2026-10-27 (lane 3 and the thinness audit). The harness had grown
+to 34,694 lines of source, most of it a second copy of bench law: a home mirror of the block and
+plan rules, three in-memory brakes beside the durable loop guard, whitelists that dropped keys the
+bench added, budgets set for a 131,072-token window, instruction sheets that restated the rules
+page, and a bid road that filed proposals the bench had already refused for free. The bench now
+says its own rules once; the harness reads them, acts, waits and connects. Source is 22,986 lines
+(-11,708); tests are 1048 passed, 2 skipped. A minor release because behavior changes.
+
+Nothing removed from the CLI, the agent.yaml keys or the tool names. Deprecated 2026-10-31, still
+accepted:
+
+- `email.send` (tool): a new email is the deal step's email act (`toll_bench.propose_act`); the
+  bench's send door answers CONTACTS_ACT_REQUIRED since contract 3.4, and the tool hands that
+  answer back. `BookOfHousesRestMailClient(pending_store=...)`, `configure_send_context()` and
+  `resume_pending_send()` are kept and do nothing.
+- `fleet.stall_threshold` (agent.yaml): unused; the loop guard is the one brake.
+- `fleet.proposal_limit_per_target` (agent.yaml) and the provider's `fleet_proposal_limit`
+  argument: unused; how many proposals a want takes is the bench's to say. New agent.yaml files no
+  longer write the key.
+- `python -m toll_harness.freshness` runs from a git checkout only (the check moved to
+  `scripts/freshness.py`; every documented caller runs from a checkout).
+
+Removed internal Python names (not part of the CLI, agent.yaml or the tool list): the modules
+`toll_harness.toll_bench.programs`, `toll_harness.toll_bench.row_slots` and
+`toll_harness.core.window`; the plan mirror in `toll_bench.blocks` (it keeps
+`split_provider`, `connector_words` and `published_template_steps`); the outline, one-row and
+home-repair roads in `toll_bench.draft`; `the_move`, `platform_move`, `render_earlier_steps` and
+the move tables in `toll_bench.step`; `onboarding.suggest_intelligence_brand` and
+`onboarding.intelligence_maker_for`; `fleet.ProposalReservation` and
+`FleetStore.reserve_proposal/confirm_proposal/release_reservation/proposal_count`; the provider's
+`platform_owned_block`, `earlier_steps_whole` and `brief_char_budget`. Kept for importers:
+`toll_harness.email.book_of_houses.BookOfHousesApiClient` (and every name that module exported),
+`read_whole_brief`, `model.context_window_tokens`, `strategy.approach`, `agent.own_means`, the
+`--approach-*` flags.
+
+- Changed (audit 1-8): the block mirror, the registry sentence pastes, the program shelf, the row
+  slot settler, the per-prompt budgets and shed orders, the take-off helpers, the outline road and
+  the one-row fix road are gone. The free validate door and the plan door judge; a refusal comes
+  back in the door's own words. The run's context budget follows the model's window (90,000 on
+  131,072, in proportion above it). Odds go to the bench as written.
+- Changed (9): the step ask is the bench's forms: one tool per `submission.actions` row, built at
+  run time from its endpoint, method and schema, plus `deliver_file`, the parked report and each
+  `sent_out` move. Whose move it is is `turn.whose_turn`; a step that is not the agent's turn
+  costs no model call.
+- Changed (10): one brake. The idle-step memo, the refusal brake, the circuit breaker and the
+  closed-want memo are gone; the durable loop guard counts three tries per work state. The bench's
+  refusal is kept beside the guard's count, rides the next try as `the_bench_refused`, and the
+  park report carries its sentence. A want a door closed for the round is marked reviewed.
+- Changed (11): `toll_bench.current_step` and the other reads pass the bench's answer through
+  whole; `list_proposals` keeps its one size cap (48,000 characters).
+- Added (12): `toll_bench.doors` and `toll_bench.call`, read from the bench's published contract
+  (`/agent-api.openapi.json`): every door it publishes, found and called with the agent's token;
+  unpublished and credential doors are never called. Every onboarded tool list and every agentic
+  road carries both, so the question, help, failed-step and skip-item doors are reachable. The
+  deal step road now carries `toll_bench.wait_outside`, `toll_bench.withdraw_act_declaration` and
+  `toll_bench.guide`, which its instruction named. A test holds every prompt's tool names to the
+  registry.
+- Changed (13): `BookOfHousesApiClient` lives in `toll_harness.toll_bench.api`. The parked-draft
+  email send and the inbound-email wake are gone (a reply owed on a deal reaches the agent on its
+  step).
+- Changed (14-17): the agentic road's instruction sheets say each thing once and point at
+  `toll_bench.guide`; `init` takes the intelligence brand as typed and asks no approach question
+  (the flags set it); the freshness check moved to `scripts/`; the fleet keeps only the
+  reviewed-wants memory.
+- Added (H3): a pass is an answer: `{"decline": "<one line>"}` goes to the bench's decline door
+  (contract 4.1.55) and the want is marked reviewed; a bench without the door keeps the local
+  record. The free validate door's rows ride one repair ask and only what passes is filed (no
+  "filing anyway"); an unreadable reply gets one more ask with the parser's words. A closed brief
+  (`bidding.state`, or contract 4.1.60's 200 with `brief: null`) ends the candidate with zero
+  model calls. A heat invitation is bid on that cycle, first. A bench 5xx never rides the next
+  ask as the model's failure. A tool call written as JSON text is read as the call. On a heat copy
+  the plan budget is `heat_filings`, and none left stops the writes.
+
+### Folded in from [Unreleased]: the freshness check
 
 What forced it: on 2026-10-26 a harness build started from a stale local copy at 0.68.0 while
 0.69.0-0.72.0 were already on PyPI, and named itself "0.69.0" (taken). Nothing caught it: PyPI
@@ -46,7 +121,7 @@ live agent with no check at all.
   drop-in that copies the unit's winning ExecStart onto the new venv's python, a restart, a wait
   for the first `attention -> 200` in the agent's market.log, and the one-line rollback.
   `--dry-run` changes nothing.
-- Nothing removed. No fields or calls deprecated.
+- (This part removed nothing and deprecated nothing.)
 
 ## 0.73.0 — The room follows the model's window, 2026-10-26
 
