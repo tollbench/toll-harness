@@ -24,7 +24,6 @@ Every reply below is REAL, captured off the bench's own code (tests/fixtures).
 """
 from __future__ import annotations
 
-import copy
 import json
 import logging
 
@@ -38,11 +37,9 @@ from toll_harness.toll_bench.draft import (
     fix_key,
     fixed_by,
     form_steps_of,
-    keys_to_take_off,
     problems_of,
     says_on_step,
     step_entry,
-    whole_step_path,
 )
 
 
@@ -274,165 +271,6 @@ def test_an_agent_row_beside_our_bug_is_still_the_agents_to_fix():
 
 
 # ---------------------------------------------------------------------------
-# 4. A KEY THE FORM HAS NO ROOM FOR IS TAKEN OFF
-# ---------------------------------------------------------------------------
-def test_an_unknown_step_field_is_removed_with_no_model_call():
-    answer = reply("unknown_fields")
-    unknown = row(answer, problem="unknown_field", slot="step")
-    door = Door({"ok": True, "ready": True})
-    model = _model()
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", only(answer, unknown),
-                                             "x")
-
-    assert model.invocations == []
-    assert len(door.patches) == 1
-    sent = door.patches[0][0]
-    assert sent["path"] == "form.steps.0"
-    assert "room_number" not in sent["value"]
-    # And nothing else on the step moved.
-    assert sent["value"]["do_line"] == answer["form"]["steps"][0]["do_line"]
-
-
-def test_an_unknown_key_inside_a_wait_condition_is_removed_in_place():
-    """Marcia's step 6 wrote `observation` and `condition` inside a wait
-    condition. The row names the CONTAINER on `slot` and the nearest patchable
-    path on `path`, so the fix lands on the wait, not on the whole step."""
-    answer = reply("unknown_fields")
-    unknown = row(answer, problem="unknown_field", slot="wait.conditions.0")
-    door = Door({"ok": True, "ready": True})
-    model = _model()
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", only(answer, unknown),
-                                             "x")
-
-    assert model.invocations == []
-    sent = door.patches[0][0]
-    assert sent["path"] == "form.steps.1.wait"
-    condition = sent["value"]["conditions"][0]
-    assert "observation" not in condition and "condition" not in condition
-    # What the form DOES read is still there, and so is the rest of the wait.
-    assert condition["source"] == "email_reply"
-    assert sent["value"]["days"] == 5
-
-
-def test_the_remover_reads_the_rows_own_accepted_list():
-    answer = reply("unknown_fields")
-    form = answer["form"]
-    keys, path, value = keys_to_take_off([row(answer, slot="step")], form)
-    assert keys == ["room_number"]
-    assert path == "form.steps.0"
-    assert "room_number" not in value
-    keys, path, value = keys_to_take_off(
-        [row(answer, slot="wait.conditions.0")], form)
-    assert keys == ["condition", "observation"]
-    assert path == "form.steps.1.wait"
-    # A row that is not about an unknown key is not this function's business.
-    assert keys_to_take_off([row(answer, codes=["forecast"])], form) is None
-    assert keys_to_take_off([{"problem": "unknown_field"}], form) is None
-    assert keys_to_take_off([], form) is None
-
-
-def test_only_the_keys_the_row_names_come_off():
-    """NEVER A SIBLING. The remover used to pop everything the container held
-    that was not on one row's accepted list, which is the same answer only
-    while one row is the whole story."""
-    answer = reply("unknown_fields")
-    step = answer["form"]["steps"][0]
-    kept = {name: value for name, value in step.items() if name != "room_number"}
-    keys, _path, value = keys_to_take_off([row(answer, slot="step")],
-                                          answer["form"])
-    assert keys == ["room_number"]
-    assert value == kept
-
-
-def test_a_container_left_empty_comes_off_instead_of_going_back_as_nothing():
-    """A wait condition stripped to `{}` reads as a condition with no source,
-    and the bench refuses the wait for it: "A planned wait needs days 1-365
-    and conditions"."""
-    answer = reply("unknown_fields")
-    form = copy.deepcopy(answer["form"])
-    # A condition whose ONLY keys are the ones the form has no room for.
-    form["steps"][1]["wait"]["conditions"][0] = {"observation": "they replied",
-                                                 "condition": "any reply"}
-    keys, path, value = keys_to_take_off(
-        [row(answer, slot="wait.conditions.0")], form)
-
-    assert keys == ["condition", "observation"]
-    assert path == "form.steps.1.wait"
-    # NOT `{}` ANYWHERE. The emptied condition came off, and the list it left
-    # empty came off with it; `days` is the agent's own and stays, which is a
-    # wait the bench still reads (`wait_monitor.planned` asks for days).
-    assert value == {"days": 5}
-    assert json.dumps(value).count("{}") == 0
-
-
-def test_two_unknown_keys_on_one_step_are_one_patch_and_one_round():
-    answer = reply("two_unknown_one_step")
-    rows = [entry for entry in problems_of(answer)
-            if entry["problem"] == "unknown_field"]
-    assert len(rows) == 2 and {entry["step"] for entry in rows} == {1}
-    door = Door({"ok": True, "ready": True})
-    model = _model()
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
-
-    assert model.invocations == []
-    assert len(door.patches) == 1 and len(door.patches[0]) == 1
-    sent = door.patches[0][0]
-    # Both rows answered at once, so the whole step goes back rather than a
-    # second patch built off a step the first already changed.
-    assert sent["path"] == "form.steps.0"
-    assert "room_number" not in sent["value"]
-    assert "observation" not in sent["value"]["wait"]["conditions"][0]
-    # And what the form DOES read is still there.
-    assert sent["value"]["wait"]["days"] == 5
-    assert sent["value"]["wait"]["conditions"][0]["source"] == "email_reply"
-    assert sent["value"]["do_line"] == answer["form"]["steps"][0]["do_line"]
-
-
-def test_the_keys_the_bench_names_outright_are_the_ones_taken_off():
-    """CONSTRUCTED, and labelled as such: the unknown-key rows that come off a
-    TOOL ARGUMENT carry `keys`, and no capture of one exists on this box --
-    the normalizer takes an argument the send does not have off the form
-    before the check sees it. The reader has to handle both kinds."""
-    answer = reply("email_step")
-    form = copy.deepcopy(answer["form"])
-    form["steps"][1]["tool"]["args"]["urgency"] = "high"
-    named = a_row("form.steps.1.tool.args", step=2, slot="urgency",
-                  problem="unknown_field", keys=["urgency"],
-                  say="Step 2: urgency is not something this action takes.")
-    named["slot"] = "tool.args"
-
-    keys, path, value = keys_to_take_off([named], form)
-
-    assert keys == ["urgency"]
-    assert path == "form.steps.1.tool.args"
-    assert "urgency" not in value
-    # The subject and body it was sitting beside are untouched.
-    assert set(value) == {"subject", "body"}
-
-
-def test_an_unknown_key_is_taken_off_even_when_the_door_points_elsewhere():
-    """It costs no model call, so waiting for the door to work down to it is
-    paying for a fix already in hand."""
-    answer = reply("unknown_fields")
-    assert answer["next_fix"]["problem"] == "unknown_field"
-    # Put the forecast row in front, the way the door would on another plan.
-    forecast = row(answer, codes=["forecast"])
-    unknown = row(answer, slot="step")
-    answer["problems"] = [forecast, unknown]
-    answer["next_fix"] = forecast
-    door = Door({"ok": True, "ready": True})
-    model = _model()
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
-
-    assert model.invocations == []
-    assert door.patches[0][0]["path"] == "form.steps.0"
-
-
-# ---------------------------------------------------------------------------
 # 5. SLOTS BEFORE WORDS
 # ---------------------------------------------------------------------------
 def test_the_slot_table_names_the_neutral_action():
@@ -449,69 +287,6 @@ def test_a_plain_step_says_it_has_no_slots():
     entry = step_entry(reply("clean"), 1)
     assert entry["slots"] == []
     assert entry["person_slot"] is None
-
-
-def test_the_patch_lands_on_the_slots_own_path_when_the_row_names_the_step():
-    """A row that names a slot and stops at the step is still about that one
-    slot: replacing a whole step to change one argument is how a fix round
-    loses the rest of the step."""
-    answer = reply("email_step")
-    answer["form_steps"][0]["person_slot"] = "who"
-    named = a_row("form.steps.1", step=2, slot="subject", problem="empty",
-                  say="Step 2: the subject is empty.")
-    loop = DraftLoop(None, Door())
-    assert loop._patch_path(answer, named) == "form.steps.1.tool.args.subject"
-    # A step with no slot table keeps the path the row gave for a name that
-    # is not one of the step's own fields.
-    plain = a_row("form.steps.0", step=1, slot="subject")
-    assert loop._patch_path(reply("clean"), plain) == "form.steps.0"
-    # A FIELD OF THE STEP ITSELF IS ITS OWN ADDRESS (0.55.3): the falling-odds
-    # row names `declared_odds` on the step's path, and it is one number.
-    own = a_row("form.steps.0", step=1, slot="do_line")
-    assert loop._patch_path(reply("clean"), own) == "form.steps.0.do_line"
-    odds = a_row(None, step=1, slot="declared_odds")
-    assert loop._patch_path(reply("clean"), odds) == "form.steps.0.declared_odds"
-
-
-# ---------------------------------------------------------------------------
-# 5b. NO PATH AT ALL MEANS THE STEP
-# ---------------------------------------------------------------------------
-def test_a_row_with_no_path_is_answered_by_sending_the_step_back():
-    """`path: null` says this row has no patchable address. It used to come
-    out as `""` and the model was asked to patch a path of nothing."""
-    loop = DraftLoop(None, Door())
-    nowhere = a_row("", step=2, slot=None, problem="not_allowed",
-                    say="Step 2 cannot stand as it is.")
-    assert nowhere["path"] is None
-    assert loop._patch_path(reply("email_step"), nowhere) == "form.steps.1"
-    # And that is the whole-step road: the step, not a line of it.
-    assert whole_step_path(loop._patch_path(reply("email_step"), nowhere)) == 1
-
-
-def test_a_row_with_no_path_and_no_step_has_nowhere_to_go():
-    loop = DraftLoop(None, Door())
-    assert loop._patch_path(reply("clean"), a_row("")) == ""
-
-
-def test_the_whole_step_goes_back_when_the_row_names_no_path():
-    answer = holes_written(reply("email_step"))
-    answer["form_steps"][0]["person_slot"] = "who"
-    nowhere = a_row("", step=2, slot=None, problem="not_allowed",
-                    say="Step 2 cannot stand as it is.")
-    answer = only(answer, nowhere)
-    door = Door({"ok": True, "ready": True})
-    whole = {"verb": "emails", "do_line": "Send the introduction",
-             "hand_over_line": "The sent message", "who": "agent"}
-    model = _model({"patches": [{"path": "form.steps.1", "value": whole}]})
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
-
-    ask = _said(model)
-    # The model is told it is the STEP, given every field of it and the two
-    # exits -- never asked to patch a path of nothing.
-    assert "TWO EXITS AND NO THIRD" in ask
-    assert '"path":""' not in ask and '"path": ""' not in ask
-    assert door.patches == [[{"path": "form.steps.1", "value": whole}]]
 
 
 # ---------------------------------------------------------------------------

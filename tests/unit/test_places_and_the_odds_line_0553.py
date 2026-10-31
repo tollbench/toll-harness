@@ -30,7 +30,6 @@ from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench.draft import (
     DraftLoop,
     accepted_of,
-    can_come_off,
     is_a_leaf_place,
     names_a_place,
     odds_line,
@@ -273,17 +272,6 @@ def _room_row(**extra):
                  say="Step 1: a room is not allowed on this step.", **extra)
 
 
-def test_a_key_that_may_not_be_there_comes_off_with_no_model_call():
-    answer = only(_plan([0.8], room="#general"), _room_row())
-    door = Door({"ok": True, "ready": True})
-    model = _model()
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
-
-    assert model.invocations == []
-    assert door.patches == [[{"path": "form.steps.0.room", "value": None}]]
-
-
 def test_a_key_with_something_accepted_is_asked_about_not_taken_off():
     answer = only(_plan([0.8], room="#general"), _room_row(accepted=["#summit"]))
     door = Door({"ok": True, "ready": True})
@@ -293,31 +281,6 @@ def test_a_key_with_something_accepted_is_asked_about_not_taken_off():
 
     assert "#summit" in _said(model)
     assert door.patches == [[{"path": "form.steps.0.room", "value": "#summit"}]]
-
-
-def test_a_key_the_step_cannot_stand_without_is_never_taken_off():
-    """Taking it off buys the same row back as `empty` and spends a try."""
-    answer = _plan()
-    for held in (FIRST_ROW, a_row("form.steps.0.do_line", step=1, problem="not_allowed")):
-        assert can_come_off(held, held["path"], answer) is False
-    assert can_come_off(_room_row(), "form.steps.0.room", _plan([0.8], room="#general"))
-    # Already blank: not blanked twice, the model is asked.
-    assert not can_come_off(_room_row(), "form.steps.0.room", _plan([0.8], room=None))
-
-
-def test_a_later_ask_about_a_key_taken_off_says_why():
-    answer = only(_plan([0.8], room="#general"), _room_row())
-    empty = only(_plan([0.8], room=None),
-                 a_row("form.steps.0.room", step=1, slot="room", problem="wrong_kind",
-                       say="Step 1: the room holds the wrong kind of thing."))
-    door = Door(empty, {"ok": True, "ready": True})
-    model = _model({"patches": [{"path": "form.steps.0.room", "value": "#summit"}]})
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
-
-    ask = _said(model)
-    assert "the_bench_had_this_taken_off" in ask
-    assert "a room is not allowed on this step" in ask
 
 
 # ---------------------------------------------------------------------------

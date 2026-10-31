@@ -5,9 +5,9 @@ about ONE red row, patched it, read the door again and asked about the next:
 thirteen model calls for one lab model's plan on 2026-10-22, while the door
 had already named every red row with its step and takes a whole form in one
 PUT. Each round now shows the model the whole form and the whole red list and
-files the whole answer. The three rows that need no model still go first, the
-brake is still the bench's own key counted across the run, and the older
-outline road keeps its one-row road.
+files the whole answer. Since 0.74.0 every row goes to the model, the brake
+is still the bench's own key counted across the run, and the older outline
+road keeps its one-row road.
 """
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from toll_harness.toll_bench.draft import (
     WHOLE_FORM_AGAIN,
     WHOLE_FORM_STILL_RED_INSTRUCTION,
     DraftLoop,
-    take_off_addresses,
 )
 
 
@@ -117,16 +116,12 @@ def test_every_red_row_rides_one_call_and_the_whole_form_goes_back_in_one_put():
     assert "REJ-77" not in ask and "REJ-01" not in ask
 
 
-def test_the_rows_that_need_no_model_still_go_first_and_cost_no_call():
+def test_rows_that_once_needed_no_model_ride_the_one_call_too():
+    """0.74.0: nothing is fixed without a model. An unknown key is a red row
+    like any other: it rides the one call with the door's own sentence, and
+    the whole form goes back in one PUT with no PATCH before it."""
     answer = reply("unknown_fields")
-    rest = [row for row in answer["problems"] if row["problem"] != "unknown_field"]
-    after_take_off = only(answer, *rest)
-    door = ScriptDoor(
-        only(answer, *[row for row in answer["problems"]
-                       if not (row["problem"] == "unknown_field" and row["step"] == 1)]),
-        after_take_off,
-        reply("clean"),
-    )
+    door = ScriptDoor(reply("clean"))
     held = copy.deepcopy(answer["form"])
     held["steps"][1]["declared_odds"] = 0.65  # the falling line, fixed
     model = _model({"form": held})
@@ -134,10 +129,12 @@ def test_the_rows_that_need_no_model_still_go_first_and_cost_no_call():
     out = _run(model, door, answer)
 
     assert out["filed"] is True, out
-    verbs = [call[0] for call in door.calls]
-    assert verbs == ["PATCH", "PATCH", "PUT", "FILE"]
+    assert [call[0] for call in door.calls] == ["PUT", "FILE"]
     assert len(model.invocations) == 1
-
+    ask = _asked(model, 0)
+    for row in answer["problems"]:
+        if row.get("who_fixes", "agent") == "agent" and row.get("say"):
+            assert row["say"] in ask
 
 def test_a_row_still_red_after_two_whole_forms_ends_the_draft():
     row = THREE_RED[0]
@@ -209,7 +206,9 @@ def test_the_plans_own_fields_alone_keep_every_step():
     assert len(sent["steps"]) == 2
 
 
-def test_who_a_message_goes_to_never_rides_the_whole_form():
+def test_the_whole_form_goes_back_exactly_as_the_model_wrote_it():
+    """0.74.0: nothing is taken off at home. An address the model wrote rides
+    the PUT, and the bench refuses it in its own words if it must."""
     standing = _standing(THREE_RED[2])
     door = ScriptDoor(reply("clean"))
     step = {"tool": {"name": "email.send", "on": "composio:gmail",
@@ -221,17 +220,7 @@ def test_who_a_message_goes_to_never_rides_the_whole_form():
 
     assert out["filed"] is True, out
     args = door.calls[0][1]["form"]["steps"][0]["tool"]["args"]
-    assert args == {"subject": "Hello", "body": "A short note."}
-
-
-def test_take_off_addresses_reads_a_list_of_calls_too():
-    form = {"steps": [{"tool": [{"name": "a", "args": {"to_number": "+1", "text": "hi"}},
-                                {"name": "b", "args": {"subject": "s"}}]}]}
-    kept, gone = take_off_addresses(form)
-    assert gone == ["form.steps.0.tool.0.args.to_number"]
-    assert kept["steps"][0]["tool"][0]["args"] == {"text": "hi"}
-    assert kept["steps"][0]["tool"][1]["args"] == {"subject": "s"}
-    assert form["steps"][0]["tool"][0]["args"]["to_number"] == "+1"  # a copy
+    assert args == step["tool"]["args"]
 
 
 def test_only_a_held_form_in_the_one_language_takes_the_whole_form():

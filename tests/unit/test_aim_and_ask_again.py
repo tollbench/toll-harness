@@ -23,32 +23,6 @@ _BLANKS = [
 ]
 
 
-def test_a_single_patch_for_the_wrong_path_is_filed_at_the_asked_path():
-    """Cindy, 2026-09-09: asked for steps.1.outcome_promise sixty rounds
-    running, answered steps.2.outcome_promise every time. (Here on a title,
-    because the fake bench's blanks would fill an outcome_promise first.)"""
-    bench = FakeDraftBench(cap=9)
-    bench.pending_fixes = [
-        a_row("steps.1.title", step=2, slot="title",
-              say="Step 2: say how the introduction is made.", codes=["REJ-34"])
-    ]
-    model = _model(
-        _OUTLINE,
-        *_BLANKS,
-        {"patches": [{"path": "steps.2.title", "value": "Send the introduction email"}]},
-    )
-    outcome = DraftLoop(model, bench).run(
-        "t-1", kind="plan", proposal_id="p-9",
-        brief={"want": "Connect two people"}, idempotency_key="k"
-    )
-    assert outcome["ok"] is True, outcome
-    # One patch, and it landed where the bench asked, not where the model aimed.
-    assert bench.patch_calls[-1] == [
-        {"path": "steps.1.title", "value": "Send the introduction email"}
-    ]
-    assert bench.filed is not None
-
-
 def test_two_patches_are_left_where_the_model_put_them():
     bench = FakeDraftBench(cap=6)
     bench.pending_fixes = [
@@ -110,17 +84,3 @@ def test_two_empty_answers_end_the_draft():
     assert len(model.invocations) == 6  # outline, three blanks, ask, ask again
 
 
-def test_a_parent_path_or_another_field_is_left_where_the_model_put_it():
-    """`finalist_questions` for `finalist_questions.0.0` is the whole list
-    coming back, which is right; `steps.0.title` for `steps.1.outcome_promise`
-    is another change altogether. Neither moves."""
-    bench = FakeDraftBench(cap=9)
-    loop = DraftLoop(_model(), bench)
-    whole = [{"path": "finalist_questions", "value": ["a", "b"]}]
-    assert loop._aim(whole, "finalist_questions.0.0", "bid", "t-1") == whole
-    other = [{"path": "steps.0.title", "value": "x"}]
-    assert loop._aim(other, "steps.1.outcome_promise", "bid", "t-1") == other
-    same_field = [{"path": "steps.2.outcome_promise", "value": "x"}]
-    assert loop._aim(same_field, "steps.1.outcome_promise", "bid", "t-1") == [
-        {"path": "steps.1.outcome_promise", "value": "x"}
-    ]
