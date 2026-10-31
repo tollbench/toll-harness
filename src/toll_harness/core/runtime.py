@@ -54,17 +54,9 @@ single_choice with two or more real options. The contact book is not a question:
 person picks who a message goes to on a step of the plan, after they have chosen you.
 The validate door is free and files nothing, so check the proposal there before filing
 and trust what it says over any check this harness runs at home (rule 243, REJ-15).
-FIND THE NEAREST PROGRAM, THEN CHANGE WHAT DIFFERS. The brief carries ONE worked program in full
-and an INDEX of the others: `nearest_program` is the pick, a COMPLETE proposal that already passes
-the validate door, with one sentence in `program_to_copy`, and `plan_examples` is the index (key,
-title, wants_like, steps, approx_tokens) of everything else on the shelf. Do not compose a plan
-out of parts and do not go looking for another program: copy `nearest_program.proposal` WHOLE,
-change only what THIS want makes different (the words, the recipient, the numbers), keep its shape
-(its steps, its acts, its `connect_account` rows, its question formats), then compile it at the
-validate door and file once. The door answers at most THREE times on one want; if it still refuses
-after that, file nothing on this want. A plan that shares
-no shape with any of the programs is a plan nobody has ever run.
-A program's work is a `calls` act: {"kind": "calls", "title": ..., "drafts": {name: your words},
+Compile a proposal at the validate door and file once. The door answers at most THREE times on
+one want; if it still refuses after that, file nothing on this want.
+A plan's work is a `calls` act: {"kind": "calls", "title": ..., "drafts": {name: your words},
 "runs": [...]}. A RUN IS EITHER A CALL OR A WAIT, never both. A call names a `tool` (a registry
 verb, `composio:<service>/<TOOL>`, `key:<service>/<action>`, `mcp:<server>/<tool>`, or
 platform.notify | platform.draft | platform.contact | platform.research), the `row` -- THE ID of

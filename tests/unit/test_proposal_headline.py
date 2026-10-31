@@ -24,7 +24,6 @@ from tests.unit.test_two_stages_r243_r245 import (
     _DoorApi,
     _FilingBench,
 )
-from toll_harness.toll_bench import programs
 from toll_harness.toll_bench.book_of_houses import (
     _is_a_missing_field,
 )
@@ -104,10 +103,6 @@ def test_the_old_road_tool_description_names_the_headline():
     )
     assert "headline is REQUIRED" in submit.description
     assert "up to 40 characters" in submit.description
-
-
-def test_the_headline_is_a_word_the_program_diff_expects_to_change():
-    assert "headline" in programs.EXPECTED_TO_CHANGE
 
 
 # ---------------------------------------------------------------------------

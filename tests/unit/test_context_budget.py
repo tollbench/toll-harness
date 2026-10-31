@@ -33,7 +33,6 @@ from toll_harness.core.types import (
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
-from toll_harness.toll_bench import programs
 from toll_harness.toll_bench.book_of_houses import (
     BRIEF_CHAR_BUDGET,
     MAX_VALIDATE_ATTEMPTS,
@@ -251,75 +250,6 @@ class BriefApi:
 
     def proposal_schema(self):
         return {"type": "object"}
-
-
-def test_the_brief_carries_one_program_and_an_index_of_the_rest():
-    api = BriefApi(_brief())
-    brief = BookOfHousesTollBenchProvider(api).read_brief("t-1")["brief"]
-
-    index = brief["plan_examples"]
-    assert len(index) == 12
-    assert sorted(index[0]) == ["approx_tokens", "key", "steps", "title", "wants_like"]
-    # Exactly one proposal is inline, and it is the pick.
-    assert not any("proposal" in row for row in index)
-    assert brief["nearest_program"]["key"] == "04"
-    assert brief["nearest_program"]["proposal"]["steps"][0]["title"] == "Step of 4"
-    assert "Copy its proposal WHOLE" in brief["program_to_copy"]
-    assert brief["program_shelf"] == programs.SHELF_SENTENCE
-
-
-def test_the_benchs_own_pick_wins_and_is_never_overwritten():
-    """W15's bench (contract 3.8) chooses server-side and publishes `why` as an
-    object. The local scorer must not overwrite that pick with its own -- or,
-    over an index with no proposals, with None."""
-    served = {
-        "key": "09",
-        "title": "The bench's pick",
-        "why": {"score": 6, "shared_words": ["email"], "sentence": "Copy its proposal WHOLE."},
-        "proposal": _proposal("The bench's step"),
-    }
-    api = BriefApi(_brief(nearest_program=served))
-    brief = BookOfHousesTollBenchProvider(api).read_brief("t-1")["brief"]
-
-    assert brief["nearest_program"]["key"] == "09"
-    assert brief["program_to_copy"] == "Copy its proposal WHOLE."
-    assert api.fetched == []
-
-
-def test_an_index_only_brief_fetches_the_chosen_program_by_key():
-    """The slim bench sends the index and no proposals. The pick is scored over
-    the index and the winner is fetched -- one program, never twelve."""
-    index = [
-        {"key": "01", "title": "Buy a thing", "wants_like": ["buy me"], "steps": 3,
-         "approx_tokens": 900},
-        {"key": "04", "title": "Send an email", "wants_like": ["send an email to somebody"],
-         "steps": 2, "approx_tokens": 800, "url": "/api/bench/plan-examples/04"},
-    ]
-    api = BriefApi(
-        _brief(plan_examples=index, nearest_program=None),
-        program={"key": "04", "title": "Send an email", "proposal": _proposal("Send it")},
-    )
-    brief = BookOfHousesTollBenchProvider(api).read_brief("t-1")["brief"]
-
-    assert api.fetched == ["04"]
-    assert brief["nearest_program"]["proposal"]["steps"][0]["title"] == "Send it"
-    assert brief["plan_examples"][1]["url"] == "/api/bench/plan-examples/04"
-    assert brief["plan_examples"][1]["steps"] == 2
-
-
-def test_a_program_that_cannot_be_fetched_is_never_a_failed_read():
-    api = BriefApi(
-        _brief(
-            plan_examples=[{"key": "04", "title": "Send an email",
-                            "wants_like": ["send an email to somebody"], "steps": 2}],
-            nearest_program=None,
-        ),
-        program=None,
-    )
-    brief = BookOfHousesTollBenchProvider(api).read_brief("t-1")["brief"]
-    assert brief["nearest_program"]["key"] == "04"
-    assert brief["nearest_program"].get("proposal") is None
-    assert brief["program_to_copy"]
 
 
 def test_a_brief_over_the_budget_sheds_its_own_copies_of_itself():

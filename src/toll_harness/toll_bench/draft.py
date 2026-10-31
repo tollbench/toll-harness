@@ -96,7 +96,7 @@ from toll_harness.models.base import (
     was_cut_off,
     what_came_back,
 )
-from toll_harness.toll_bench import programs, row_slots
+from toll_harness.toll_bench import row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
 
@@ -2054,6 +2054,38 @@ def _families(tools: Any, index: Any) -> set[str]:
     return {_family_of(str(tool), index) for tool in tools if tool}
 
 
+_WORD = re.compile(r"[a-z0-9]+")
+# Words that carry no want in them; short on purpose (a tie-breaker, not a
+# search engine).
+_STOPWORDS: frozenset[str] = frozenset(
+    """
+    a an the and or but for to of in on at by with from into over under is am
+    are was were be been being do does did doing have has had having i me my
+    we our you your they them their it its this that these those as if then
+    than so not no nor can will would should could want wants wanted need
+    needs get gets got make makes made help please someone something anything
+    about up out down off just very much more most some any all one two
+    """.split()
+)
+
+
+def _want_words(value: Any) -> set[str]:
+    """The meaningful words of anything, as a set."""
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple)):
+        found: set[str] = set()
+        for item in value:
+            found |= _want_words(item)
+        return found
+    text = value if isinstance(value, str) else str(value)
+    return {
+        word
+        for word in _WORD.findall(text.lower())
+        if len(word) > 2 and word not in _STOPWORDS
+    }
+
+
 def families_the_want_needs(brief: Any) -> set[str]:
     """The tool families this want reads like it needs.
 
@@ -2063,7 +2095,7 @@ def families_the_want_needs(brief: Any) -> set[str]:
     """
     if not isinstance(brief, dict):
         return set()
-    asked = programs._tokens(
+    asked = _want_words(
         [brief.get("want"), brief.get("want_in_own_words")]
     )
     if not asked:
@@ -2075,7 +2107,7 @@ def families_the_want_needs(brief: Any) -> set[str]:
         family = str(row.get("family") or "")
         if not family or "<" in family:
             continue
-        words = programs._tokens([family, row.get("tool"), row.get("one_line")])
+        words = _want_words([family, row.get("tool"), row.get("one_line")])
         if asked & words:
             found.add(family)
     return found
@@ -2123,10 +2155,10 @@ def score_win(win: Any, brief: Any, wanted_families: set[str] | None = None) -> 
         families_the_want_needs(brief) if wanted_families is None else wanted_families
     )
     mine = _families(_plan_tools(win), index)
-    asked = programs._tokens(
+    asked = _want_words(
         [(brief or {}).get("want"), (brief or {}).get("want_in_own_words")]
     )
-    theirs = programs._tokens(
+    theirs = _want_words(
         [win.get("want"), win.get("pitch_title"), win.get("finish_line")]
     )
     return FAMILY_WEIGHT * len(wanted & mine) + WORD_WEIGHT * len(asked & theirs)

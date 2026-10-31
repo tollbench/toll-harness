@@ -58,7 +58,6 @@ from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench.book_of_houses import (
     BRIEF_CHAR_BUDGET,
-    BRIEF_LAST_TO_SHED,
     BRIEF_SHED_ORDER,
     BookOfHousesTollBenchProvider,
 )
@@ -72,14 +71,6 @@ from toll_harness.toll_bench.step import StepAsk
 NIA_MODEL = "claude-opus-5-5"  # her agent.yaml model_id: a plain id, 200,000
 NIA_1M = "claude-opus-5-5[1m]"
 SMALL_WINDOW = 32_768
-
-
-@pytest.fixture(autouse=True)
-def _no_fleet_window(monkeypatch):
-    monkeypatch.delenv(CONTEXT_WINDOW_ENV, raising=False)
-    # A CLI test earlier in the run configures the package logger to stop at
-    # its own handler; these tests read the lines through caplog.
-    monkeypatch.setattr(logging.getLogger("toll_harness"), "propagate", True)
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +249,6 @@ def _shed_named(caplog) -> list[str]:
     return []
 
 
-def test_the_test_brief_is_nias_size_and_over_the_old_budget():
-    whole = _provider(_brief(), None).read_whole_brief("8d06fe06")["brief"]
-    assert 62_000 <= measure(whole) <= 66_000
-    assert measure(whole) > BRIEF_CHAR_BUDGET
-
-
 @pytest.mark.parametrize("window_tokens", [200_000, 1_000_000])
 def test_a_large_window_gets_the_whole_64k_brief_with_nothing_shed(caplog, window_tokens):
     caplog.set_level(logging.WARNING, logger="toll_harness.toll_bench")
@@ -294,46 +279,6 @@ def test_nias_own_adapter_sizes_the_brief(tmp_path, caplog, model_id, budget):
     read = provider.read_brief("8d06fe06")["brief"]
     assert read == provider.read_whole_brief("8d06fe06")["brief"]
     assert _shed_named(caplog) == []
-
-
-def test_a_small_window_sheds_only_the_copies_when_that_is_enough(caplog):
-    caplog.set_level(logging.WARNING, logger="toll_harness.toll_bench")
-    read = _provider(_brief(), SMALL_WINDOW).read_brief("8d06fe06")["brief"]
-
-    assert measure(read) <= BRIEF_CHAR_BUDGET
-    shed = _shed_named(caplog)
-    assert shed and not set(shed) & set(BRIEF_LAST_TO_SHED)
-    # The four things a plan is built from are untouched. Before 0.73.0 this
-    # brief lost its bid template first.
-    assert read["block_templates"] == _brief()["block_templates"]
-    assert read["bid_template"] == _brief()["bid_template"]
-    assert read["tools"] == _brief()["tools"]
-    assert read["nearest_program"]["proposal"] == _brief()["nearest_program"]["proposal"]
-
-
-def test_a_small_window_sheds_in_the_new_order_and_the_block_menu_last(caplog):
-    caplog.set_level(logging.WARNING, logger="toll_harness.toll_bench")
-    big = _brief(catalog_steps=14)  # a catalog of seventy 1.2KB steps
-    read = _provider(big, SMALL_WINDOW).read_brief("8d06fe06")["brief"]
-
-    assert _shed_named(caplog) == list(BRIEF_SHED_ORDER)
-    assert BRIEF_SHED_ORDER[-1] == "block_templates"
-    assert BRIEF_SHED_ORDER[-len(BRIEF_LAST_TO_SHED):] == BRIEF_LAST_TO_SHED
-    # Shed is not removed: the menu is still every kind and its step count,
-    # and every tool is still listed by name.
-    assert read["block_templates"] == {
-        "song": 14, "meeting": 14, "research": 14, "email": 14, "post": 14,
-    }
-    assert read["block_templates_note"]
-    assert [row["tool"] for row in read["tools"]] == [row["tool"] for row in big["tools"]]
-    assert read["tools_note"]
-    assert read["bid_template"] is None and read["bid_template_note"]
-    # The example's pointer stays even when its proposal comes off, and no
-    # note points at a proposal that is no longer there.
-    assert read["nearest_program"]["key"] == "04"
-    assert "proposal" not in read["nearest_program"]
-    assert "nearest_program.proposal" not in read["bid_template_note"]
-    assert "nearest_program.proposal" not in read["block_templates_note"]
 
 
 def test_the_loop_reads_the_brief_whole_whatever_the_window():

@@ -11,7 +11,7 @@ from toll_harness.core.budget import measure
 from toll_harness.core.window import room
 from toll_harness.email.book_of_houses import BookOfHousesApiClient, BookOfHousesApiError
 from toll_harness.fleet import FleetStore
-from toll_harness.toll_bench import blocks, draft, programs, row_slots
+from toll_harness.toll_bench import blocks, draft, row_slots
 from toll_harness.toll_bench.step import (
     EARLIER_STEPS_KEY,
     LAST_FILING_KEY,
@@ -213,13 +213,9 @@ BRIEF_CHAR_BUDGET = 60_000
 # plan written blind. Before 0.73.0 the bid template went first and the block
 # menu second, and nothing else ever came off.
 BRIEF_SHED_ORDER: tuple[str, ...] = (
-    # An index of the other worked programs; the bench serves them by key.
-    "plan_examples",
     # The public outcome of every earlier deal on this want, whole;
     # `prior_attempts` is the summary of the same deals and stays.
     "past_attempts",
-    # THE EXAMPLE: its proposal comes off, its key and title stay.
-    "nearest_program",
     # `plan_template` inside the whole bid; `bid_template_notes` names every
     # blank it carries.
     "bid_template",
@@ -229,7 +225,7 @@ BRIEF_SHED_ORDER: tuple[str, ...] = (
     "block_templates",
 )
 BRIEF_LAST_TO_SHED: tuple[str, ...] = (
-    "nearest_program", "bid_template", "tools", "block_templates",
+    "bid_template", "tools", "block_templates",
 )
 # THE DOOR LOOP. Three answers is a compile, four is a loop: on 2026-09-09 a
 # run called the validate door fourteen times in three minutes, never filed,
@@ -420,11 +416,9 @@ class BookOfHousesTollBenchProvider:
         # server's, plus anything this process filed through deliver_file --
         # so current_step can show them even when the bench's read omits them.
         self._step_receipts: dict[str, list[dict[str, Any]]] = {}
-        # 0.34.0. The shelf: programs fetched by key and remembered, the
-        # validate door's attempt count per want, and the last problems it
-        # named there -- so the fourth call answers honestly instead of
-        # spending another round trip on the same refusal.
-        self._plan_example_cache: dict[str, dict[str, Any]] = {}
+        # 0.34.0. The validate door's attempt count per want, and the last
+        # problems it named there -- so the fourth call answers honestly
+        # instead of spending another round trip on the same refusal.
         self._validate_attempts: dict[str, int] = {}
         self._last_door_problems: dict[str, dict[str, Any]] = {}
         # 0.62.0. An earlier step's approved hand-back, whole, by receipt id:
@@ -609,14 +603,6 @@ class BookOfHousesTollBenchProvider:
             brief["person_already_connected"] = blocks.connected_sentence(
                 brief.get("person_connected")
             )
-            # PROGRAM FIRST (Steven, 2026-09-09), ONE PROGRAM (2026-09-09,
-            # the evening). Twelve worked programs on a brief are twelve
-            # things to read and nothing to do -- and about 19,000 tokens of
-            # a 131,072-token window, which is how four agents died inside
-            # the provider the same day. The pick is made here or taken from
-            # the bench, it rides the brief in full, and the other eleven are
-            # an INDEX. Always present, None when nothing overlaps this want.
-            self._shelve_the_programs(brief)
             if fit:
                 self._fit_the_brief(target_id, brief)
         return response
@@ -672,85 +658,6 @@ class BookOfHousesTollBenchProvider:
     def paid_pack_handoff(self, order_id: str, receipt_id: str) -> dict[str, Any]:
         return self.api.paid_pack_handoff(order_id, receipt_id)
 
-    def _plan_example(self, key: Any) -> dict[str, Any] | None:
-        """One worked program, by key, or None.
-
-        The route is contract 3.8 (`GET /api/bench/plan-examples/<key>`). An
-        older bench, an older client or a bad key all answer None and the
-        caller keeps whatever the brief already gave it: reading a program is
-        never worth a failed run. Fetched once per process and remembered.
-        """
-        key = str(key or "")
-        if not key:
-            return None
-        if key in self._plan_example_cache:
-            return self._plan_example_cache[key]
-        fetch = getattr(self.api, "plan_example", None)
-        program: dict[str, Any] | None = None
-        if callable(fetch):
-            try:
-                response = fetch(key)
-            except Exception as error:  # noqa: BLE001 - a missing shelf is not a failure
-                _LOGGER.warning("Plan example %s could not be read (%s)", key, error)
-                response = None
-            if isinstance(response, dict):
-                candidate: Any = response
-                for holder in ("plan_example", "program", "example"):
-                    if isinstance(response.get(holder), dict):
-                        candidate = response[holder]
-                        break
-                if isinstance(candidate, dict) and isinstance(candidate.get("proposal"), dict):
-                    program = candidate
-        if program is not None:
-            self._plan_example_cache[key] = program
-        return program
-
-    def _shelve_the_programs(self, brief: dict[str, Any]) -> None:
-        """One program in full, the rest as an index. Both always present.
-
-        The bench's own `nearest_program` wins when it publishes one -- it
-        reads the want with more than token overlap -- and this package picks
-        only when it does not. Either way exactly ONE program is inlined; a
-        pick whose proposal has to be fetched is fetched by key.
-        """
-        examples = brief.get("plan_examples")
-        pick = brief.get("nearest_program")
-        if not isinstance(pick, dict) or not pick.get("key"):
-            pick = programs.nearest_program(brief)
-        if isinstance(pick, dict) and not isinstance(pick.get("proposal"), dict):
-            fetched = self._plan_example(pick.get("key"))
-            if fetched is not None:
-                pick = {
-                    **pick,
-                    "title": pick.get("title") or fetched.get("title"),
-                    "wants_like": pick.get("wants_like") or fetched.get("wants_like"),
-                    "proposal": fetched.get("proposal"),
-                }
-            else:
-                _LOGGER.warning(
-                    "Program %s is the nearest to this want and its proposal "
-                    "could not be read; the brief carries the pick without it",
-                    pick.get("key"),
-                )
-        brief["nearest_program"] = pick if isinstance(pick, dict) else None
-        brief["program_to_copy"] = programs.program_sentence(brief["nearest_program"])
-        index = programs.program_index(examples)
-        if not index:
-            return
-        before = programs.approx_tokens(examples)
-        brief["plan_examples"] = index
-        brief["program_shelf"] = programs.SHELF_SENTENCE
-        after = programs.approx_tokens(index) + programs.approx_tokens(
-            brief["nearest_program"]
-        )
-        _LOGGER.info(
-            "Brief shelf: %d programs indexed, %s inline; ~%d tokens instead of ~%d",
-            len(index),
-            (brief["nearest_program"] or {}).get("key") or "none",
-            after,
-            before,
-        )
-
     def brief_char_budget(self) -> int:
         """The characters a brief may run to on this model's window (0.73.0)."""
         return room(BRIEF_CHAR_BUDGET, self.context_window_tokens)
@@ -789,15 +696,6 @@ class BookOfHousesTollBenchProvider:
     def _shed_from_brief(brief: dict[str, Any], name: str) -> bool:
         """Take one thing off the brief, leaving a note. True when it did."""
         value = brief.get(name)
-        if name == "plan_examples":
-            if not value:
-                return False
-            brief["plan_examples"] = None
-            brief["program_shelf"] = (
-                "The index of worked programs was left off this brief to fit "
-                "the model's window; GET /api/bench/plan-examples lists them."
-            )
-            return True
         if name == "past_attempts":
             if not isinstance(value, list) or not value:
                 return False
@@ -808,33 +706,14 @@ class BookOfHousesTollBenchProvider:
                 "same deals."
             )
             return True
-        if name == "nearest_program":
-            if not isinstance(value, dict) or not isinstance(value.get("proposal"), dict):
-                return False
-            brief["nearest_program"] = {
-                key: item for key, item in value.items() if key != "proposal"
-            }
-            brief["nearest_program_note"] = (
-                "The worked program's own proposal was left off this brief to fit "
-                "the model's window; its key is above and the bench serves it at "
-                "GET /api/bench/plan-examples/<key>."
-            )
-            return True
         if name == "bid_template":
             if not isinstance(value, (dict, list)):
                 return False
             brief["bid_template"] = None
-            example = brief.get("nearest_program")
-            copy_from = (
-                " `nearest_program.proposal` is a filled bid of the same shape -- "
-                "copy that."
-                if isinstance(example, dict) and isinstance(example.get("proposal"), dict)
-                else " The harness still reads the real template when it files."
-            )
             brief["bid_template_note"] = (
                 "The whole-bid template was left off this brief to fit the "
                 "model's window. `bid_template_notes` names every blank it "
-                "carries." + copy_from
+                "carries."
             )
             return True
         if name == "tools":
@@ -859,18 +738,10 @@ class BookOfHousesTollBenchProvider:
                 str(kind): (len(steps) if isinstance(steps, list) else 1)
                 for kind, steps in value.items()
             }
-            example = brief.get("nearest_program")
-            pull_from = (
-                " The block this want needs is already written out inside "
-                "`nearest_program.proposal`: pull it from there, in full and in "
-                "its order (rule 236)."
-                if isinstance(example, dict) and isinstance(example.get("proposal"), dict)
-                else ""
-            )
             brief["block_templates_note"] = (
                 "The block catalog was too big to hand over whole on this "
                 "model's window, so this is the kinds it holds and how many "
-                "steps each block is." + pull_from
+                "steps each block is."
             )
             return True
         return False
@@ -1073,25 +944,6 @@ class BookOfHousesTollBenchProvider:
         if error.plan_template:
             payload["plan_template"] = error.plan_template
         return payload
-
-    def _log_program_diff(
-        self, target_id: str, proposal: dict[str, Any], brief: Any
-    ) -> dict[str, Any] | None:
-        """One line saying whether this filing copied a program or composed one."""
-        pick = brief.get("nearest_program") if isinstance(brief, dict) else None
-        if pick is None:
-            pick = programs.nearest_program(brief)
-        if not pick:
-            return None
-        diff = programs.diff_from_program(proposal, pick)
-        _LOGGER.info(
-            "Target %s filed against %s -- %s | %s",
-            target_id,
-            pick.get("key"),
-            diff["line"],
-            programs.diff_json(diff),
-        )
-        return diff
 
     def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
         """What the platform is running on this step, or None.

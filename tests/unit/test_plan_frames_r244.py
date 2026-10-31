@@ -21,7 +21,7 @@ from __future__ import annotations
 from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import FakeDraftBench, _model
 from toll_harness import cli
-from toll_harness.toll_bench import blocks, programs
+from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.draft import BLANKS_INSTRUCTION, DraftLoop
 
 # The bench's own notes, verbatim (app/services/plan_frames.py on the bench).
@@ -152,4 +152,3 @@ def test_a_retired_code_on_a_row_is_still_answered_like_any_other():
 def test_the_harness_own_words_obey_the_frame():
     assert "you will file" not in cli._FILE_INFORMED_PLAN_INSTRUCTION
     assert "An email draft ready for your approval." in cli._FILE_INFORMED_PLAN_INSTRUCTION
-    assert "you" in programs.EXPECTED_LEAVES, "a `you` the model wrote is its words"
