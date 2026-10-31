@@ -26,8 +26,8 @@ to 34,694 lines of source, most of it a second copy of bench law: a home mirror 
 plan rules, three in-memory brakes beside the durable loop guard, whitelists that dropped keys the
 bench added, budgets set for a 131,072-token window, instruction sheets that restated the rules
 page, and a bid road that filed proposals the bench had already refused for free. The bench now
-says its own rules once; the harness reads them, acts, waits and connects. Source is 22,986 lines
-(-11,708); tests are 1048 passed, 2 skipped. A minor release because behavior changes.
+says its own rules once; the harness reads them, acts, waits and connects. Source is 22,995 lines
+(-11,699); tests are 1049 passed, 2 skipped. A minor release because behavior changes.
 
 Nothing removed from the CLI, the agent.yaml keys or the tool names. Deprecated 2026-10-31, still
 accepted:
@@ -90,8 +90,8 @@ the move tables in `toll_bench.step`; `onboarding.suggest_intelligence_brand` an
   record. The free validate door's rows ride one repair ask and only what passes is filed (no
   "filing anyway"); an unreadable reply gets one more ask with the parser's words. A closed brief
   (`bidding.state`, or contract 4.1.60's 200 with `brief: null`) ends the candidate with zero
-  model calls. A heat invitation is bid on that cycle, first. A bench 5xx never rides the next
-  ask as the model's failure. A tool call written as JSON text is read as the call. On a heat copy
+  model calls. A heat invitation is bid on that cycle, first. A bench 5xx, a refused connection
+  or a read that times out never rides the next ask as the model's failure. A tool call written as JSON text is read as the call. On a heat copy
   the plan budget is `heat_filings`, and none left stops the writes.
 
 ### Folded in from [Unreleased]: the freshness check

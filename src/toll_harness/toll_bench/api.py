@@ -291,6 +291,15 @@ class BookOfHousesApiClient:
             _DOOR_LOG.warning("%s", door_line(method, path, 0, 0,
                                               {"error": "connection_error"}, kind))
             raise BookOfHousesApiError(0, "connection_error", str(error.reason)) from None
+        except TimeoutError:
+            # A read that times out is the bench not answering, like a refused
+            # connection (0.74.0): status 0, so the watch backs off and no
+            # blame line rides the next ask. Found on the 0.74.0 smoke: a /me
+            # read past 20 seconds escaped as a raw TimeoutError.
+            _DOOR_LOG.warning("%s", door_line(method, path, 0, 0,
+                                              {"error": "connection_error"}, kind))
+            raise BookOfHousesApiError(0, "connection_error", "the bench did not answer in "
+                                       f"{self.timeout_seconds} seconds") from None
 
     def _request_text(self, path: str) -> str:
         request = urllib.request.Request(

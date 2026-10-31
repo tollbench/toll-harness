@@ -191,3 +191,22 @@ def test_a_heat_copys_plan_filings_are_the_budget_and_none_left_stops_writes():
     assert heat_filings_of(heat) == {"used": 3, "left": 0, "cap": 3}
     assert _spent(heat) is True
     assert _spent({"heat_filings": None, "rounds": {"left": 5}}) is False
+
+
+def test_a_read_that_times_out_is_the_bench_not_answering(monkeypatch):
+    import urllib.request
+
+    from toll_harness.toll_bench.api import BookOfHousesApiClient
+
+    def slow(*_args, **_kwargs):
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    client = BookOfHousesApiClient(base_url="https://bench.test", token="t", timeout_seconds=7)
+    try:
+        client.me()
+    except BookOfHousesApiError as error:
+        assert error.status == 0 and error.code == "connection_error"
+        assert "7 seconds" in error.message
+    else:
+        raise AssertionError("a timeout must surface as the bench not answering")
