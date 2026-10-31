@@ -21,7 +21,7 @@ from __future__ import annotations
 from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import FakeDraftBench, _model
 from toll_harness import cli
-from toll_harness.toll_bench import blocks, book_of_houses, programs
+from toll_harness.toll_bench import blocks, programs
 from toll_harness.toll_bench.draft import BLANKS_INSTRUCTION, DraftLoop
 
 # The bench's own notes, verbatim (app/services/plan_frames.py on the bench).
@@ -116,7 +116,6 @@ def test_the_two_retired_codes_are_not_anticipated_anywhere():
 
     from toll_harness.toll_bench import draft
 
-    assert blocks.REJ_FRAME == "REJ-44" == book_of_houses.REJ_FRAME
     # Nothing in the draft loop reads either code.
     source = inspect.getsource(draft)
     assert "REJ-44" not in source and "REJ-12" not in source

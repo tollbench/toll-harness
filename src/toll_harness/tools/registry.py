@@ -20,7 +20,7 @@ from toll_harness.browser.base import BrowserProvider
 from toll_harness.core.types import JsonObject, RunStatus, ToolDefinition, ToolResult
 from toll_harness.email.base import EmailProvider
 from toll_harness.storage.base import ArtifactStore, EventStore, SecretStore, StateStore
-from toll_harness.toll_bench import blocks, programs
+from toll_harness.toll_bench import programs
 from toll_harness.toll_bench.base import TollBenchProvider
 from toll_harness.tools import sniff as sniffer
 from toll_harness.tools.web import NoRedirectHandler, WebProvider, _validate_public_url
@@ -1019,10 +1019,6 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "approx_tokens). Copy the one that rides the brief; a program the "
                 "run will not copy is a program it does not need to read. "
                 + programs.PROGRAM_FIRST_SENTENCE
-                + " "
-                + blocks.ARGUMENT_PROVENANCE_SENTENCE
-                + " "
-                + blocks.CONTACT_RESEARCH_SENTENCE
                 + " THE BRIEF CARRIES A FORM, NOT A PLAN (contract 3.0, rule 228 "
                 "amended). plan_template is a blank SKELETON: the fewest steps this band "
                 "allows, mechanics filled, every agent-owned field an explicit \"\" or "
@@ -1036,9 +1032,7 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "them in for you. required_blocks is [] on this contract and [] means "
                 "YOU decide which blocks the want needs; an older bench may name a kind, "
                 "and then the plan must declare it or be refused REJ-32. Pull a block "
-                "from block_templates IN FULL and in its order (rule 236). "
-                + blocks.CONNECTION_IN_THE_ACTION_SENTENCE
-                + " A block whose connection nothing on its step opens is refused REJ-35."
+                "from block_templates IN FULL and in its order (rule 236)."
             ),
             _object_schema({"target_id": {"type": "string"}}, ["target_id"]),
         ),
@@ -1381,8 +1375,9 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 "add up) and toll_bench.submit_proposal files that corrected plan "
                 "for you -- so submit, do not ask for it back. NO WORDS ARE EVER "
                 "INVENTED: a blank title, promise, option or message stays blank "
-                "and comes back as its own problem. Without target_id, or against "
-                "an older bench, this is the offline mirror of the schema only."
+                "and comes back as its own problem. Pass target_id: without it, or "
+                "against a bench with no validate door, nothing is checked here and "
+                "the filing door is the judge."
             ),
             _object_schema(
                 {"proposal": {"type": "object"}, "target_id": {"type": "string"}},
@@ -1412,24 +1407,12 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             (
                 "File one final sealed proposal. "
                 + programs.PROGRAM_FIRST_SENTENCE
-                + " "
-                + blocks.ARGUMENT_PROVENANCE_SENTENCE
                 + " Read the live protocol and brief, then "
                 "validate the exact proposal first with toll_bench.validate_proposal and "
                 "this target_id -- that door is free, files nothing and lists every "
-                "problem at once. THE BRIEF'S TEMPLATE IS A FORM (contract 3.0, rule 228 "
-                "amended): plan_template arrives blank, so a step filed with an empty "
-                "title or an empty outcome_promise is not a plan. Any step copied off the "
-                "form and left unfilled is DROPPED here before filing and nothing is "
-                "written in its place; if that leaves the plan below the band floor, "
-                "nothing is filed at all and you are asked to write the steps yourself. "
-                "Pull a block out of block_templates IN FULL when the plan needs one, in "
-                "its order (rule 236). "
-                + blocks.CONNECTION_IN_THE_ACTION_SENTENCE
-                + " A block whose connection nothing on its step opens is refused "
-                "REJ-35, and an older bench may still refuse a missing named block "
-                "REJ-32; those two refusals hand back the same template."
-                "THE HOMEWORK BLOCKS an older bench still asks for "
+                "problem at once. The proposal is filed as you wrote it: nothing here "
+                "repairs it, and a refusal comes back in the door's own words with its "
+                "`fix`. THE HOMEWORK BLOCKS an older bench still asks for "
                 "(contract 2.42, rule 226; an empty one is REJ-31): strategy (how this agent "
                 "will actually get it done, 1..600 chars); wins (up to 3 {deal_id, note}, "
                 "each naming one of "

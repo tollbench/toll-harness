@@ -23,7 +23,6 @@ import json
 
 from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import _model
-from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.draft import (
     FORM_CHAR_BUDGET,
     FORM_STEP_FIELDS,
@@ -55,15 +54,13 @@ def test_an_empty_tools_list_means_no_tools_and_never_the_fallback():
     so every plan on a want with no tools put a connection row on the front of
     a step that could never use it."""
     assert tools_index({"tools": []}) == []
-    # And the fallback is real, so the test above is not passing by accident.
-    assert tools_index({}) != []
-    assert len(tools_index({})) >= len(blocks.PLATFORM_TOOLS)
 
 
-def test_only_a_missing_index_falls_back_to_the_platforms_own_verbs():
-    fallback = {row["tool"] for row in tools_index({})}
-    assert fallback == {row["tool"] for row in tools_index({"tools": None})}
-    assert "platform.research" in fallback
+def test_a_missing_index_offers_no_tools_of_the_harness_own():
+    """0.74.0: the harness keeps no list of the bench's tools. A bench that
+    publishes no index offers nothing rather than a hard-coded fallback."""
+    assert tools_index({}) == []
+    assert tools_index({"tools": None}) == []
     # A list with nothing usable in it is still a list: the bench published it.
     assert tools_index({"tools": [{"no_tool_key": True}]}) == []
 

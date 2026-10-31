@@ -193,140 +193,6 @@ def _block_questions():
     ]
 
 
-def _with_questions(questions):
-    return {**_valid_proposal(), "finalist_questions": [questions]}
-
-
-def _finalist_problems(result):
-    return [
-        problem
-        for problem in result.get("problems", [])
-        if problem["path"].startswith("finalist_questions")
-    ]
-
-
-def test_block_shaped_finalist_questions_pass_local_validation():
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(_valid_proposal())
-
-    assert result["ok"] is True
-    assert _finalist_problems(result) == []
-
-
-def test_the_count_and_the_shapes_are_the_doors_to_say():
-    """WHAT FORCED IT (Kai, 2026-09-17): this mirror demanded exactly four
-    questions with at most two text boxes while the bench had taken UP TO
-    THREE since 2026-09-11. The harness does not count questions any more --
-    four plain strings are filed and the free validate door answers."""
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(
-        _with_questions(["How many seats?", "Who owns it?", "What budget?", "What tone?"])
-    )
-
-    assert _finalist_problems(result) == []
-
-
-def test_a_flat_list_of_three_questions_passes_at_home():
-    # The shape the door hands out now: [q, q, q], no wrapping group.
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-    questions = _block_questions()[:3]
-
-    result = provider.validate_proposal(
-        {**_valid_proposal(), "finalist_questions": questions}
-    )
-
-    assert _finalist_problems(result) == []
-
-
-def test_no_questions_at_all_is_a_fine_answer():
-    # Rule 243: an agent with nothing to ask files none and is not refused.
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    for empty in ([], [[]], None):
-        result = provider.validate_proposal(
-            {**_valid_proposal(), "finalist_questions": empty}
-        )
-        assert _finalist_problems(result) == [], empty
-
-
-def test_three_text_boxes_are_no_longer_a_problem_at_home():
-    questions = _block_questions()[:3]
-    questions[0] = {"id": "q1", "format": "written_response", "title": "Tell me about it."}
-    questions[1] = "And what else should I know about it, in your own words?"
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(
-        {**_valid_proposal(), "finalist_questions": questions}
-    )
-
-    assert _finalist_problems(result) == []
-
-
-def test_an_entry_that_is_not_a_question_at_all_is_still_flagged():
-    # The one thing no count is needed for: the door cannot read it either way.
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(_with_questions([12, {"id": "q2", "title": ""}]))
-
-    messages = [problem["message"] for problem in _finalist_problems(result)]
-    assert any("must be a question object" in m for m in messages)
-    assert any("non-empty `title`" in m for m in messages)
-
-
-def test_which_formats_a_question_may_wear_is_the_doors_answer():
-    # An approve format and a one-option dropdown are both refused -- BY THE
-    # BENCH, in its own words. A second opinion here is how the harness and
-    # the door came to disagree about the count in the first place.
-    questions = _block_questions()[:3]
-    questions[1] = {"id": "q2", "format": "review_approve", "title": "Approve this plan"}
-    questions[0] = {
-        "id": "q1",
-        "format": "single_choice",
-        "title": "Which area should I cover?",
-        "config": {"options": [{"id": "__other__", "label": "Other (type in)"}]},
-    }
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(
-        {**_valid_proposal(), "finalist_questions": questions}
-    )
-
-    assert _finalist_problems(result) == []
-
-
-def test_a_question_block_needs_id_format_and_title():
-    questions = _block_questions()
-    questions[2] = {"title": "When can you go?"}
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-
-    result = provider.validate_proposal(_with_questions(questions))
-
-    messages = [problem["message"] for problem in _finalist_problems(result)]
-    assert any("non-empty `id`" in m for m in messages)
-    assert any("non-empty `format`" in m for m in messages)
-    # The three fields are a missing-field check, not a shape rule.
-    assert all("text box" not in m for m in messages)
-
-
-def test_a_stale_production_schema_never_refuses_a_block_question():
-    # The bench's own JSON schema may still spell the field as four strings.
-    # finalist_questions is the door's to judge, so a block shape passes here.
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-    schema = api.proposal_schema()
-    schema["properties"]["finalist_questions"] = {
-        "type": "array",
-        "items": {"type": "array", "items": {"type": "string"}},
-    }
-    api.proposal_schema = lambda: schema
-
-    result = provider.validate_proposal(_valid_proposal())
-
-    assert result["ok"] is True
-
-
 def test_reachability_completes_exact_two_ping_handshake_and_is_idempotent():
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
@@ -340,90 +206,23 @@ def test_reachability_completes_exact_two_ping_handshake_and_is_idempotent():
     assert api.acks == 2
 
 
-def test_submit_proposal_validates_current_schema_before_writing():
-    """The local mirror guards the WHOLE-PLAN road (a proposal that carries
-    steps). Since rule 243 (2026-09-11) the proposal this harness writes is
-    seven fields with no steps at all, and every check the mirror runs is
-    keyed off steps[] -- so that road skips it and the bench's own free
-    validate door is the only check before filing."""
+def test_a_plan_shaped_proposal_is_filed_exactly_as_written():
+    """0.74.0: there is no local mirror. A proposal that carries steps (the
+    old whole-plan shape) goes to the filing door exactly as the model wrote
+    it, and the bench is the only judge."""
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
-
-    rejected = provider.submit_proposal(
-        "t1",
-        dict(
-            _valid_proposal(),
-            pitch_title="",
-            steps=[{"title": "Walk the shortlist", "ask": "APPROVE",
-                    "outcome_promise": "A shortlist of five stops."}],
-        ),
-        "key-1",
+    plan_shaped = dict(
+        _valid_proposal(),
+        pitch_title="",
+        steps=[{"title": "Walk the shortlist", "ask": "APPROVE",
+                "outcome_promise": "A shortlist of five stops."}],
     )
-    accepted = provider.submit_proposal("t1", _valid_proposal(), "key-2")
 
-    assert rejected["error"] == "local_validation_failed"
-    assert api.submissions == [("t1", _valid_proposal(), "key-2")]
-    assert accepted == {"ok": True, "proposal_id": "p1"}
-    assert api.acks == 2
+    filed = provider.submit_proposal("t1", plan_shaped, "key-1")
 
-
-def _step(n, odds):
-    return {"title": f"Step {n}", "ask": "APPROVE", "outcome_promise": f"Deliver part {n}",
-            "line_item_amount": 0, "person_minutes": 10, "agent_court_estimate": 2.0,
-            "declared_odds": odds,
-            "har_blocks": [{"id": f"blk-{n}", "format": "review_approve", "title": "Review"}]}
-
-
-def _plan_with_line(odds_line):
-    return {**_valid_proposal(), "total_ask_cents": 0, "finish_line_cents": 0,
-            "allocation": {"ad_spend": 0, "tools": 0, "agent_work": 0},
-            "steps": [_step(i + 1, o) for i, o in enumerate(odds_line)]}
-
-
-def _rej29_problems(result):
-    return [p for p in result.get("problems", []) if "REJ-29" in p.get("message", "")]
-
-
-def test_local_validation_refuses_a_declared_line_that_falls_before_spending_the_filing():
-    # Rule 121 / REJ-29 (contract 2.34): a plan is filed all at once, so a later
-    # step declared LOWER than an earlier one means the steps were priced one at
-    # a time, not the outcome. The line that forced it: 95 -> 50 -> 75.
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    result = provider.submit_proposal("t1", _plan_with_line([0.95, 0.50, 0.75]), "key-1")
-
-    assert result["error"] == "local_validation_failed"
-    hits = _rej29_problems(result)
-    assert len(hits) == 1
-    assert hits[0]["path"] == "steps.1.declared_odds"
-    assert "step 2 declares 50% but step 1 declared 95%" in hits[0]["message"]
-    assert "not the chance you clear the step" in hits[0]["message"]
-    assert api.submissions == []  # nothing reached the bench
-
-
-def test_local_validation_lets_a_rising_or_flat_line_through():
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    rising = provider.submit_proposal("t1", _plan_with_line([0.25, 0.40, 0.70]), "key-1")
-    flat = provider.submit_proposal("t1", _plan_with_line([0.85, 0.85]), "key-2")
-
-    assert _rej29_problems(rising) == []
-    assert _rej29_problems(flat) == []
-
-
-def test_local_validation_never_compares_a_line_with_an_illegal_number():
-    # An illegal number is the schema's report (REJ-16 at the bench), never a
-    # line report: the line check only runs when every number is legal. The
-    # fake schema here does not carry the range, so all this test owns is
-    # that no REJ-29 problem appears for 0.9 -> 1.5 -> 0.5.
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    result = provider.submit_proposal("t1", _plan_with_line([0.9, 1.5, 0.5]), "key-1")
-
-    assert _rej29_problems(result) == []
+    assert filed == {"ok": True, "proposal_id": "p1"}
+    assert api.submissions == [("t1", plan_shaped, "key-1")]
 
 
 def test_submit_proposal_caps_only_this_harness_fleet_at_four(tmp_path):
@@ -567,33 +366,22 @@ def test_live_bid_on_current_round_short_circuits_and_marks_reviewed(tmp_path):
     assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
 
 
-def test_the_local_mirror_no_longer_buries_an_informed_plan(caplog):
-    """RULE 241: the bench is the validator, so the offline mirror warns.
-
-    It used to refuse here -- `informed_plan_validation_failed` -- and a
-    mirror that has drifted from the door buries a plan the person is already
-    waiting on. The plan is built at the draft door now, which re-validates
-    every round, so the mirror's problems go to the log and the filing goes to
-    the bench.
-    """
+def test_the_informed_plan_goes_to_the_bench_as_written():
+    """RULE 241 and 0.74.0: the bench is the validator. The informed plan is
+    handed to the door exactly as the model wrote it -- no merge with the
+    sealed original, no blank-form drop, no local mirror."""
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
+    plan = {
+        "steps": [{"title": "Deliver", "line_item_amount": 1000}],
+        "finish_line_cents": 0,
+        "accept_rules": True,
+    }
 
-    with caplog.at_level("WARNING"):
-        result = provider.submit_informed_plan(
-            "t1",
-            "p1",
-            {
-                "steps": [{"title": "Deliver", "line_item_amount": 1000}],
-                "finish_line_cents": 0,
-                "accept_rules": True,
-            },
-            "plan-key",
-        )
+    result = provider.submit_informed_plan("t1", "p1", plan, "plan-key")
 
     assert result["ok"] is True
-    assert api.submissions
-    assert "Local mirror has problems" in caplog.text
+    assert api.submissions[-1][2] == plan
 
 
 def test_guide_returns_the_whole_live_skill_page():
@@ -653,49 +441,6 @@ def test_guide_answers_plainly_when_nothing_is_cached_yet():
     assert result["topic"] == "delivery"
     assert result["error"] == "guide_unavailable"
     assert result["instructions"]
-
-
-def test_informed_plan_cannot_change_sealed_terms():
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    result = provider.submit_informed_plan(
-        "t1",
-        "p1",
-        {"steps": [], "accept_rules": True, "total_ask_cents": 1000},
-        "plan-key",
-    )
-
-    assert result["error"] == "informed_plan_changes_sealed_terms"
-    assert result["unexpected_fields"] == ["total_ask_cents"]
-    assert api.submissions == []
-
-
-def test_informed_plan_inherits_unchanged_fields_from_sealed_steps():
-    api = FakeApi()
-    provider = BookOfHousesTollBenchProvider(api)
-
-    result = provider.submit_informed_plan(
-        "t1",
-        "p1",
-        {
-            "steps": [{"ask": "APPROVE", "declared_odds": 0.8}],
-            "accept_rules": True,
-        },
-        "plan-key",
-    )
-
-    submitted_plan = api.submissions[-1][2]
-    assert result == {"ok": True, "plan_revised": True}
-    assert submitted_plan["steps"] == [
-        {
-            "title": "Deliver",
-            "ask": "PROVIDE",
-            "line_item_amount": 0,
-            "declared_odds": 0.8,
-            "har_blocks": [{"id": "details", "format": "written_response"}],
-        }
-    ]
 
 
 def test_deal_step_tools_enforce_pulse_and_outcome_boundaries():
@@ -1202,36 +947,4 @@ def test_withdrawal_without_words_or_with_an_unknown_cause_is_refused():
     assert invented["error"] == "invalid_withdraw_cause"
     assert invented["allowed"] == ["cannot_deliver", "other"]
     assert api.submissions == []
-
-def test_a_bid_without_its_homework_is_refused_at_home():
-    """Rule 226. Each of the five blocks is caught locally, by name.
-
-    What forced the local check: the server refuses these (REJ-31) and the
-    refusal is free, but a bid that fails at home costs no round trip and the
-    agent learns the field name in the same breath. `wins` is the one block
-    that may be an empty LIST -- that is the honest answer for an agent with no
-    finished walks -- so it is checked for presence, never for content.
-    """
-    provider = BookOfHousesTollBenchProvider(FakeApi())
-    for field in ("strategy", "capabilities", "wins", "research_links", "skill_research"):
-        proposal = _valid_proposal()
-        del proposal[field]
-        result = provider.validate_proposal(proposal)
-        assert not result["ok"], f"{field} missing should not validate"
-        assert any(problem["path"] == field for problem in result["problems"]), (
-            f"{field} missing was not reported by name"
-        )
-
-    blank = _valid_proposal()
-    blank["strategy"] = "   "
-    assert not provider.validate_proposal(blank)["ok"]
-
-    empty_links = _valid_proposal()
-    empty_links["research_links"] = []
-    assert not provider.validate_proposal(empty_links)["ok"]
-
-    # The zero case: no finished walks is legal and must still validate.
-    no_wins = _valid_proposal()
-    no_wins["wins"] = []
-    assert provider.validate_proposal(no_wins)["ok"]
 

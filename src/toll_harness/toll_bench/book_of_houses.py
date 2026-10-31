@@ -22,48 +22,16 @@ from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
 
-# The refusal codes the block door speaks (contract 2.44, rules 228 and 229).
-REJ_REQUIRED_BLOCK = "REJ-32"
+# The block door's two refusals a filing can correct once (rule 229).
 REJ_BLOCK_DECLARATION = "REJ-33"
 REJ_HOLLOW_BLOCK = "REJ-34"
-# RULE 236: a block whose account nothing on its step opens. Like REJ-32 it
-# CARRIES THE FORM, so it is repaired and filed once.
-REJ_BLOCK_GRANT = blocks.REJ_BLOCK_GRANT
-# RULE 236 (2026-09-08): a connection filed as a STEP OF ITS OWN. This one
-# carries NO form -- the shape it hands back is the connect_account row, in the
-# refusal's own words -- so it is repaired from the BRIEF's template instead,
-# and it is deliberately not in REJ_CARRIES_THE_FORM.
-REJ_GRANT_STEP_REMOVED = blocks.REJ_GRANT_STEP_REMOVED
-# RULE 242 (2026-09-10): an act whose agent half reads an account has its row
-# on the step BEFORE; the same row on the act's step is refused. The refusal
-# carries its own `fix` and field like every structural refusal, so it takes
-# the generic path: nothing is repaired at home and nothing is re-filed.
-REJ_ROW_NEEDED_BEFORE = blocks.REJ_ROW_NEEDED_BEFORE
-REJ_FRAME = blocks.REJ_FRAME
-# RULE 238 (2026-09-08): an act on the person's own account that names nobody
-# to send to, or a raw address typed into the plan. Like REJ-38 it carries no
-# `plan_template`: what it hands back is the QUESTION, and the brief published
-# that question on `bid_template.finalist_questions` -- so it is repaired from
-# there and is deliberately not in REJ_CARRIES_THE_FORM.
-REJ_CONTACT_ROUTE = blocks.REJ_CONTACT_ROUTE
-
-# RULE 238 AMENDED (2026-09-12): the plan reaches a person and no who step
-# stands above it. The who step is the agent's pick now, so this refusal
-# carries the step to add and nothing here repairs it.
-REJ_WHO_STEP_MISSING = blocks.REJ_WHO_STEP_MISSING
-WHO_STEP_MISSING_CODE = blocks.WHO_STEP_MISSING_CODE
-# RULE: SAY WHERE EVERY ARGUMENT CAME FROM (2026-09-09). The bid door's
-# fourth question refuses an argument with no declared source and a tool
-# whose account row is missing from its own step.
-REJ_ARGUMENT_PROVENANCE = blocks.REJ_ARGUMENT_PROVENANCE
-REJ_CARRIES_THE_FORM = (REJ_REQUIRED_BLOCK, REJ_BLOCK_GRANT)
 
 # CONTRACT 3.0 (2026-09-05): the free validate door, call 3 of six. It runs the
 # WHOLE bid door -- the shared validator plus the bid-only checks (REJ-14,
 # REJ-15, REJ-31) -- and answers with every problem at once, each carrying a
 # plain-words `fix`. It writes nothing: no row, no refusal, no idempotency key,
 # and open_bid_count does not move. A bench that reports a contract below this
-# has no such route and the local mirror is the whole pre-check there.
+# has no such route, and its filing door is the only judge.
 VALIDATE_DOOR_MIN_CONTRACT_MAJOR = 3
 
 # THE PLAN DOOR'S REPLY IS CONTRACT 4.0 (2026-09-17). Steven: "The form says
@@ -78,16 +46,6 @@ VALIDATE_DOOR_MIN_CONTRACT_MAJOR = 3
 # nothing below gates a proposal on this number.
 PLAN_DOOR_MIN_CONTRACT = "4.0"
 PLAN_DOOR_MIN_CONTRACT_MAJOR = 4
-# One repair pass. The door is free, so the model gets its list of problems
-# back once and files on the next call; a harness that kept bouncing the same
-# plan would spend the run and teach itself nothing.
-MAX_DOOR_REPAIR_PASSES = 1
-
-
-def _retry_tag(rej: str | None) -> str:
-    """The idempotency suffix for the one re-file a carried form earns."""
-    return str(rej or "rej").replace("-", "").lower()
-
 
 # An act in one of these states is standing: it is the person's move or it has
 # already run. Filing another copy of the same kind is a duplicate.
@@ -202,10 +160,12 @@ FILE_DOOR_REFUSALS: frozenset[str] = frozenset(
         # no who step stands above it. A 4xx the agent can act on -- the door
         # names the step to add -- so it comes back as a result with `field`,
         # `reason` and `fix` on it, and the brake counts it like any other.
-        blocks.WHO_STEP_MISSING_CODE,
+        "who_step_missing",
         # RULE 233 (2026-09-05): the shape door. The bench counts the empty
         # boxes on the cards and its sentence names the card and the field.
-        *blocks.SHAPE_DOOR_REFUSALS,
+        "deliverable_fields_missing",
+        "deliverable_fields_blank",
+        "deliverable_count_short",
     }
 )
 
@@ -220,15 +180,6 @@ FILE_DOOR_BODY_KEYS: tuple[str, ...] = (
     "deliverable", "next",
 )
 
-# THE MIRROR WARNS ONCE, THEN THE DOOR DECIDES. `current-step` publishes the
-# step's `deliverable` but NOT its file receipts, so a harness restarted
-# between the delivery and the outcome cannot see a file that is genuinely on
-# the step. Refusing that filing forever would be the validate-door mistake in
-# a new place: a mirror must never bury a filing production would take. So the
-# local check speaks once per step -- which is what the model needs, because
-# the usual case is that it never delivered anything -- and any second attempt
-# goes to the bench, whose `deliverable_missing` is the authoritative refusal.
-MAX_DELIVERABLE_WARNINGS = 1
 
 # --------------------------------------------------------------------------
 # WHAT A TOOL HANDS BACK IS SPENT OUT OF THE MODEL'S WINDOW.
@@ -317,29 +268,15 @@ PROBLEM_TEXT_MAX = 600
 # WHAT FORCED IT: Kai's round-2 proposal on prod was blocked by a
 # contradiction inside this harness. `draft.py` read the server's rule of
 # 2026-09-11 -- ask UP TO THREE questions, and none at all is a fine answer
-# (rule 243, contract 3.16) -- while the mirror below still held the August
+# (rule 243, contract 3.16) -- while a mirror here still held the August
 # rule, "exactly one array of four questions, at most two of them text boxes"
 # (contract 2.37, rules 168 and 170). Obeying both is impossible, so Kai filed
 # nothing. THE HARNESS NEVER RE-IMPLEMENTS A SERVER RULE. A count, a format
 # and a cap belong to the bench; the free validate door
 # (POST /api/bench/targets/{id}/proposals/validate) is the only judge of a
-# proposal's shape, and its answer beats anything said here. What is left at
-# home is the handful of things the door refuses no matter what it counts.
+# proposal's shape, and its answer beats anything said here. Since 0.74.0
+# nothing is checked at home at all.
 
-# CONTRACT 2.42 / rule 226 -- the five bid-homework blocks. All required on a
-# NEW bid (REJ-31 at the server door), and all FROZEN afterwards: the informed
-# plan revises steps and never these, which is why they are carried across
-# verbatim when a plan revision is rebuilt from the sealed original below.
-# `wins` may legitimately be an empty list -- an agent with no resolved walks
-# yet cites none and is not penalised -- so it is checked for PRESENCE, not
-# for content.
-HOMEWORK_FIELDS = (
-    "strategy",
-    "capabilities",
-    "wins",
-    "research_links",
-    "skill_research",
-)
 # The canonical HAR format slugs (the step contract's enum).
 HAR_FORMAT_SLUGS = frozenset(
     {
@@ -375,41 +312,15 @@ HAR_FORMAT_SLUGS = frozenset(
         # the finds of the research step "found_by_research" stamps, 0.64.0),
         # and each pick arrives as a reference for
         # `acts[].contact_ref`. It stays a legal HAR slug here
-        # because the step carries it; `finalist_question_problems` refuses
-        # it on a PROPOSAL in the door's own words.
+        # because the step carries it; the bid door refuses it on a PROPOSAL
+        # in its own words.
         "contact_picker",
     }
 )
-# RULE 238 CORRECTED (Steven, 2026-09-11): no picker belongs on a proposal at
-# all. The bench refuses one REJ-15, and who it goes to is a step of the PLAN
-# -- since 2026-09-12 a step the agent puts in itself.
-CONTACT_PICKER_FORMAT = blocks.CONTACT_PICKER_FORMAT
-
 
 # A problem the door raises for a field that is simply NOT THERE. Filing over
 # one is a round spent on a certainty: the filing door runs the same pipeline.
 _MISSING_FIELD_CODES = frozenset({"REJ-31"})
-
-
-def _schema_names(schema: Any, field: str) -> bool:
-    """True when the bench's published proposal schema names `field`."""
-    if not isinstance(schema, dict):
-        return False
-    properties = schema.get("properties")
-    required = schema.get("required")
-    return (isinstance(properties, dict) and field in properties) or (
-        isinstance(required, list) and field in required
-    )
-
-
-def _is_about_the_headline(error: Any) -> bool:
-    """A jsonschema error on the headline: its own path, or its absence."""
-    path = list(getattr(error, "absolute_path", []) or [])
-    if path[:1] == ["headline"]:
-        return True
-    return getattr(error, "validator", None) == "required" and "'headline'" in str(
-        getattr(error, "message", "")
-    )
 
 
 def _is_a_missing_field(problem: Any) -> bool:
@@ -426,99 +337,6 @@ def _is_a_missing_field(problem: Any) -> bool:
     ):
         return True
     return " is required" in str(problem.get("detail") or "")
-
-
-def finalist_question_problems(questions: Any) -> list[dict[str, str]]:
-    """The few things the bench refuses FOR CERTAIN, and nothing else.
-
-    A PASS-THROUGH, ON PURPOSE. The door takes no questions, one, two or
-    three, flat (`[q, q, q]`) or in the older one-group shape (`[[q, q, q]]`),
-    each one `{id, title, format}` with a format of short_answer, yes_no or
-    single_choice. Counting them here only ever re-stated a rule that had
-    already moved: see the note above the constants. Four questions are not
-    flagged at home -- the validate door says so, in its own words, and the
-    agent fixes it once.
-
-    What stays is what needs no count to be sure of: an entry that is neither
-    a question object nor a question string, a question missing one of the
-    three fields the door reads, and the contact book, which is not a question
-    at all (rule 238) -- who a message goes to is a step of the plan, picked
-    after the person has chosen this agent.
-    """
-    path = "finalist_questions"
-    if questions is None:
-        return []
-    if not isinstance(questions, list):
-        return [
-            {
-                "path": path,
-                "message": (
-                    "must be a list of up to three questions (the older [[...]] shape "
-                    "carrying the same questions is still taken) -- got a non-list"
-                ),
-            }
-        ]
-    # FLAT OR WRAPPED, both are the door's own shapes. A list whose entries
-    # are all lists is the old group shape; anything else is the flat list.
-    nested = bool(questions) and all(isinstance(entry, list) for entry in questions)
-    groups = questions if nested else [questions]
-    problems: list[dict[str, str]] = []
-    for group_index, group in enumerate(groups):
-        label = f"{path}[{group_index + 1}]" if nested else path
-        if not isinstance(group, list):
-            problems.append({"path": label, "message": "must be an array of questions"})
-            continue
-        for index, question in enumerate(group):
-            problems.extend(
-                _finalist_entry_problems(question, f"{label}[{index + 1}]")
-            )
-    return problems
-
-
-def _finalist_entry_problems(question: Any, pos: str) -> list[dict[str, str]]:
-    """One question, checked only for what the door cannot take either way."""
-    if isinstance(question, str):
-        if question.strip():
-            return []
-        return [
-            {
-                "path": pos,
-                "message": (
-                    "is an empty question: write the whole question in your own words, "
-                    "or ask one question fewer (REJ-15)"
-                ),
-            }
-        ]
-    if not isinstance(question, dict):
-        return [
-            {
-                "path": pos,
-                "message": (
-                    "must be a question object {id, title, format} or a plain question "
-                    "string (REJ-15)"
-                ),
-            }
-        ]
-    if str(question.get("format") or "").strip() == CONTACT_PICKER_FORMAT:
-        # RULE 238 CORRECTED (2026-09-11): the book is not a question, whatever
-        # the count is. One refused question costs the whole bid.
-        return [{"path": pos, "message": blocks.CONTACT_QUESTION_REFUSED}]
-    problems: list[dict[str, str]] = []
-    # THE THREE FIELDS THE DOOR READS. A field that is simply not there is the
-    # one refusal no count is needed for; which format slugs it takes, and how
-    # many options a choice needs, is the door's and is not repeated here.
-    for field in ("id", "format", "title"):
-        if not str(question.get(field) or "").strip():
-            problems.append(
-                {
-                    "path": pos,
-                    "message": (
-                        f"a question needs a non-empty `{field}`; the three fields the "
-                        "door reads are id, title and format (REJ-15)"
-                    ),
-                }
-            )
-    return problems
 
 
 def _withdraw_key(proposal_id: Any, body: dict[str, Any]) -> str:
@@ -598,19 +416,10 @@ class BookOfHousesTollBenchProvider:
         # Contract 3.0: probed once per provider, then remembered. None means
         # "not asked yet"; False means this bench publishes no validate door.
         self._validate_door: bool | None = None
-        self._door_repairs: dict[str, int] = {}
-        # RULE 230. What each step's SIGNED plan promised to hand back, and
-        # every file receipt known to be attached to it -- the server's, plus
-        # anything this process filed through deliver_file. A step whose
-        # channel is `file` cannot close on words alone, and finding that out
-        # at the door costs the person a round.
-        self._step_deliverables: dict[str, dict[str, Any]] = {}
+        # RULE 230. Every file receipt known to be attached to a step -- the
+        # server's, plus anything this process filed through deliver_file --
+        # so current_step can show them even when the bench's read omits them.
         self._step_receipts: dict[str, list[dict[str, Any]]] = {}
-        self._deliverable_warnings: dict[str, int] = {}
-        # RULE 233. The shape mirror warns once per step on a MISSING or SHORT
-        # set of cards (an earlier receipt on the step may already carry
-        # them), and every time on a blank box in the document in hand.
-        self._shape_warnings: dict[str, int] = {}
         # 0.34.0. The shelf: programs fetched by key and remembered, the
         # validate door's attempt count per want, and the last problems it
         # named there -- so the fourth call answers honestly instead of
@@ -808,13 +617,6 @@ class BookOfHousesTollBenchProvider:
             # the bench, it rides the brief in full, and the other eleven are
             # an INDEX. Always present, None when nothing overlaps this want.
             self._shelve_the_programs(brief)
-            # ...and when the person answered the contact question with "find
-            # them for me", the recipient is not on the form and never will be.
-            brief["contact_research_note"] = (
-                blocks.CONTACT_RESEARCH_SENTENCE
-                if blocks.contact_research_of(brief)
-                else ""
-            )
             if fit:
                 self._fit_the_brief(target_id, brief)
         return response
@@ -1068,9 +870,7 @@ class BookOfHousesTollBenchProvider:
             brief["block_templates_note"] = (
                 "The block catalog was too big to hand over whole on this "
                 "model's window, so this is the kinds it holds and how many "
-                "steps each block is." + pull_from + " The harness still reads "
-                "the real catalog when it files, so a block you get wrong is "
-                "repaired rather than refused."
+                "steps each block is." + pull_from
             )
             return True
         return False
@@ -1083,51 +883,6 @@ class BookOfHousesTollBenchProvider:
         if self._act_kinds is None:
             self._act_kinds = self.api.act_kinds()
         return self._act_kinds
-
-    @staticmethod
-    def _published_steps(brief: dict[str, Any]) -> list[dict[str, Any]]:
-        """Every step this brief published: the skeleton AND the catalog.
-
-        Contract 3.0 hands out a blank `plan_template` and puts the blocks in
-        `block_templates`, so a rule-236 repair that read only the skeleton
-        would find no `connect_account` row on any live brief and silently do
-        nothing at all.
-        """
-        return blocks.published_template_steps(
-            brief.get("plan_template"), brief.get("block_templates")
-        )
-
-    def _grant_requirements(self) -> dict[str, tuple[str, ...]]:
-        """{kind: providers} off the act registry's own `requires_grants`.
-
-        RULE 236: nothing about which kind runs on which connection is written
-        in the harness any more -- the last hardcoded copy of that fact refused
-        the correct one-step plan at home for a day. The registry answers it,
-        the catalog read is memoized on the provider, and a read that fails
-        leaves the local mirror SILENT rather than refusing a legal plan: the
-        bench's own validate door is free and is the judge.
-        """
-        try:
-            catalog = self.list_act_kinds().get("kinds") or {}
-        except Exception:  # noqa: BLE001 - a catalog read never blocks a filing
-            return {}
-        if not isinstance(catalog, dict):
-            return {}
-        needs: dict[str, tuple[str, ...]] = {}
-        for name, spec in catalog.items():
-            if not isinstance(spec, dict):
-                continue
-            declared = spec.get("requires_grants")
-            if declared is None and isinstance(spec.get("declaration"), dict):
-                declared = spec["declaration"].get("requires_grants")
-            providers = tuple(
-                provider.strip().lower()
-                for provider in (declared or [])
-                if isinstance(provider, str) and provider.strip()
-            )
-            if providers:
-                needs[str(name).strip().lower()] = providers
-        return needs
 
     def _block_kinds(self) -> frozenset[str]:
         """The kinds the PLATFORM writes, files, runs and closes (rule 229).
@@ -1172,7 +927,7 @@ class BookOfHousesTollBenchProvider:
         the probe costs nothing extra and needs no guesswork: contract 3.0 is
         where the door appears. A bench that answers 404 to the route anyway
         (an odd deployment, a proxy) flips this to False on the first call and
-        the local mirror carries the rest of the run.
+        the filing door is the only judge for the rest of the run.
         """
         if self._validate_door is not None:
             return self._validate_door
@@ -1221,8 +976,8 @@ class BookOfHousesTollBenchProvider:
         except BookOfHousesApiError as error:
             if error.status in (404, 405) and error.code == "http_error":
                 _LOGGER.info(
-                    "This bench publishes no proposals/validate route; using "
-                    "the local mirror for the rest of this run"
+                    "This bench publishes no proposals/validate route; the "
+                    "filing door is the only judge for the rest of this run"
                 )
                 self._validate_door = False
                 return None
@@ -1240,28 +995,42 @@ class BookOfHousesTollBenchProvider:
     def _door_problem_payload(
         door: dict[str, Any], local: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """What the model reads back: every problem at once, with its fix."""
+        """What the model reads back: every problem at once, with its fix.
+        `local` is accepted and ignored (0.74.0): there is no local mirror."""
         problems = [p for p in (door.get("problems") or []) if isinstance(p, dict)]
-        if local is not None and not local.get("ok"):
-            # The offline mirror sometimes knows one more thing (a schema the
-            # server has not published yet). It never blocks a filing, but a
-            # repair pass may as well carry it.
-            problems = problems + [
-                {
-                    "code": "LOCAL",
-                    "field": problem.get("path"),
-                    "detail": problem.get("message"),
-                    "fix": problem.get("message"),
-                    "step_index": None,
-                }
-                for problem in (local.get("problems") or [])
-                if isinstance(problem, dict)
-            ]
         return {
             "problems": problems,
             "problem_count": len(problems),
             "corrections": door.get("corrections") or [],
         }
+
+    @staticmethod
+    def _door_refused(error: BookOfHousesApiError) -> dict[str, Any]:
+        """A refused filing, handed back in the door's own words (0.74.0).
+
+        Nothing was written, so the round is not spent: non-terminal. The
+        bench's own keys on the refusal body (`field`, `reason`, `fix`, ...)
+        ride at the top, where a model reading a tool result looks. The
+        harness adds no sentence of its own about the bench's rules.
+        """
+        refusal: dict[str, Any] = {
+            "ok": False,
+            "error": error.code,
+            "rej": error.rej,
+            "status": error.status,
+            "detail": error.message,
+            "terminal": False,
+            "message": (
+                "Nothing was filed. The bench refused this filing; `detail` "
+                "and `fix` are its own words. Change what they name and file "
+                "once more."
+            ),
+        }
+        body = error.body if isinstance(error.body, dict) else {}
+        for key in FILE_DOOR_BODY_KEYS:
+            if body.get(key) is not None and key not in refusal:
+                refusal[key] = body[key]
+        return refusal
 
     def _block_refusal(
         self, target_id: str, error: BookOfHousesApiError
@@ -1305,200 +1074,6 @@ class BookOfHousesTollBenchProvider:
             payload["plan_template"] = error.plan_template
         return payload
 
-    @staticmethod
-    def _grant_gap_never_blocks_the_filing(
-        validation: dict[str, Any], plan_template: Any
-    ) -> dict[str, Any]:
-        """A grant gap with no template to fix it is the door's to refuse.
-
-        The local mirror of REJ-35 exists so a round is never spent on a plan
-        the door will refuse. When there is nothing to insert -- an older
-        server, or a brief that has closed behind a selection -- refusing at
-        home would only bury the plan the person is waiting on. File it, and
-        let the refusal carry the form.
-
-        RULE 236: "something to insert" now means a published `connect_account`
-        ROW as well as a GRANT step, because the row is what the repair copies.
-        """
-        if validation.get("ok"):
-            return validation
-        template = plan_template if isinstance(plan_template, list) else []
-        if any(
-            isinstance(step, dict)
-            and (blocks.grant_provider(step) or blocks.connect_row_providers(step))
-            for step in template
-        ):
-            return validation
-        remaining = [
-            problem
-            for problem in validation.get("problems") or []
-            if problem.get("rej") != REJ_BLOCK_GRANT
-        ]
-        if remaining:
-            return {**validation, "problems": remaining}
-        return {**validation, "ok": True, "problems": []}
-
-    def _retire_grant_step_after(
-        self, target_id: str, error: Any, plan: dict[str, Any], plan_template: Any
-    ) -> tuple[dict[str, Any], list[str]]:
-        """RULE 236 / REJ-38: the door refused a connection filed as a step.
-
-        The refusal is the whole teaching -- it names the step, the provider
-        and the exact `connect_account` row to put on the step that uses it --
-        so it is LOGGED VERBATIM here and handed back verbatim by
-        ``_grant_step_removed_refusal``. The repair reads the row off the
-        BRIEF's template, because this refusal carries no `plan_template` of
-        its own, and the caller re-files ONCE. No move, no re-file: a harness
-        that kept bouncing the same plan would spend the whole run.
-        """
-        _LOGGER.warning(
-            "Target %s refused the plan %s -- a connection was filed as a step "
-            "of its own: %s",
-            target_id,
-            error.rej,
-            error.message,
-        )
-        fixed, moved = blocks.retire_grant_steps(plan, plan_template)
-        if moved:
-            _LOGGER.warning(
-                "Target %s: rule 236 moved the connection into the action (%s); "
-                "re-filing once",
-                target_id,
-                "; ".join(moved),
-            )
-        else:
-            _LOGGER.warning(
-                "Target %s: nothing in this plan to move into the action, so "
-                "the door's own refusal is the answer; not re-filed",
-                target_id,
-            )
-        return fixed, moved
-
-    @staticmethod
-    def _grant_step_removed_refusal(error: Any) -> dict[str, Any]:
-        """The door's REJ-38, handed to the model in the door's own words."""
-        return {
-            "ok": False,
-            "error": "grant_step_removed",
-            "rej": error.rej,
-            "detail": error.message,
-            "terminal": False,
-            "fix": blocks.CONNECTION_IN_THE_ACTION_SENTENCE,
-            "message": (
-                "Nothing was filed. The bench refused this plan REJ-38: a "
-                "connection is not a step of its own, it is a "
-                "`connect_account` row on the step of the action that uses it "
-                "(the one exception is rule 242's connect step right before an "
-                "action whose agent half reads that account). "
-                "`detail` names the step and carries the exact row to add. "
-                "Pull the block out of the brief's block_templates WHOLE "
-                "instead of composing its steps, and file once more."
-            ),
-        }
-
-    def _bind_who_after(
-        self, target_id: str, error: Any, proposal: dict[str, Any], brief: dict[str, Any]
-    ) -> tuple[dict[str, Any], str | None]:
-        """RULE 240 / REJ-40: the door refused a plan that says nobody who.
-
-        ONE repair is left here since rule 238 was corrected (2026-09-11).
-        Adding a contact question is not it -- the who step is a STEP of the
-        plan (the agent's own since 2026-09-12), and a picker on a proposal is
-        refused REJ-15 -- so the only bid worth filing again is the one where
-        this person answered "find them for me":
-        the send is bound to a research run of the agent's own. Anything else
-        and the door's own sentence is the answer, filed once and no more.
-        """
-        _LOGGER.warning(
-            "Target %s refused the bid %s -- the plan reaches a person and "
-            "names nobody to send to: %s",
-            target_id,
-            error.rej,
-            error.message,
-        )
-        research = blocks.contact_research_of(brief)
-        if research is None:
-            _LOGGER.warning(
-                "Target %s: who this goes to is a step of the plan and the "
-                "agent's own to write, so there is nothing to add here; the "
-                "door's own refusal is the answer",
-                target_id,
-            )
-            return proposal, None
-        # The person already said they have nobody to pick. The answer is not
-        # a question, it is the binding: the send reads its recipient off a
-        # research run.
-        fixed, bound = blocks.bind_contact_research(proposal, research)
-        if bound:
-            _LOGGER.warning(
-                "Target %s: bound the outreach to the research the person "
-                "asked for (%s); re-filing once",
-                target_id,
-                "; ".join(bound),
-            )
-            return fixed, "; ".join(bound)
-        _LOGGER.warning(
-            "Target %s: this person asked us to find the recipient and "
-            "nothing in this plan can be bound to it; the door's own "
-            "refusal is the answer",
-            target_id,
-        )
-        return proposal, None
-
-    def _bind_the_research_after(
-        self, target_id: str, error: Any, proposal: dict[str, Any], brief: dict[str, Any]
-    ) -> tuple[dict[str, Any], list[str]]:
-        """REJ-41: the door refused an argument with no source.
-
-        One repair exists and only one: where this person asked us to FIND the
-        recipient, the send is bound to a research run. Everything else the
-        door refuses under this code -- a run quoting a run that has not
-        happened, a tool whose account row is missing, an address typed into
-        the plan -- is the model's own to fix in its own words, and the door
-        already said which. Nothing is re-filed then.
-        """
-        _LOGGER.warning(
-            "Target %s refused the bid %s -- an argument named no source it "
-            "could come from: %s",
-            target_id,
-            error.rej,
-            error.message,
-        )
-        research = blocks.contact_research_of(brief)
-        if research is None:
-            return proposal, []
-        fixed, bound = blocks.bind_contact_research(proposal, research)
-        if bound:
-            _LOGGER.warning(
-                "Target %s: bound the outreach to the research run (%s); "
-                "re-filing once",
-                target_id,
-                "; ".join(bound),
-            )
-        return fixed, bound
-
-    @staticmethod
-    def _argument_provenance_refusal(error: Any) -> dict[str, Any]:
-        """The door's REJ-41, handed to the model in the door's own words."""
-        return {
-            "ok": False,
-            "error": "argument_provenance",
-            "rej": error.rej,
-            "detail": error.message,
-            "terminal": False,
-            "fix": blocks.ARGUMENT_PROVENANCE_SENTENCE,
-            "message": (
-                "Nothing was filed. The bench refused this plan REJ-41: a run "
-                "took an argument from somewhere it cannot come from, or its "
-                "tool has no `connect_account` row on the step that runs it. "
-                "`detail` names the run and the argument. Every value is a "
-                "literal you wrote or one of three sources -- an answer to one "
-                "of your questions, a run declared BEFORE this one, or a "
-                "draft this plan wrote -- and a recipient is never an address "
-                "typed into the plan."
-            ),
-        }
-
     def _log_program_diff(
         self, target_id: str, proposal: dict[str, Any], brief: Any
     ) -> dict[str, Any] | None:
@@ -1517,57 +1092,6 @@ class BookOfHousesTollBenchProvider:
             programs.diff_json(diff),
         )
         return diff
-
-    @staticmethod
-    def _who_step_missing_refusal(error: Any) -> dict[str, Any]:
-        """The door's REJ-45, handed to the model in the door's own words.
-
-        Nothing is repaired here. The who step is the agent's pick (rule 238,
-        amended 2026-09-12) and a harness that wrote one would be writing the
-        plan. Non-terminal: a refused filing writes nothing, so the round is
-        not spent and the next filing can carry the step.
-        """
-        return {
-            "ok": False,
-            "error": blocks.WHO_STEP_MISSING_CODE,
-            "rej": error.rej,
-            "detail": error.message,
-            "terminal": False,
-            "fix": blocks.CONTACT_STEP_SENTENCE,
-            "message": (
-                "Nothing was filed. The bench refused this plan REJ-45: a step "
-                "reaches a person and no who step stands above it. `detail` "
-                "names the step. Put the person's who step in front of it -- a "
-                "PROVIDE step holding one `contact_picker` block, copied whole "
-                "out of the brief's `block_templates[\"who\"]` -- and file "
-                "once more. Do not plan a separate find step: `fix` says where "
-                "the people come from."
-            ),
-        }
-
-    @staticmethod
-    def _contact_route_refusal(error: Any) -> dict[str, Any]:
-        """The door's REJ-40, handed to the model in the door's own words."""
-        return {
-            "ok": False,
-            "error": "contact_route",
-            "rej": error.rej,
-            "detail": error.message,
-            "terminal": False,
-            "fix": blocks.CONTACT_STEP_SENTENCE,
-            "message": (
-                "Nothing was filed. The bench refused this plan REJ-40: an act "
-                "that runs on the person's own account names nobody to send it "
-                "to, or a plan field holds a raw address. `detail` carries the "
-                "door's own words. YOU DO NOT ADD A CONTACT QUESTION -- who it "
-                "goes to is a STEP, and since 2026-09-12 it is YOURS to put in "
-                "front of the first step that reaches somebody. What this plan "
-                "must carry is that step, an empty `contact_ref` for the "
-                "person's pick to fill, or a `found_contact` "
-                "{name, email, source_url} the person approves beside the "
-                "exact message."
-            ),
-        }
 
     def _platform_owned(self, step_id: str) -> dict[str, Any] | None:
         """What the platform is running on this step, or None.
@@ -1757,8 +1281,9 @@ class BookOfHousesTollBenchProvider:
         With a `target_id` on a contract 3.0 bench this is the BENCH'S OWN
         answer (call 3 of six): every problem at once, each with a plain-words
         `fix`. It files nothing and counts against nothing. Without a
-        target_id, or against an older bench, it is the offline mirror below:
-        faster, always available, and never authoritative.
+        target_id there is no door to ask, and a bench with no validate door
+        (below contract 3.0) leaves its filing door as the only judge: the
+        harness keeps no copy of the bench's rules (0.74.0).
 
         WHAT CHANGED IN 0.34.0. The answer used to carry `corrected_plan` --
         the whole submitted proposal, echoed back -- and a run on 2026-09-09
@@ -1775,20 +1300,40 @@ class BookOfHousesTollBenchProvider:
         `MAX_VALIDATE_ATTEMPTS` trips to the door; the fourth returns the
         door's own last problems and the instruction to file nothing.
         """
-        local = self._local_validation(proposal)
         if not target_id:
-            return local
+            return {
+                "ok": False,
+                "error": "target_id_required",
+                "problems": [],
+                "problem_count": 0,
+                "message": (
+                    "Nothing was checked. The bench is the only judge of a "
+                    "proposal: pass this want's target_id and its free validate "
+                    "door answers with every problem at once."
+                ),
+            }
         key = str(target_id)
         attempts = self._validate_attempts.get(key, 0)
         if enforce_cap and attempts >= MAX_VALIDATE_ATTEMPTS:
             return self._door_loop_is_over(key)
         door = self.validate_at_the_door(target_id, proposal)
         if door is None:
-            return {**local, "source": "local_mirror"}
+            return {
+                "ok": True,
+                "checked": False,
+                "problems": [],
+                "problem_count": 0,
+                "source": "no_validate_door",
+                "message": (
+                    "This bench publishes no free validate door, so nothing was "
+                    "checked here. Its filing door is the judge: file, and its "
+                    "refusal, if any, comes back in its own words."
+                ),
+            }
         if enforce_cap:
             attempts += 1
             self._validate_attempts[key] = attempts
-        problems = self._door_problem_payload(door, local)["problems"]
+        problems = self._door_problem_payload(door)["problems"]
         summary = self._problem_summary(problems, ok=bool(door.get("ok")))
         _LOGGER.info(
             "validate attempt %d/%d on target %s: %s",
@@ -1925,196 +1470,6 @@ class BookOfHousesTollBenchProvider:
         except (TypeError, ValueError):  # pragma: no cover - defensive
             body = str(payload)
         _LOGGER.warning("REFUSAL %s door target=%s %s", door, target_id, body)
-
-    def _local_validation(self, proposal: dict[str, Any]) -> dict[str, Any]:
-        schema = self.proposal_schema()
-        try:
-            from jsonschema import Draft202012Validator
-        except ImportError as error:  # pragma: no cover - dependency installation failure
-            raise RuntimeError("jsonschema is required for proposal validation") from error
-        # THE HEADLINE IS THE BENCH'S TO ASK FOR (contract 4.0.12). A bench
-        # whose schema names it gets the door's own one sentence for an empty
-        # one and a warning, never a problem, for a long one. A bench whose
-        # schema does not name it ignores the key, so the mirror does too
-        # rather than calling it an unexpected property.
-        asks_headline = _schema_names(schema, "headline")
-        # THE ROW SLOTS (contract 4.1.3) the same way: a bench whose schema
-        # does not name one ignores it at the door, so the mirror does too.
-        unnamed = {
-            key
-            for key in ("headline", *row_slots.ROW_SLOT_FIELDS)
-            if not _schema_names(schema, key)
-        }
-        instance = (
-            {key: value for key, value in proposal.items() if key not in unnamed}
-            if isinstance(proposal, dict) and unnamed
-            else proposal
-        )
-        errors = sorted(
-            Draft202012Validator(schema).iter_errors(instance),
-            key=lambda item: list(item.path),
-        )
-        problems = [
-            {
-                "path": ".".join(str(part) for part in error.absolute_path) or "$",
-                # jsonschema prints the offending INSTANCE in its message, so a
-                # whole plan can arrive as one "problem". The door's words are
-                # kept; only their length is bounded.
-                "message": str(error.message)[:PROBLEM_TEXT_MAX],
-            }
-            for error in errors
-            # finalist_questions is the door's to judge. A production schema
-            # that still spells the field as four plain strings, or as exactly
-            # four of anything, must not refuse a legal bid at home: the field
-            # takes up to THREE questions, flat or wrapped, since 2026-09-11.
-            if not (
-                list(error.absolute_path)[:1] == ["finalist_questions"]
-            )
-            # The headline is said once, below, in the door's own sentence.
-            and not (asks_headline and _is_about_the_headline(error))
-        ]
-        if asks_headline:
-            problems.extend(
-                {"path": row["path"], "message": row["message"]}
-                for row in draft.headline_problems(proposal)
-            )
-        smart_goals = proposal.get("smart_goals")
-        if not isinstance(smart_goals, list) or len(smart_goals) != 1:
-            problems.append({"path": "smart_goals", "message": "must contain exactly one goal"})
-        problems.extend(finalist_question_problems(proposal.get("finalist_questions")))
-        for field in ("pitch_title", "pitch_body"):
-            if not str(proposal.get(field) or "").strip():
-                problems.append({"path": field, "message": "is required and cannot be blank"})
-        # Rule 226. Caught at home so a missing block costs a local round trip
-        # rather than a server rejection. `wins` is present-not-empty by
-        # design: [] is the honest answer for an agent with no finished walks.
-        for field in HOMEWORK_FIELDS:
-            value = proposal.get(field)
-            if value is None:
-                problems.append(
-                    {"path": field, "message": "is required (contract 2.42, rule 226)"}
-                )
-            elif field == "wins":
-                if not isinstance(value, list):
-                    problems.append({"path": field, "message": "must be an array"})
-            elif isinstance(value, str):
-                if not value.strip():
-                    problems.append({"path": field, "message": "cannot be blank"})
-            elif isinstance(value, list):
-                if not value:
-                    problems.append({"path": field, "message": "cannot be empty"})
-        total = proposal.get("total_ask_cents")
-        allocation = proposal.get("allocation")
-        if isinstance(total, int) and not isinstance(total, bool) and isinstance(allocation, dict):
-            amounts = list(allocation.values())
-            if all(isinstance(amount, int) and not isinstance(amount, bool) for amount in amounts):
-                if sum(amounts) != total:
-                    problems.append(
-                        {
-                            "path": "allocation",
-                            "message": f"amounts must sum to total_ask_cents ({total})",
-                        }
-                    )
-        steps = proposal.get("steps")
-        finish_line_cents = proposal.get("finish_line_cents")
-        if (
-            isinstance(total, int)
-            and not isinstance(total, bool)
-            and isinstance(steps, list)
-            and isinstance(finish_line_cents, int)
-            and not isinstance(finish_line_cents, bool)
-        ):
-            line_items = [step.get("line_item_amount") for step in steps if isinstance(step, dict)]
-            if len(line_items) == len(steps) and all(
-                isinstance(amount, int) and not isinstance(amount, bool) for amount in line_items
-            ):
-                if sum(line_items) + finish_line_cents != total:
-                    problems.append(
-                        {
-                            "path": "steps",
-                            "message": (
-                                "line_item_amount values plus finish_line_cents must sum to "
-                                f"total_ask_cents ({total})"
-                            ),
-                        }
-                    )
-        # RULE 121, ENFORCED AT THE BENCH AS REJ-29 (contract 2.34, 2026-09-03).
-        # Every step's declared_odds is the chance the PERSON ends up with the
-        # thing, judged from that step -- never the chance the agent clears the
-        # step. A plan is filed all at once, so nothing is learned between its
-        # steps: a later step declared LOWER than an earlier one can only mean
-        # the steps were priced one at a time. Caught here so the filing is not
-        # spent on it. Equal is fine. Restating mid-walk (rule 122) may fall.
-        # Same order as the bench: an illegal number anywhere is the schema's
-        # report (REJ-16 there) and the line is never compared; only a plan
-        # whose numbers are all legal gets the line check.
-        odds_line = [
-            step.get("declared_odds") for step in steps if isinstance(step, dict)
-        ] if isinstance(steps, list) else []
-        all_legal = odds_line and all(
-            not isinstance(v, bool) and isinstance(v, (int, float)) and 0 < v < 1
-            for v in odds_line
-        )
-        if all_legal:
-            prev_val, prev_idx = None, None
-            for i, v in enumerate(odds_line):
-                if prev_val is not None and v < prev_val - 1e-12:
-                    problems.append(
-                        {
-                            "path": f"steps.{i}.declared_odds",
-                            "message": (
-                                f"step {i + 1} declares {v * 100:.0f}% but step {prev_idx + 1} "
-                                f"declared {prev_val * 100:.0f}%. Every declared_odds is your "
-                                "chance the PERSON ends up with the thing, judged from that "
-                                "step, not the chance you clear the step. Nothing is learned "
-                                "between steps at filing time, so the line cannot fall: price "
-                                "the whole outcome from each step (rule 121; the bench refuses "
-                                "this as REJ-29)"
-                            ),
-                        }
-                    )
-                    break
-                prev_val, prev_idx = v, i
-        # RULE 229 / REJ-33 (contract 2.44): a declared block's fields are the
-        # KIND'S, and the kind refuses them in its own sentence. The same
-        # limits are checked here -- the window grammar, the duration range,
-        # the invitee address, and a message carrying a date or a clock time --
-        # so a window typo never costs the one bid this target allows.
-        problems.extend(blocks.declaration_problems(steps))
-        # RULE 236 / REJ-35: a block that runs on the person's account carries
-        # the `connect_account` ROW on its own step. Steven, 2026-09-08: "fix
-        # it, remove the old path and lets do it." Which kinds need which
-        # provider is the REGISTRY's answer, never a list written here, and a
-        # registry we could not read leaves this silent.
-        problems.extend(blocks.grant_problems(steps, self._grant_requirements()))
-        # RULE 230 (2026-09-05): the typed deliverable. Only a step that
-        # CARRIES one is checked, so research, choice, handover and access
-        # steps draw no new refusal. A blank left empty is named in the
-        # validate door's own plain words.
-        problems.extend(blocks.deliverable_problems(steps))
-        # THE `calls` KIND, AND WHERE EVERY ARGUMENT CAME FROM (REJ-41,
-        # 2026-09-09). Shape and provenance only: an unknown `$from` source, a
-        # run quoting a run that has not happened, an account-lane tool with no
-        # `connect_account` row on its step, an address typed into a recipient.
-        # The TOOL itself is never judged here -- composio:, key: and mcp: name
-        # somebody else's catalog and a plain verb names the bench's own.
-        problems.extend(
-            blocks.calls_problems(steps, proposal.get("finalist_questions"))
-        )
-        return {
-            "ok": not problems,
-            "problems": problems,
-            # Said, never refused: the bench trims a long headline at a word.
-            # ALWAYS PRESENT, including empty.
-            "warnings": draft.headline_warnings(proposal) if asks_headline else [],
-            "note": (
-                "Local validation uses the current production JSON schema plus required "
-                "pitch, goal, declared-odds-line and declared-block field checks. "
-                "`finalist_questions` is NOT counted or shaped here -- up to three, flat "
-                "or wrapped, is the door's rule and the door is the only judge of it. "
-                "Production remains authoritative at submit."
-            ),
-        }
 
     # ------------------------------------------------------------------
     # THE DRAFT DOOR (rule 241, contract 3.11)
@@ -2512,194 +1867,6 @@ class BookOfHousesTollBenchProvider:
             _LOGGER.info("Target %s: the mended proposal passes the door", target_id)
         return fixed, left
 
-    def _repair_the_plan_shaped_proposal(
-        self, target_id: str, proposal: dict[str, Any], brief: Any
-    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """EVERY REPAIR THAT READS `steps`, in one place. (proposal, refusal).
-
-        This is the road a plan-shaped proposal takes: the brief's required
-        blocks merged in, the contact research bound, one outreach spread over
-        the picked contacts, a grant step retired into its action, the blank
-        form dropped, the local mirror and the free validate door consulted,
-        and the deliverable placeholder cleared. It is kept whole and
-        unchanged for a bench that still takes a whole plan at the proposal
-        door; since rule 243 (2026-09-11) the proposal this harness writes is
-        seven fields with no steps, and every one of these repairs would run
-        over a document that is not there.
-        """
-        proposal, inserted = blocks.merge_required_blocks(
-            proposal,
-            brief.get("required_blocks"),
-            brief.get("plan_template"),
-            want=brief.get("want"),
-            needs=self._grant_requirements(),
-            block_templates=brief.get("block_templates"),
-        )
-        if inserted:
-            _LOGGER.warning(
-                "Plan for target %s did not carry the brief's form; filled it "
-                "in and filed that (%s)",
-                target_id,
-                ", ".join(inserted),
-            )
-        # "FIND THEM FOR ME" (2026-09-09). The person answered the contact
-        # question with a research brief instead of a pick, so the recipient
-        # must come out of a `platform.research` run (or `contact_from`:
-        # "research" on a legacy act). Nothing here writes an address: there
-        # is none to write, and an invented one is the refusal REJ-41 exists
-        # for.
-        proposal, bound = blocks.bind_contact_research(
-            proposal, blocks.contact_research_of(brief)
-        )
-        if bound:
-            _LOGGER.warning(
-                "Plan for target %s reaches a person the person asked us to "
-                "find; bound the outreach to the research run (%s)",
-                target_id,
-                "; ".join(bound),
-            )
-        # N PEOPLE, ONE OUTREACH: `each` on a calls run, one act per contact
-        # on a legacy act. A legacy act has no `each` field and the harness
-        # will not invent a tool key to give it one.
-        proposal, spread = blocks.spread_over_contacts(
-            proposal, brief.get("selected_contacts")
-        )
-        if spread:
-            _LOGGER.warning(
-                "Plan for target %s sends to more than one picked contact; "
-                "spread the outreach (%s)",
-                target_id,
-                "; ".join(spread),
-            )
-        # RULE 236 / REJ-38 (Steven, 2026-09-08). A CONNECTION IS NOT A STEP.
-        # A model that composes its own steps rather than copying the block
-        # writes the GRANT step it was taught for a year; on this bench that is
-        # refused and the round is gone. Fires only where the brief's own
-        # template publishes the row and no GRANT step for it, so an older
-        # bench, and the `access` mold, are untouched.
-        proposal, retired = blocks.retire_grant_steps(
-            proposal, self._published_steps(brief)
-        )
-        if retired:
-            _LOGGER.warning(
-                "Plan for target %s filed a connection as a step of its own; "
-                "rule 236 moved it into the action (%s)",
-                target_id,
-                "; ".join(retired),
-            )
-        # CONTRACT 3.0: THE TEMPLATE IS A FORM. `plan_template` is a blank
-        # skeleton -- the mechanics filled, every agent-owned word an explicit
-        # "" or null -- so a model that copies it files steps with no title
-        # and no promise. Those are dropped here, before the round is spent on
-        # them, and NOTHING is written in their place: the model's words or
-        # nothing (rule 228 amended, Steven 2026-09-05). A platform-written
-        # block step keeps its blanks, because they are the platform's.
-        proposal, dropped, nothing_left = blocks.drop_blank_form_steps(proposal)
-        if dropped:
-            _LOGGER.warning(
-                "Plan for target %s copied the brief's form without filling it; "
-                "dropped %s",
-                target_id,
-                ", ".join(dropped),
-            )
-        if nothing_left:
-            _LOGGER.warning(
-                "Plan for target %s was the blank form and nothing else; "
-                "nothing filed",
-                target_id,
-            )
-            return proposal, {
-                "ok": False,
-                "error": "plan_is_still_the_blank_form",
-                "dropped": dropped,
-                "terminal": False,
-                "message": (
-                    "Nothing was filed. The brief's plan_template is a blank FORM, "
-                    "not a plan: every step arrived with an empty `title` and an "
-                    "empty `outcome_promise` for you to write. Those steps were "
-                    "dropped and there is nothing left of the plan. "
-                    "Write each step in your own words -- the harness will not "
-                    "write them for you -- and submit again. bid_template_notes "
-                    "on the brief lists every blank."
-                ),
-            }
-        local = self._grant_gap_never_blocks_the_filing(
-            self.validate_proposal(proposal), brief.get("plan_template")
-        )
-        # THE BENCH IS AUTHORITATIVE, AND ITS ANSWER IS FREE (contract 3.0).
-        # The local mirror stays as the offline pre-check; when the bench
-        # publishes the validate door, the door decides, because a mirror that
-        # has drifted must never bury a plan the door would take.
-        door = self.validate_at_the_door(target_id, proposal)
-        if door is None:
-            if not local["ok"]:
-                return proposal, {
-                    "ok": False,
-                    "error": "local_validation_failed",
-                    **local,
-                }
-        elif not door.get("ok"):
-            corrected = door.get("corrected_plan")
-            if door.get("corrected_ok") and isinstance(corrected, dict):
-                # Mechanical fixes only -- the door invents no words -- and it
-                # has already run the whole bid door over the result.
-                _LOGGER.info(
-                    "Validate door corrected the mechanics of the plan for "
-                    "target %s (%s); filing the corrected plan",
-                    target_id,
-                    ", ".join(str(line) for line in (door.get("corrections") or [])),
-                )
-                proposal = corrected
-            else:
-                passes = self._door_repairs.get(target_id, 0)
-                if passes < MAX_DOOR_REPAIR_PASSES:
-                    self._door_repairs[target_id] = passes + 1
-                    payload = self._door_problem_payload(door, local)
-                    self._log_refusal("filing", target_id, door)
-                    return proposal, {
-                        "ok": False,
-                        "error": "plan_has_problems",
-                        "terminal": False,
-                        "problems": self._trim_problems(payload["problems"]),
-                        "problem_count": payload["problem_count"],
-                        "summary": self._problem_summary(payload["problems"]),
-                        "corrections": payload["corrections"],
-                        "message": (
-                            "Nothing was filed and nothing was counted against you. "
-                            "The bench listed EVERY problem with this plan at once; "
-                            "each carries a `fix` in plain words and a 1-based "
-                            "`step_index`. Fix them in your own words and submit "
-                            "once more."
-                        ),
-                    }
-                _LOGGER.warning(
-                    "Validate door still refuses the plan for target %s after a "
-                    "repair pass; filing it so the door's own refusal is the record",
-                    target_id,
-                )
-        # RULE 230, LAST. A `deliverable` still carrying the form's
-        # "<angle bracket>" is REJ-36 at the door and would print on the
-        # person's card as though it were a promise. Both the local mirror and
-        # the free validate door have already named it by here, and the model
-        # has spent its repair pass, so the placeholder comes out rather than
-        # costing the round. The harness writes nothing in its place: an
-        # absent deliverable reads as channel "text", which is what a step
-        # that never said otherwise always meant.
-        proposal, cleared = blocks.clear_blank_deliverables(proposal)
-        if cleared:
-            _LOGGER.warning(
-                "Plan for target %s still carried the deliverable blank on "
-                "step(s) %s after the door; removed the placeholder rather "
-                "than filing it as a promise",
-                target_id,
-                ", ".join(str(index + 1) for index in cleared),
-            )
-        # DID IT COPY, OR DID IT COMPOSE? One line per filing, against the
-        # program this brief handed over. Nothing is refused on it -- the
-        # foreman grades the run, the door judges the plan.
-        self._log_program_diff(target_id, proposal, brief)
-        return proposal, None
-
     def submit_proposal(
         self, target_id: str, proposal: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
@@ -2710,9 +1877,9 @@ class BookOfHousesTollBenchProvider:
         a paragraph, one odds number, a price, one to three research links,
         up to three questions for the person, and the tools it needs. It carries
         no steps, so it takes the small road -- one free call at the validate
-        door, then the filing door. A proposal that carries steps is the old
-        whole-plan shape and takes the repair road, unchanged, for a bench
-        that still wants one.
+        door, then the filing door. A proposal that carries steps (the old
+        whole-plan shape) is filed exactly as written: nothing here repairs a
+        plan, and the bench's answer comes back in its own words (0.74.0).
         """
         try:
             brief = self._brief_for(target_id)
@@ -2752,11 +1919,6 @@ class BookOfHousesTollBenchProvider:
                 return refusal
         else:
             trims = []
-            proposal, refusal = self._repair_the_plan_shaped_proposal(
-                target_id, proposal, brief
-            )
-            if refusal is not None:
-                return refusal
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
             return {
@@ -2870,82 +2032,10 @@ class BookOfHousesTollBenchProvider:
                     result = self.api.submit_proposal(
                         target_id, proposal, f"{idempotency_key}-rowslots"
                     )
-                # RULE 228: THE REFUSAL CARRIES THE FORM. A REJ-32 body holds
-                # the same plan_template the brief published, so the one move
-                # left is to fill it in and file once. Once: a second refusal
-                # is the round, not a retry loop.
-                # RULE 236 / REJ-38 is the one refusal that carries NO form:
-                # what it hands back is the row, and the brief's template is
-                # where the row is published. Repair from there, or let the
-                # door's own words be the answer.
-                elif first.rej == REJ_GRANT_STEP_REMOVED:
-                    proposal, moved = self._retire_grant_step_after(
-                        target_id, first, proposal, self._published_steps(brief)
-                    )
-                    if not moved:
-                        raise
-                    result = self.api.submit_proposal(
-                        target_id,
-                        proposal,
-                        f"{idempotency_key}-{_retry_tag(first.rej)}",
-                    )
-                # RULE 238 CORRECTED / REJ-40: the plan reaches a person and
-                # says nobody. A contact question is NOT the repair any more --
-                # the who step is a step of the plan. The one bid worth filing
-                # again is "find them for me", bound to a research run.
-                elif first.rej == REJ_CONTACT_ROUTE:
-                    proposal, bound = self._bind_who_after(
-                        target_id, first, proposal, brief
-                    )
-                    if not bound:
-                        raise
-                    result = self.api.submit_proposal(
-                        target_id,
-                        proposal,
-                        f"{idempotency_key}-{_retry_tag(first.rej)}",
-                    )
-                # REJ-41: only one thing here is the harness's to repair.
-                elif first.rej == REJ_ARGUMENT_PROVENANCE:
-                    proposal, bound = self._bind_the_research_after(
-                        target_id, first, proposal, brief
-                    )
-                    if not bound:
-                        raise
-                    result = self.api.submit_proposal(
-                        target_id,
-                        proposal,
-                        f"{idempotency_key}-{_retry_tag(first.rej)}",
-                    )
-                elif first.rej not in REJ_CARRIES_THE_FORM or not first.plan_template:
-                    raise
                 else:
-                    proposal, repaired = blocks.merge_required_blocks(
-                        proposal,
-                        [
-                            str(act.get("kind"))
-                            for step in first.plan_template
-                            if isinstance(step, dict)
-                            for act in (step.get("acts") or [])
-                            if isinstance(act, dict) and act.get("kind")
-                        ],
-                        first.plan_template,
-                        want=brief.get("want"),
-                        needs=self._grant_requirements(),
-                    )
-                    if not repaired:
-                        raise
-                    _LOGGER.warning(
-                        "Target %s refused the bid %s; filed the template steps "
-                        "the refusal carried (%s) and re-filed once",
-                        target_id,
-                        first.rej,
-                        ", ".join(repaired),
-                    )
-                    result = self.api.submit_proposal(
-                        target_id,
-                        proposal,
-                        f"{idempotency_key}-{_retry_tag(first.rej)}",
-                    )
+                    # Every other refusal is the door's answer, in its own
+                    # words, handled below. Nothing is repaired at home.
+                    raise
         except BookOfHousesApiError as error:
             # RULE OF THE NIGHT (2026-09-09): a refusal the foreman cannot read
             # is a run nobody can grade. Every filing-door refusal is written
@@ -2982,31 +2072,11 @@ class BookOfHousesTollBenchProvider:
                     target_round=target_round,
                     agent_id=self.fleet_agent_id,
                 )
-            if error.rej == REJ_GRANT_STEP_REMOVED:
-                # RULE 236: the round is NOT spent -- nothing was written -- so
-                # this comes back non-terminal, carrying the door's own words
-                # and the row to add. The reservation was released just above.
-                if fleet_engaged and reservation is not None:
-                    self.fleet.release_reservation(
-                        target_id=target_id,
-                        target_round=target_round,
-                        agent_id=self.fleet_agent_id,
-                    )
-                return self._grant_step_removed_refusal(error)
-            if error.rej == REJ_ARGUMENT_PROVENANCE:
-                # Nothing was written, so the round is not spent; the door's
-                # own words carry the run and the argument it refused.
-                return self._argument_provenance_refusal(error)
-            if error.rej == REJ_CONTACT_ROUTE:
-                # RULE 238: a refused bid writes nothing, so the round is not
-                # spent. The reservation was released just above; the door's
-                # own words and the question to ask come back non-terminal.
-                return self._contact_route_refusal(error)
-            if error.rej == REJ_WHO_STEP_MISSING:
-                # RULE 238 AMENDED (2026-09-12): the who step is the agent's
-                # pick, so there is nothing here to repair -- the door's own
-                # words and the step to add come back non-terminal.
-                return self._who_step_missing_refusal(error)
+            if error.rej and 400 <= error.status < 500 and error.status not in (404, 409):
+                # A refused bid writes nothing, so the round is not spent. The
+                # reservation was released just above; the door's own words
+                # come back non-terminal, and nothing is repaired at home.
+                return self._door_refused(error)
             if fleet_engaged and error.status in (404, 409):
                 # Terminal refusals for this round: bidding closed because an
                 # agent is selected, a bid already on file, participation
@@ -3153,7 +2223,6 @@ class BookOfHousesTollBenchProvider:
     WITHDRAW_CAUSES = ("cannot_deliver", "other")
     WITHDRAW_REASON_LIMIT = 1000
 
-
     def withdraw_proposal(
         self,
         proposal_id: str,
@@ -3207,255 +2276,36 @@ class BookOfHousesTollBenchProvider:
         plan: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any]:
-        allowed = {"steps", "finish_line_cents", "finish_line_odds", "accept_rules"}
-        unexpected = sorted(set(plan) - allowed)
-        if unexpected:
-            return {
-                "ok": False,
-                "error": "informed_plan_changes_sealed_terms",
-                "message": (
-                    "An informed plan may revise only steps and finish-line allocation. "
-                    "Money, timeline, pitch, goal, and questions remain sealed."
-                ),
-                "unexpected_fields": unexpected,
-                "allowed_fields": sorted(allowed),
-            }
-        if plan.get("accept_rules") is not True:
-            return {
-                "ok": False,
-                "error": "rules_acceptance_required",
-                "message": "accept_rules must be true when first filing an informed plan",
-            }
-        proposals = self._owned_proposals()
-        original = next((item for item in proposals if item.get("id") == proposal_id), None)
-        if original is None or original.get("target_goal_id") != target_id:
-            return {"ok": False, "error": "owned_proposal_not_found"}
-        submitted_plan = dict(plan)
-        original_steps = original.get("steps") or []
-        revised_steps = plan.get("steps") or []
-        if (
-            len(revised_steps) == len(original_steps)
-            and all(isinstance(step, dict) for step in original_steps)
-            and all(isinstance(step, dict) for step in revised_steps)
-        ):
-            merged_steps = []
-            for original_step, revised_step in zip(
-                original_steps, revised_steps, strict=True
-            ):
-                merged_step = {**original_step, **revised_step}
-                if "har_blocks" not in revised_step and original_step.get("har_blocks"):
-                    merged_step["har_blocks"] = original_step["har_blocks"]
-                    merged_step["ask"] = original_step.get("ask")
-                merged_steps.append(merged_step)
-            submitted_plan["steps"] = merged_steps
-        # RULE 228 at the SECOND door. The informed plan runs through the same
-        # validator as the bid, so a revision that drops the want's required
-        # block is REJ-32 here too -- and this is the filing the person is
-        # already waiting on. The brief carries the form; fill it and file it.
-        try:
-            brief = self._brief_for(target_id)
-        except BookOfHousesApiError as error:
-            # A want whose agent is already selected can stop answering the
-            # open-target brief. The plan the person is waiting on must still
-            # file: without the form here, the REJ-32 refusal still carries it.
-            _LOGGER.warning(
-                "Brief unavailable for target %s at plan time (%s); relying on "
-                "the refusal to carry the template",
-                target_id,
-                error.code,
-            )
-            brief = {}
-        submitted_plan, inserted = blocks.merge_required_blocks(
-            submitted_plan,
-            brief.get("required_blocks"),
-            brief.get("plan_template"),
-            want=brief.get("want"),
-            needs=self._grant_requirements(),
-            block_templates=brief.get("block_templates"),
-        )
-        submitted_plan, bound = blocks.bind_contact_research(
-            submitted_plan, blocks.contact_research_of(brief)
-        )
-        if bound:
-            _LOGGER.warning(
-                "Informed plan for target %s reaches a person the person asked "
-                "us to find; bound the outreach to the research run (%s)",
-                target_id,
-                "; ".join(bound),
-            )
-        # THE PICKS ARE IN. This is the filing that knows how many people the
-        # person actually chose, so the fan-out happens here as well as at bid
-        # time: `each` on a calls run, one act per contact on a legacy act.
-        submitted_plan, spread = blocks.spread_over_contacts(
-            submitted_plan,
-            brief.get("selected_contacts"),
-            (original or {}).get("finalist_questions"),
-        )
-        if spread:
-            _LOGGER.warning(
-                "Informed plan for target %s sends to more than one picked "
-                "contact; spread the outreach (%s)",
-                target_id,
-                "; ".join(spread),
-            )
-        submitted_plan, retired = blocks.retire_grant_steps(
-            submitted_plan, self._published_steps(brief)
-        )
-        if retired:
-            _LOGGER.warning(
-                "Informed plan for target %s carried a connection as a step of "
-                "its own; rule 236 moved it into the action (%s)",
-                target_id,
-                "; ".join(retired),
-            )
-        if inserted:
-            _LOGGER.warning(
-                "Informed plan for target %s did not carry the brief's form; "
-                "filled it in and filed that (%s)",
-                target_id,
-                ", ".join(inserted),
-            )
-        # CONTRACT 3.0, at the SECOND door: the same blank form reaches the
-        # informed plan, and this is the filing the person is already waiting
-        # on. Drop what was copied and never filled; write nothing in its place.
-        submitted_plan, dropped, nothing_left = blocks.drop_blank_form_steps(
-            submitted_plan)
-        if dropped:
-            _LOGGER.warning(
-                "Informed plan for target %s copied the brief's form without "
-                "filling it; dropped %s",
-                target_id,
-                ", ".join(dropped),
-            )
-        if nothing_left:
-            return {
-                "ok": False,
-                "error": "plan_is_still_the_blank_form",
-                "dropped": dropped,
-                "terminal": False,
-                "message": (
-                    "Nothing was filed. The brief's plan_template is a blank FORM: "
-                    "every step arrived with an empty `title` and an empty "
-                    "`outcome_promise` for you to write. Write each step in your "
-                    "own words and file again."
-                ),
-            }
-        candidate = {
-            key: original.get(key)
-            for key in (
-                "model_declared",
-                "total_ask_cents",
-                "allocation",
-                "timeline_days",
-                "finish_line",
-                "subsidy_declared",
-                "operator_relationship_disclosure",
-                "campaign",
-                "smart_goals",
-                "finalist_questions",
-                "pitch_title",
-                "headline",
-                "pitch_body",
-                "person_cost_estimate",
-                # Frozen at bid time (rule 226) but still required by the
-                # published schema, so a revision rebuilt from the sealed
-                # original must carry them or it fails validation at home
-                # before it ever reaches the server.
-                *HOMEWORK_FIELDS,
-            )
-            if original.get(key) is not None
-        }
-        candidate["steps"] = submitted_plan.get("steps")
-        candidate["finish_line_cents"] = submitted_plan.get(
-            "finish_line_cents", original.get("finish_line_cents") or 0
-        )
-        # RULE 241: THE BENCH IS THE VALIDATOR NOW. This used to be an offline
-        # jsonschema mirror standing between the person and the plan they are
-        # waiting on -- and a mirror that has drifted buries a plan the door
-        # would have taken. The plan is built at the draft door, which
-        # re-validates on every round, so the mirror runs for the LOG and
-        # refuses nothing. If the plan is really wrong the bench says so, in
-        # its own words, on the filing that follows.
-        validation = self._grant_gap_never_blocks_the_filing(
-            self.validate_proposal(candidate), brief.get("plan_template")
-        )
-        if not validation["ok"]:
-            _LOGGER.warning(
-                "Local mirror has problems with the informed plan for target "
-                "%s; filing anyway and letting the bench decide (%s)",
-                target_id,
-                self._problem_summary(validation.get("problems") or []),
-            )
-        # RULE 230: the placeholder never reaches the person's card, and it
-        # comes out only here -- the validator has already had its say, so the
-        # model was told before the harness decided anything.
-        submitted_plan, cleared = blocks.clear_blank_deliverables(submitted_plan)
-        if cleared:
-            _LOGGER.warning(
-                "Informed plan for target %s still carried the deliverable "
-                "blank on step(s) %s; removed the placeholder",
-                target_id,
-                ", ".join(str(index + 1) for index in cleared),
-            )
+        """File the informed plan exactly as the model wrote it (0.74.0).
+
+        This is the road for a bench with no draft door; a 4.x bench takes the
+        plan at the draft door (`file_plan_from_draft`). It used to merge the
+        brief's blocks in, bind research, spread contacts, retire grant steps,
+        drop blank form steps and run a local mirror first -- a second copy of
+        the bench's rules that buried correct plans more than once. Now the
+        plan goes to the door as written and the door's answer comes back in
+        its own words. A refused plan writes nothing, so it is non-terminal.
+        """
         try:
             return self.api.submit_informed_plan(
-                target_id, proposal_id, submitted_plan, idempotency_key
+                target_id, proposal_id, plan, idempotency_key
             )
         except BookOfHousesApiError as error:
-            if error.rej == REJ_GRANT_STEP_REMOVED:
-                submitted_plan, moved = self._retire_grant_step_after(
-                    target_id, error, submitted_plan, self._published_steps(brief)
-                )
-                if not moved:
-                    return self._grant_step_removed_refusal(error)
-                return self.api.submit_informed_plan(
-                    target_id,
-                    proposal_id,
-                    submitted_plan,
-                    f"{idempotency_key}-{_retry_tag(error.rej)}",
-                )
-            if error.rej == REJ_CONTACT_ROUTE:
-                # RULE 238 at the SECOND door, and the picker is NOT the answer
-                # here: the revision payload the bench validates carries the
-                # steps and not `finalist_questions`, and the four are frozen
-                # at bid time anyway. So this hands back the door's own words
-                # and says what a revision can actually carry -- the
-                # `contact_ref` the person's pick filled in. Non-terminal: a
-                # refused revision never writes, and the person is waiting.
-                return self._contact_route_refusal(error)
-            if error.rej in REJ_CARRIES_THE_FORM and error.plan_template:
-                submitted_plan, repaired = blocks.merge_required_blocks(
-                    submitted_plan,
-                    [
-                        str(act.get("kind"))
-                        for step in error.plan_template
-                        if isinstance(step, dict)
-                        for act in (step.get("acts") or [])
-                        if isinstance(act, dict) and act.get("kind")
-                    ],
-                    error.plan_template,
-                    want=brief.get("want"),
-                    needs=self._grant_requirements(),
-                )
-                if repaired:
-                    _LOGGER.warning(
-                        "Informed plan for target %s refused %s; filed the "
-                        "template the refusal carried (%s) and re-filed once",
-                        target_id,
-                        error.rej,
-                        ", ".join(repaired),
-                    )
-                    return self.api.submit_informed_plan(
-                        target_id, proposal_id, submitted_plan,
-                        f"{idempotency_key}-{_retry_tag(error.rej)}",
-                    )
-            if error.rej == REJ_WHO_STEP_MISSING:
-                # RULE 238 AMENDED (2026-09-12) at the SECOND door. Nothing is
-                # repaired: the step is the agent's to write, and a revision
-                # that writes it for them is a plan the agent never wrote.
-                return self._who_step_missing_refusal(error)
+            self._log_refusal(
+                "plan",
+                target_id,
+                {
+                    "status": error.status,
+                    "code": error.code,
+                    "rej": error.rej,
+                    "detail": error.message,
+                    "body": getattr(error, "body", None),
+                },
+            )
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
                 return self._block_refusal(target_id, error)
+            if error.rej and 400 <= error.status < 500 and error.status not in (404, 409):
+                return self._door_refused(error)
             raise
 
     def current_step(self, deal_id: str, whole: bool = False) -> dict[str, Any]:
@@ -3784,20 +2634,13 @@ class BookOfHousesTollBenchProvider:
                 )
 
     def _remember_deliverable(self, step_id: Any, payload: dict[str, Any]) -> None:
-        """Record this step's signed promise and the files already on it.
-
-        RULE 230: a step whose signed `deliverable.channel` is `file` cannot
-        close until a receipt of the promised type is attached. Remembering it
-        here is what lets `file_outcome` say so BEFORE the filing is spent --
-        the server's `deliverable_missing` costs the person a round.
-        """
+        """Record the files already on this step (rule 230), so a later read
+        that omits them still shows them. Whether a filing owes a file is the
+        bench's to say (`deliverable_missing`), never a local check."""
         step_id = str(step_id or "")
         if not step_id:
             return
         step = payload.get("current_step") or {}
-        deliverable = step.get("deliverable")
-        if isinstance(deliverable, dict) and deliverable:
-            self._step_deliverables[step_id] = deliverable
         server_receipts = [
             item for item in (step.get("file_receipts") or []) if isinstance(item, dict)
         ]
@@ -4335,20 +3178,9 @@ class BookOfHousesTollBenchProvider:
                     "only rides a file_url delivery."
                 ),
             }
-        # RULE 230: A STEP THAT PROMISED A FILE DOES NOT CLOSE ON WORDS. What
-        # forced it: three `document` outcomes on production listed
-        # "stan_animation.mp4" in their text sections and no file was ever
-        # uploaded. Said here, before the filing is spent, because the
-        # server's `deliverable_missing` costs the person a review round.
-        blocked = self._file_step_owes_a_file(step_ref, outcome)
-        if blocked:
-            return blocked
-        # RULE 233: A STEP THAT PROMISED CARDS DOES NOT CLOSE ON HEADINGS.
-        # What forced it: a document whose blocks were four field names as
-        # headings with nothing under them, filed twice on production.
-        blocked = self._text_step_owes_cards(step_ref, outcome)
-        if blocked:
-            return blocked
+        # RULES 230 AND 233 (a promised file, a promised set of cards) are
+        # the bench's to judge: `deliverable_missing` and the shape refusals
+        # come back below in its own words (0.74.0).
         try:
             result = self._post_the_outcome(target_id, outcome, idempotency_key)
             self._remember_finds(step_ref, result)
@@ -4442,88 +3274,6 @@ class BookOfHousesTollBenchProvider:
             step_id,
             ", ".join(f"{len(rows)} {key}" for key, rows in finds.items()),
         )
-
-    def _file_step_owes_a_file(
-        self, step_ref: str | None, outcome: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """The local half of rule 230: a promised file, and nothing attached.
-
-        Only fires when the step's SIGNED deliverable says `channel: file` and
-        this filing carries no `file_url` and no receipt is known on the step.
-        A step whose promise we never read is left to the door: a mirror must
-        never bury a delivery the platform would take.
-        """
-        if outcome.get("file_url"):
-            return None
-        step_id = str(step_ref or "").strip()
-        if not step_id:
-            return None
-        deliverable = self._step_deliverables.get(step_id)
-        if not blocks.promised_file_types(deliverable) and not (
-            isinstance(deliverable, dict)
-            and str(deliverable.get("channel") or "").strip().lower() == "file"
-        ):
-            return None
-        if self._step_receipts.get(step_id):
-            return None
-        warnings = self._deliverable_warnings.get(step_id, 0)
-        if warnings >= MAX_DELIVERABLE_WARNINGS:
-            return None
-        self._deliverable_warnings[step_id] = warnings + 1
-        promised = blocks.promise_words(deliverable)
-        return {
-            "ok": False,
-            "error": "deliverable_missing",
-            "deliverable": deliverable,
-            "terminal": False,
-            "message": (
-                f"This step promised {promised}; nothing attached. A text "
-                "section that lists a filename closes nothing. Deliver the "
-                "bytes first -- toll_bench.deliver_file for a file in this "
-                "run's folder, or toll_bench.deliver_hosted_file for a link "
-                "the platform fetches once -- then file this outcome. If you "
-                "cannot make that kind of file, say so on the step thread "
-                "rather than filing words in its place."
-            ),
-        }
-
-    def _text_step_owes_cards(
-        self, step_ref: str | None, outcome: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """The local half of rule 233: a promised shape, and the boxes empty.
-
-        Only fires when the step's SIGNED deliverable is `text` and names
-        `fields`. A blank box on a card in THIS document is refused every
-        time -- the bench refuses it by name whatever else is on the step. A
-        document with no cards, or too few, is named ONCE per step and then
-        left to the door: an earlier receipt on the same step may already
-        carry the cards, `current-step` does not publish receipts, and a
-        mirror must never bury a filing the platform would take.
-        """
-        step_id = str(step_ref or "").strip()
-        if not step_id:
-            return None
-        deliverable = self._step_deliverables.get(step_id)
-        shortfall = blocks.cards_shortfall(deliverable, outcome)
-        if shortfall is None:
-            return None
-        if not shortfall.get("certain"):
-            warnings = self._shape_warnings.get(step_id, 0)
-            if warnings >= MAX_DELIVERABLE_WARNINGS:
-                return None
-            self._shape_warnings[step_id] = warnings + 1
-        result = {key: value for key, value in shortfall.items() if key != "certain"}
-        result["message"] = (
-            result["message"]
-            + " A heading with nothing under it hands back nothing: the "
-            "platform reads no word of the work, it counts empty boxes. "
-            "File the outcome again with a cards block, one item per thing "
-            "and every named field filled (the exact shape is in how). If "
-            "you cannot fill them, say so on the step thread rather than "
-            "filing a shell."
-        )
-        result.update({"ok": False, "deliverable": deliverable, "terminal": False})
-        return result
 
     # ------------------------------------------------------------------
     # RULE 230, THE TWO DELIVERY DOORS.

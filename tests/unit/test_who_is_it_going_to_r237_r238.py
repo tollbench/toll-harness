@@ -33,7 +33,6 @@ from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.toll_bench import blocks, draft
 from toll_harness.toll_bench.book_of_houses import (
     BookOfHousesTollBenchProvider,
-    finalist_question_problems,
 )
 
 # --------------------------------------------------------------------------
@@ -173,14 +172,6 @@ def _plan(*steps, questions=None):
     }
 
 
-def _group(proposal):
-    return proposal["finalist_questions"][0]
-
-
-def _formats(proposal):
-    return [q.get("format") for q in _group(proposal)]
-
-
 class _Api:
     """A live bench's answers, contract 3.0: a blank `plan_template`, the
     blocks in `block_templates`, and the whole bid payload in `bid_template`
@@ -250,152 +241,6 @@ def _refusal(rej, detail):
                                                         "detail": detail})
 
 
-def _picker(**overrides):
-    block = copy.deepcopy(PUBLISHED_PICKER)
-    block["title"] = "Who should these go to?"
-    block.update(overrides)
-    return block
-
-
-def _questions(*blocks_):
-    return [list(blocks_)]
-
-
-def _messages(problems):
-    return " ".join(problem["message"] for problem in problems)
-
-
-# ---------------------------------------------------------------------------
-# 1. THE MIRROR REFUSES A CONTACT QUESTION ON A PROPOSAL
-# ---------------------------------------------------------------------------
-def test_a_contact_picker_on_a_proposal_is_refused():
-    # The bench's REJ-15, mirrored at home so the bid is never spent on it.
-    problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], _picker(),
-                   MODEL_QUESTIONS[3])
-    )
-    assert "the contact book is not one of your questions" in _messages(problems)
-    assert "on a step of the plan" in _messages(problems)
-
-
-def test_a_picker_is_refused_however_it_is_dressed():
-    # A count, a contact of its own, an ask of its own: none of it matters any
-    # more. The shape is refused, not its fields.
-    for dressed in (
-        _picker(config={"count": 80}),
-        _picker(config={"count": 5, "options": []}),
-        _picker(email="ruby@example.com"),
-        _picker(ask="APPROVE"),
-    ):
-        problems = finalist_question_problems(
-            _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], dressed,
-                       MODEL_QUESTIONS[3])
-        )
-        assert "the contact book is not one of your questions" in _messages(problems)
-
-
-def test_the_three_shapes_that_are_still_questions_pass():
-    problems = finalist_question_problems(
-        _questions(
-            MODEL_QUESTIONS[0],
-            {"id": "q2", "format": "short_answer", "title": "Anything to add?"},
-            MODEL_QUESTIONS[2],
-            {"id": "q4", "format": "short_answer", "title": "Anything to avoid?"},
-        )
-    )
-    assert problems == []
-
-
-def test_a_picker_is_refused_wherever_it_sits():
-    # Not a seat rule. The brief used to keep the third seat for it; there is
-    # no seat now, so every position is the same refusal.
-    for seat in range(4):
-        group = [
-            MODEL_QUESTIONS[0], MODEL_QUESTIONS[1],
-            MODEL_QUESTIONS[2], MODEL_QUESTIONS[3],
-        ]
-        group[seat] = _picker()
-        problems = finalist_question_problems(_questions(*group))
-        assert "the contact book is not one of your questions" in _messages(problems), seat
-
-
-def test_two_pickers_are_two_refusals_not_a_count_rule():
-    # "Use one contact_picker" was the old sentence. One is no longer a legal
-    # number, so each of them is refused where it stands.
-    problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], _picker(id="who"),
-                   _picker(id="who2", title="And who else?"), MODEL_QUESTIONS[3])
-    )
-    said = _messages(problems)
-    assert said.count("the contact book is not one of your questions") == 2
-    assert "use one contact_picker" not in said
-
-
-def test_the_refusal_names_the_question_that_carries_it():
-    problems = finalist_question_problems(
-        _questions(MODEL_QUESTIONS[0], MODEL_QUESTIONS[1], _picker(),
-                   MODEL_QUESTIONS[3])
-    )
-    assert [problem["path"] for problem in problems] == ["finalist_questions[1][3]"]
-
-
-def test_the_two_text_box_cap_is_gone_and_the_count_is_the_doors():
-    # WHAT FORCED THE REWRITE (Kai, 2026-09-17): this mirror still held the
-    # August rule -- exactly four questions, at most two of them text boxes --
-    # while the bench had taken UP TO THREE, any of them text, since
-    # 2026-09-11. The harness does not re-implement a server rule, so three
-    # text boxes pass here and the free validate door is the judge.
-    assert (
-        finalist_question_problems(
-            _questions(
-                {"id": "q1", "format": "short_answer", "title": "One?"},
-                {"id": "q2", "format": "short_answer", "title": "Two?"},
-                {"id": "q3", "format": "short_answer", "title": "Three?"},
-            )
-        )
-        == []
-    )
-    # Flat, wrapped, and none at all: the three shapes the door takes.
-    assert finalist_question_problems(list(MODEL_QUESTIONS[:3])) == []
-    assert finalist_question_problems([]) == []
-    assert finalist_question_problems(None) == []
-    # Four is not flagged at home any more; the door says so in its own words.
-    assert finalist_question_problems(_questions(*MODEL_QUESTIONS)) == []
-
-
-def test_a_picker_in_a_flat_list_is_refused_where_it_stands():
-    # The bid form hands out a FLAT list now. The one local refusal that is
-    # left has to find the book in that shape too.
-    problems = finalist_question_problems(
-        [MODEL_QUESTIONS[0], _picker(), MODEL_QUESTIONS[1]]
-    )
-    assert "the contact book is not one of your questions" in _messages(problems)
-    assert [problem["path"] for problem in problems] == ["finalist_questions[2]"]
-
-
-def test_a_bid_shaped_wrong_is_still_the_door_s_to_say_so():
-    # Not one group of questions. The repair touches the steps and leaves the
-    # shape alone, so the door's own sentence is what the model reads.
-    plan = {"steps": [EMAIL_STEP], "finalist_questions": MODEL_QUESTIONS}
-    merged, inserted = blocks.merge_required_blocks(plan, [], [])
-    assert inserted == []
-    assert merged is plan
-
-
-def test_this_package_writes_no_who_step_of_its_own():
-    # The AGENT picks it (amended 2026-09-12) and the door refuses a plan that
-    # is missing it. A harness that wrote one in a repair would be writing the
-    # agent's plan, which is the thing that forced the correction.
-    plan = _plan(WORK_STEP)
-    merged, _inserted = blocks.merge_required_blocks(
-        plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
-        block_templates={"email": [EMAIL_STEP]},
-    )
-    for step in merged["steps"]:
-        formats = [b.get("format") for b in (step.get("har_blocks") or [])]
-        assert "contact_picker" not in formats
-
-
 def test_the_runtime_sheet_says_the_agent_puts_the_who_step_in():
     # AMENDED 2026-09-12: the bench stopped inserting the step; the sheet has
     # to say whose step it is now, or the agent writes a plan without one.
@@ -417,48 +262,6 @@ def test_contact_picker_is_still_a_har_slug_because_the_who_step_carries_it():
     from toll_harness.toll_bench.book_of_houses import HAR_FORMAT_SLUGS
 
     assert "contact_picker" in HAR_FORMAT_SLUGS
-
-
-# ---------------------------------------------------------------------------
-# 2. Nothing puts a picker on a bid
-# ---------------------------------------------------------------------------
-def test_an_act_on_the_persons_lane_reaches_a_person():
-    assert blocks.steps_reach_a_person([EMAIL_STEP]) is True
-    assert blocks.steps_reach_a_person([WORK_STEP]) is False
-    # The meeting shape: no lane field, but it names its invitee.
-    assert blocks.act_reaches_a_person({"kind": "meeting", "with": ""}) is True
-
-
-def test_the_inserted_block_brings_no_question_with_it():
-    # The step repair still runs. The questions are not touched -- this is the
-    # line that spent every bid on the first fleet cycle after the bench
-    # stopped taking a contact question.
-    plan = _plan(WORK_STEP)
-    merged, inserted = blocks.merge_required_blocks(
-        plan, ["email"], [EMAIL_STEP], needs={"email": ("google-gmail",)},
-        block_templates={"email": [EMAIL_STEP]},
-    )
-    assert inserted and not any("contact_picker" in line for line in inserted)
-    assert _formats(merged) == ["single_choice", "yes_no", "yes_no", "short_answer"]
-    assert finalist_question_problems(merged["finalist_questions"]) == []
-
-
-def test_merge_required_blocks_takes_no_bid_template_any_more():
-    # The door that used to let a picker in is gone, not merely unused.
-    import inspect
-
-    taken = inspect.signature(blocks.merge_required_blocks).parameters
-    assert "bid_template" not in taken
-    assert "bid_template_notes" not in taken
-    assert not hasattr(blocks, "merge_contact_picker")
-    assert not hasattr(blocks, "template_contact_picker")
-
-
-def test_a_plan_that_reaches_nobody_is_asked_nothing():
-    plan = _plan(WORK_STEP)
-    merged, inserted = blocks.merge_required_blocks(plan, [], [])
-    assert inserted == []
-    assert merged is plan
 
 
 # ---------------------------------------------------------------------------
@@ -523,11 +326,9 @@ def test_a_rej40_is_the_door_s_own_answer_and_never_re_filed():
         "nobody to send it to: no `contact_ref` and no `found_contact`.",
     ))
     plan = _plan(FUTURE_STEP)
-    # The harness could not see it: nothing was added before filing either.
-    assert blocks.steps_reach_a_person(plan["steps"]) is False
     result = _provider(api).submit_proposal("t-1", plan, "idem-2")
     assert result["ok"] is False
-    assert result["error"] == "contact_route"
+    assert result["rej"] == "REJ-40"
     assert result["terminal"] is False
     assert len(api.submissions) == 1
     assert "contact_picker" not in api.submissions[0][1]["finalist_questions"][0][2]["format"]
@@ -537,15 +338,9 @@ def test_the_rej40_refusal_hands_back_the_who_step_in_the_door_s_words():
     api = _Api(required=[], refuse=_refusal("REJ-40", "names nobody to send it to"))
     result = _provider(api).submit_proposal("t-1", _plan(FUTURE_STEP), "idem-3")
     assert result["ok"] is False
+    # 0.74.0: the door's own words and nothing of the harness's.
     assert result["detail"] == "names nobody to send it to"
-    assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in result["fix"]
-    assert "do not plan a separate find step: put the word on the who step" in result["fix"]
-    assert '"found_by_research"' in result["fix"]
-    # The picker is NAMED now (amended 2026-09-12) -- as the who STEP's own
-    # block, copied out of the brief's templates, never as a question on the
-    # proposal, which the bench still refuses REJ-15.
-    assert 'block_templates["who"]' in result["fix"]
-    assert "question" not in result["fix"]
+    assert "fix" not in result
     # Filed ONCE. A harness that kept bouncing the same plan spends the run.
     assert len(api.submissions) == 1
 
@@ -559,144 +354,12 @@ def test_a_raw_address_is_the_door_s_to_refuse_and_not_re_filed():
     ))
     result = _provider(api).submit_proposal("t-1", _plan(EMAIL_STEP), "idem-4")
     assert result["ok"] is False
-    assert result["error"] == "contact_route"
+    assert result["rej"] == "REJ-40"
     assert len(api.submissions) == 1
 
 
-# ---------------------------------------------------------------------------
-# 4. A provider key on a lane: carried through, never judged at home
-# ---------------------------------------------------------------------------
-TWILIO_ROW = {
-    "id": "connect-twilio-1",
-    "ask": "grant",
-    "format": "connect_account",
-    "required": True,
-    "title": "Add your Twilio key",
-    "config": {
-        "grant_request": {
-            "kind": "api_key",
-            "what": "Your Twilio account",
-            "why": "So the reminders go out from your own number",
-            "scope": "send messages from the number you name",
-            "until": "target_end",
-            "exposure": "agent_acts_through_connection",
-            "connector": {
-                "provider": "key:twilio",
-                "actions": ["TWILIO_SEND_MESSAGE"],
-                "resources": {"from_numbers": ["<your number>"]},
-                "operation_limit": 40,
-            },
-        },
-        "fallback": "lesser",
-        "fallback_note": "Without it nothing can go out from your number.",
-    },
-}
-
-OUTLOOK_ROW = {
-    "id": "connect-outlook-1",
-    "ask": "grant",
-    "format": "connect_account",
-    "required": True,
-    "title": "Connect your Outlook",
-    "config": {
-        "grant_request": {
-            "kind": "oauth_connection",
-            "what": "Your Outlook mailbox",
-            "why": "So the message goes out from your own address",
-            "scope": "send only the messages you approve",
-            "until": "target_end",
-            "exposure": "agent_acts_through_connection",
-            "connector": {
-                "provider": "composio:outlook",
-                "actions": ["OUTLOOK_SEND_EMAIL"],
-                "resources": {"mailbox_ids": ["primary"]},
-            },
-        },
-        "fallback": "agent_account",
-        "fallback_note": "The message goes out from the Book of Houses mailbox.",
-    },
-}
-
-
-def _step_on(row, kind="email"):
-    return {
-        "ask": "APPROVE",
-        "title": "Send it",
-        "outcome_promise": "It goes out from your own account.",
-        "har_blocks": [row],
-        "acts": [{"kind": kind, "runs_on": "person"}],
-    }
-
-
-def test_a_lane_key_is_read_off_the_row_unchanged():
-    assert blocks.connect_row_providers(_step_on(TWILIO_ROW, "sms")) == {"key:twilio"}
-    assert blocks.connect_row_providers(_step_on(OUTLOOK_ROW)) == {"composio:outlook"}
-    assert blocks.split_provider("key:twilio") == ("key", "twilio")
-    assert blocks.split_provider("composio:outlook") == ("composio", "outlook")
-    # A colon in front of something that is not a lane is not a lane.
-    assert blocks.split_provider("google-gmail") == ("", "google-gmail")
-    assert blocks.split_provider("weird:thing") == ("", "weird:thing")
-
-
-def test_a_lane_key_is_held_to_no_floor_of_ours():
-    # The row names Twilio's own tool slugs. There is no `gmail.message.send`
-    # there to be missing, and judging it against our verbs would refuse a row
-    # for a word it never used.
-    assert blocks.grant_floor("key:twilio") == ()
-    assert blocks.grant_floor("composio:outlook") == ()
-    assert blocks.grant_floor("google-gmail") == ("gmail.message.send",)
-
-
-def test_a_grant_step_on_a_lane_key_is_counted_as_written():
-    step = {
-        "ask": "GRANT",
-        "title": "Add your Twilio key",
-        "grant_request": {"connector": {"provider": "key:twilio",
-                                        "actions": ["TWILIO_SEND_MESSAGE"]}},
-    }
-    assert blocks.grant_provider(step) == "key:twilio"
-    assert blocks.intended_grant_provider(step) == "key:twilio"
-
-
-def test_the_registry_s_own_lane_key_matches_exactly():
-    steps = [_step_on(TWILIO_ROW, "sms")]
-    assert blocks.grant_problems(steps, {"sms": "key:twilio"}) == []
-
-
-def test_a_lane_row_is_never_refused_at_home_for_the_wrong_name():
-    # The bench accepts `composio:outlook` where `google-gmail` was asked for,
-    # because the person may re-point the row at any same-family service. The
-    # family table is the server's, so the mirror says nothing and the free
-    # validate door decides.
-    steps = [_step_on(OUTLOOK_ROW)]
-    assert blocks.grant_problems(steps, {"email": "google-gmail"}) == []
-
-
-def test_the_silence_does_not_swallow_a_step_that_opens_nothing():
-    bare = dict(_step_on(OUTLOOK_ROW))
-    bare["har_blocks"] = []
-    problems = blocks.grant_problems([bare], {"email": "google-gmail"})
-    assert len(problems) == 1
-    assert problems[0]["rej"] == "REJ-35"
-    assert problems[0]["provider"] == "google-gmail"
-
-
-def test_no_row_is_manufactured_for_a_lane_the_harness_cannot_judge():
-    plan = {"steps": [_step_on(OUTLOOK_ROW)], "finalist_questions": [MODEL_QUESTIONS]}
-    merged, inserted = blocks.merge_required_blocks(
-        plan, ["email"], [], needs={"email": ("google-gmail",)},
-        block_templates={"email": [EMAIL_STEP]},
-    )
-    # Nothing about the connection: no second connect card for an account the
-    # person may already have settled on the row they were shown.
-    assert not any("connect row" in line or "grant:" in line for line in inserted)
-    assert merged["steps"][0]["har_blocks"] == [OUTLOOK_ROW]
-
-
 def test_a_lane_key_reads_as_the_service_it_is():
-    assert blocks.provider_words("key:twilio") == "Twilio"
-    assert blocks.provider_words("composio:outlook") == "Outlook"
-    assert blocks.provider_words("google-calendar") == "Google Calendar"
+    assert blocks.connector_words("key:twilio") == "Twilio"
     assert blocks.connector_words("composio:gmail") == "Gmail"
     assert blocks.connected_sentence(["key:twilio", "composio:outlook"]) == (
         "The person already connected: Twilio, Outlook."

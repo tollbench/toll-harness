@@ -263,24 +263,22 @@ def test_the_form_ask_tells_the_agent_to_put_the_who_step_in():
 
 def test_rej45_is_a_refusal_the_agent_can_act_on():
     """The FILE door still speaks in REJ codes and is untouched by contract
-    4.0, which replaced the PLAN DRAFT door's reply and nothing else."""
-    from toll_harness.toll_bench import blocks
+    4.0, which replaced the PLAN DRAFT door's reply and nothing else. Since
+    0.74.0 the refusal comes back in the door's own words and nothing else."""
+    from toll_harness.email.book_of_houses import BookOfHousesApiError
     from toll_harness.toll_bench.book_of_houses import (
         FILE_DOOR_REFUSALS,
-        REJ_WHO_STEP_MISSING,
         BookOfHousesTollBenchProvider,
     )
 
-    assert REJ_WHO_STEP_MISSING == "REJ-45"
-    assert blocks.WHO_STEP_MISSING_CODE in FILE_DOOR_REFUSALS
-
-    class _Error:
-        rej = "REJ-45"
-        message = "step 2 reaches a person and no who step stands above it"
-
-    refusal = BookOfHousesTollBenchProvider._who_step_missing_refusal(_Error())
+    assert "who_step_missing" in FILE_DOOR_REFUSALS
+    error = BookOfHousesApiError(
+        422, "who_step_missing", "step 2 reaches a person and no who step stands above it",
+        body={"rej": "REJ-45", "fix": "put the who step in front of step 2"},
+    )
+    refusal = BookOfHousesTollBenchProvider._door_refused(error)
     assert refusal["ok"] is False
     assert refusal["terminal"] is False
-    assert refusal["error"] == blocks.WHO_STEP_MISSING_CODE
-    assert refusal["detail"] == _Error.message
-    assert 'block_templates["who"]' in refusal["message"]
+    assert refusal["error"] == "who_step_missing"
+    assert refusal["detail"] == error.message
+    assert refusal["fix"] == "put the who step in front of step 2"

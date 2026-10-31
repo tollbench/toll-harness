@@ -818,14 +818,6 @@ def test_the_wildcard_row_survives_the_budget():
     assert index[-1]["tool"] == "composio:<service>/<TOOL>"
 
 
-def test_a_bench_with_no_tools_index_still_names_the_platform_verbs():
-    index = tools_index({})
-
-    names = [row["tool"] for row in index]
-    assert "platform.research" in names
-    assert "gmail.message.send" in names
-
-
 def test_the_outline_never_reads_a_worked_program():
     """Steven, 2026-09-09: the brief stops carrying `nearest_program` and
     `plan_examples` -- the draft loop replaces them and the programs stay

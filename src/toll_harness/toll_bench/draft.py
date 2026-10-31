@@ -98,7 +98,7 @@ from toll_harness.models.base import (
     was_cut_off,
     what_came_back,
 )
-from toll_harness.toll_bench import blocks, programs, row_slots
+from toll_harness.toll_bench import programs, row_slots
 
 _LOGGER = logging.getLogger("toll_harness.draft")
 
@@ -1898,11 +1898,13 @@ def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, s
     AN EMPTY LIST IS AN ANSWER (2026-09-11). `tools: []` is the bench saying
     this want offers NO tools; only a MISSING key (or a null) means "this
     bench publishes no index". Until this fix an empty list fell through to
-    the platform fallback below, so every plan on a want with no tools was
-    offered GRANT_MIN_ACTIONS and PLATFORM_TOOLS and put a connection row it
-    could never use on the front of a step. That one line is why Jan, Alice
-    and Bobby each burned the full 200-round ceiling on the workshop want and
-    filed nothing.
+    a platform fallback, so every plan on a want with no tools was offered a
+    hard-coded tool list and put a connection row it could never use on the
+    front of a step. That one line is why Jan, Alice and Bobby each burned the
+    full 200-round ceiling on the workshop want and filed nothing.
+
+    A bench that publishes no index gets an empty list (0.74.0): the harness
+    keeps no list of the bench's tools of its own.
     """
     published = (brief or {}).get("tools") if isinstance(brief, dict) else None
     if isinstance(published, list):
@@ -1921,25 +1923,7 @@ def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, s
         if wildcard:
             kept.append(wildcard)
         return kept
-    # A bench that publishes no index: the platform's own four, and the verbs
-    # this package holds a connection floor for. Nothing is invented, and no
-    # program is read to find one.
-    found: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    def add(tool: Any, service: Any = "") -> None:
-        name = str(tool or "").strip()
-        if not name or name in seen:
-            return
-        seen.add(name)
-        found.append({"tool": name, "on": str(service or "")})
-
-    for provider_key, actions in blocks.GRANT_MIN_ACTIONS.items():
-        for action in actions:
-            add(action, provider_key)
-    for tool in blocks.PLATFORM_TOOLS:
-        add(tool, "")
-    return found
+    return []
 
 
 # What the person said, in the order it matters to an outline. The list is
@@ -1952,7 +1936,6 @@ _STRATEGY_KEYS = (
     "person_context",
     "required_blocks",
     "person_already_connected",
-    "contact_research_note",
     "timeline_days",
     "public_answers",
     "person_facts",
@@ -2966,12 +2949,9 @@ def bench_fixed(answer: Any) -> list[Any]:
 def is_small_proposal(proposal: Any) -> bool:
     """True when this is the rule-243 proposal: eight fields and no steps.
 
-    The filing road for a proposal that carries steps is the old plan-shaped
-    one -- required blocks merged in, contacts bound, the blank form dropped,
-    the local mirror consulted -- and every one of those repairs reads
-    `steps`. An eight-field proposal has none, so none of them can run over it,
-    and a harness that ran them anyway would file a plan the agent never
-    wrote on a want nobody had picked it for.
+    A proposal that carries steps is the old plan-shaped one, and since
+    0.74.0 it is filed exactly as written, with no repair and no free-door
+    round. An eight-field proposal takes the small road.
     """
     if not isinstance(proposal, dict):
         return False

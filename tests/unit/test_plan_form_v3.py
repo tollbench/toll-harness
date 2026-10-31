@@ -21,7 +21,6 @@ These cover the three moves 0.26.0 owes the change:
      answer reaches the model once, and an older bench with no such door still
      works exactly as it did.
 """
-import pytest
 
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.toll_bench import blocks
@@ -132,26 +131,6 @@ BLANK_EMAIL_BLOCK = {
     "line_item_amount": 0,
 }
 
-# The 2.4x shape a PRODUCTION bench still sends today.
-LEGACY_MEETING_TEMPLATE = {
-    "ask": "APPROVE",
-    "actor": "agent",
-    "title": "Book a meeting with the invitee",
-    "outcome_promise": "Book of Houses offers open times and books the meeting.",
-    "acts": [
-        {"kind": "meeting", "with": "<invitee email, or leave this key out>",
-         "duration_min": 30, "window": "next week",
-         "message": "<your words that open the invitation. No dates, no times.>"},
-    ],
-    "har_blocks": [
-        {"id": "meeting-booked", "ask": "approve", "format": "review_approve",
-         "required": True, "title": "Approve the booked meeting"},
-    ],
-    "declared_odds": "<fill 0.05..0.99>",
-    "line_item_amount": 0,
-}
-LEGACY_GRANT_TEMPLATE = dict(GRANT_BLOCK, declared_odds="<fill 0.05..0.99>")
-
 
 def plan(*steps, **extra):
     payload = {"steps": list(steps), "pitch_title": "A call", "pitch_body": "x"}
@@ -229,100 +208,11 @@ def _file(provider, proposal, target_id="t-1", key="k-1"):
     return provider.submit_proposal(target_id, proposal, key)
 
 
-# ---------------------------------------------------------------------------
-# 1. Reading a blank form apart from a written plan
-# ---------------------------------------------------------------------------
-def test_a_copied_blank_step_is_recognised_and_a_written_one_is_not():
-    assert blocks.unfilled_step(blank_step(1)) is True
-    assert blocks.unfilled_step(written_step("Find three venues")) is False
-    # Half written is WRITTEN: the model's words stay and the door names the
-    # field it left, because throwing the step away throws the words away.
-    half = dict(written_step("Find three venues"), outcome_promise="")
-    assert blocks.unfilled_step(half) is False
-
-
-def test_a_platform_written_step_is_never_stripped():
-    assert blocks.platform_written(GRANT_BLOCK) is True
-    assert blocks.platform_written(MEETING_BLOCK) is True
-    assert blocks.platform_written(BLANK_EMAIL_BLOCK) is True
-    assert blocks.platform_written(blank_step(1)) is False
-    assert blocks.platform_written(written_step("Find three venues")) is False
-    # The blank email block is unfilled AND the platform's: it survives.
-    assert blocks.unfilled_step(BLANK_EMAIL_BLOCK) is True
-    assert blocks.blank_form_steps([BLANK_EMAIL_BLOCK]) == []
-
-
-def test_the_blank_ones_are_named_by_index():
-    steps = [written_step("One"), blank_step(2), MEETING_BLOCK, blank_step(3)]
-    assert blocks.blank_form_steps(steps) == [1, 3]
-
-
 def test_the_step_count_band_is_no_longer_mirrored_here():
     """RETIRED (bench contract 4.0, 2026-09-17). The step-count code goes to
     a scoreboard nobody is shown and blocks nothing, so the copy of the band
     minimum this package used to keep has no owner and is gone."""
     assert not hasattr(blocks, "band_floor")
-
-
-def test_dropping_writes_no_words_of_the_agents():
-    proposal = plan(written_step("One"), blank_step(2))
-    trimmed, dropped, nothing_left = blocks.drop_blank_form_steps(proposal)
-    assert dropped == ["step 2 (blank form step)"]
-    assert nothing_left is False
-    assert trimmed["steps"] == [written_step("One")]
-    # The original is untouched, and nothing gained a title it did not have.
-    assert len(proposal["steps"]) == 2
-    assert all(step.get("title") for step in trimmed["steps"])
-
-
-def test_an_old_angle_bracket_blank_counts_as_blank_too():
-    legacy = dict(blank_step(1), title="<the step title>", outcome_promise="<what they get>")
-    assert blocks.unfilled_step(legacy) is True
-
-
-# ---------------------------------------------------------------------------
-# 2. The filing door: the form alone is never filed
-# ---------------------------------------------------------------------------
-def test_a_plan_that_is_only_the_blank_form_files_nothing():
-    api = _Api()
-    provider = _provider(api)
-    result = _file(provider, plan(*SKELETON))
-    assert result["ok"] is False
-    assert result["error"] == "plan_is_still_the_blank_form"
-    assert result["terminal"] is False
-    assert len(result["dropped"]) == 3
-    assert api.submissions == []
-    # And the harness did NOT invent the words the model owed.
-    assert "title" in result["message"]
-
-
-def test_one_copied_blank_step_is_dropped_and_the_rest_is_filed():
-    api = _Api()
-    provider = _provider(api)
-    result = _file(
-        provider,
-        plan(written_step("Find three venues"), blank_step(2),
-             written_step("Book the room", odds=0.5),
-             written_step("Send the confirmation", odds=0.6)),
-    )
-    assert result["ok"] is True
-    filed = api.submissions[0][1]
-    assert [step["title"] for step in filed["steps"]] == [
-        "Find three venues", "Book the room", "Send the confirmation",
-    ]
-
-
-def test_a_plan_that_was_nothing_but_the_blank_form_stops_the_filing():
-    """An empty page is not a plan. What is left after the blanks are dropped
-    is the whole test -- the step-count band is the bench's scoreboard now and
-    is not mirrored here."""
-    api = _Api()
-    provider = _provider(api)
-    result = _file(provider, plan(blank_step(1), blank_step(2)))
-    assert result["ok"] is False
-    assert result["error"] == "plan_is_still_the_blank_form"
-    assert "nothing left of the plan" in result["message"]
-    assert api.submissions == []
 
 
 def test_a_plan_with_written_steps_left_still_files_whatever_the_band_said():
@@ -366,44 +256,6 @@ DOOR_PROBLEMS = {
 }
 
 
-def test_the_door_is_called_before_filing_and_its_problems_come_back_once():
-    api = _Api(door=DOOR_PROBLEMS)
-    provider = _provider(api)
-    result = _file(provider, plan(written_step("One"), written_step("Two")))
-    assert result["ok"] is False
-    assert result["error"] == "plan_has_problems"
-    assert result["terminal"] is False
-    assert result["problem_count"] == 2
-    assert [p["code"] for p in result["problems"]] == ["REJ-16", "REJ-21"]
-    assert all("fix" in problem for problem in result["problems"])
-    assert api.submissions == []          # nothing was filed
-    assert len(api.door_calls) == 1       # and nothing was counted
-
-    # ONE repair pass is the ceiling: the next submit files, so the bench's own
-    # refusal is the record rather than a harness that never bids at all.
-    again = _file(provider, plan(written_step("One"), written_step("Two")))
-    assert again["ok"] is True
-    assert len(api.submissions) == 1
-
-
-def test_a_mechanically_corrected_plan_is_filed_as_corrected():
-    corrected = plan(written_step("One", odds=0.35), written_step("Two", odds=0.5))
-    api = _Api(door={**DOOR_PROBLEMS, "corrected_plan": corrected,
-                     "corrected_ok": True, "corrections": ["odds 35 -> 0.35"]})
-    provider = _provider(api)
-    result = _file(provider, plan(written_step("One", odds=35), written_step("Two")))
-    assert result["ok"] is True
-    assert api.submissions[0][1] == corrected
-
-
-def test_a_clean_door_files_straight_through():
-    api = _Api()
-    provider = _provider(api)
-    assert _file(provider, plan(written_step("One"), written_step("Two")))["ok"] is True
-    assert len(api.door_calls) == 1
-    assert len(api.submissions) == 1
-
-
 def test_the_local_mirror_never_buries_a_plan_the_door_takes():
     """The mirror is a pre-check, not the law. Production is authoritative."""
     api = _Api()
@@ -411,60 +263,6 @@ def test_the_local_mirror_never_buries_a_plan_the_door_takes():
                          local_problems=[{"path": "steps", "message": "stale rule"}])
     assert _file(provider, plan(written_step("One")))["ok"] is True
     assert len(api.submissions) == 1
-
-
-def test_a_local_problem_rides_along_when_the_door_also_refuses():
-    api = _Api(door=DOOR_PROBLEMS)
-    provider = _provider(api, local_ok=False,
-                         local_problems=[{"path": "steps.0", "message": "also this"}])
-    result = _file(provider, plan(written_step("One")))
-    codes = [problem["code"] for problem in result["problems"]]
-    assert codes == ["REJ-16", "REJ-21", "LOCAL"]
-
-
-# ---------------------------------------------------------------------------
-# 4. Compatibility: a bench with no door, and a bench that still names blocks
-# ---------------------------------------------------------------------------
-def test_an_older_bench_is_never_asked_for_a_door_it_does_not_have():
-    api = _Api(contract="2.46", template=[LEGACY_GRANT_TEMPLATE, LEGACY_MEETING_TEMPLATE],
-               required=("meeting",))
-    provider = _provider(api)
-    result = _file(provider, plan(written_step("Write the agenda")))
-    assert result["ok"] is True
-    assert api.door_calls == []
-    # And rule 228 still repairs the plan from the template it was sent.
-    filed = api.submissions[0][1]
-    assert "meeting" in blocks.declared_kinds(filed["steps"])
-    assert blocks.grant_problems(filed["steps"]) == []
-
-
-def test_the_local_mirror_still_refuses_when_there_is_no_door():
-    api = _Api(contract="2.46", template=[])
-    provider = _provider(api, local_ok=False,
-                         local_problems=[{"path": "pitch_title", "message": "blank"}])
-    result = _file(provider, plan(written_step("One")))
-    assert result["ok"] is False
-    assert result["error"] == "local_validation_failed"
-    assert api.submissions == []
-
-
-def test_a_missing_route_downgrades_to_the_mirror_for_the_rest_of_the_run():
-    """A 3.x bench whose deployment has no such path answers a bare 404."""
-    api = _Api(door_error=BookOfHousesApiError(404, "http_error", "Not Found", {}))
-    provider = _provider(api)
-    assert _file(provider, plan(written_step("One")))["ok"] is True
-    assert len(api.door_calls) == 1
-    # Asked once, remembered: the second bid does not pay for the probe again.
-    assert _file(provider, plan(written_step("Two")), key="k-2")["ok"] is True
-    assert len(api.door_calls) == 1
-
-
-def test_a_closed_target_is_the_callers_to_handle_not_the_doors():
-    error = BookOfHousesApiError(404, "target not found or not open", "closed", {})
-    api = _Api(door_error=error)
-    provider = _provider(api)
-    with pytest.raises(BookOfHousesApiError):
-        _file(provider, plan(written_step("One")))
 
 
 def test_a_bench_whose_protocol_cannot_be_read_has_no_door():
@@ -493,10 +291,3 @@ def test_validate_proposal_with_a_target_id_is_the_benchs_own_answer():
     assert api.door_calls
 
 
-def test_validate_proposal_without_a_target_id_is_the_offline_mirror():
-    api = _Api()
-    provider = BookOfHousesTollBenchProvider(api)
-    provider._local_validation = lambda proposal: {"ok": True, "problems": ["mirror"]}
-    answer = provider.validate_proposal(plan(written_step("One")))
-    assert answer == {"ok": True, "problems": ["mirror"]}
-    assert api.door_calls == []

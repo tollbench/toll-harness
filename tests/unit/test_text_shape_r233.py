@@ -9,7 +9,6 @@ blank, so every railed agent kept promising prose.
 """
 
 from tests.unit.test_deliver_file_r230 import _StepApi
-from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
 from toll_harness.tools.registry import add_toll_bench_tools, build_standard_registry
 
@@ -32,201 +31,14 @@ def _outcome(document):
 # --------------------------------------------------------------------------
 
 
-def test_a_text_step_that_names_nothing_is_prose_and_draws_nothing():
-    prose = [{"title": "Findings", "deliverable": {"channel": "text"}}]
-    assert blocks.deliverable_problems(prose) == []
-    assert blocks.signed_fields({"channel": "text"}) == []
-    assert blocks.signed_min_count({"channel": "text"}) == 1
-
-
-def test_a_named_shape_passes_the_mirror():
-    assert blocks.deliverable_problems([{"title": "Stops", "deliverable": SHAPE}]) == []
-    assert blocks.signed_fields(SHAPE) == ["address", "hours"]
-    assert blocks.signed_min_count(SHAPE) == 2
-    assert blocks.shape_words(SHAPE) == "at least 2 cards with address and hours"
-
-
-def test_field_names_are_read_the_way_the_bench_reads_them():
-    fields, error = blocks.normalize_fields(["  Suggested   Order ", "dish", "", None])
-    assert error is None
-    assert fields == ["suggested order", "dish"]
-
-
-def test_the_mirror_names_a_bad_field_in_the_doors_words():
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "fields": ["address", "address"]}}]
-    )
-    assert [p["path"] for p in problems] == ["steps.0.deliverable.fields"]
-    assert 'names "address" twice' in problems[0]["message"]
-
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "fields": ["https://maps.example"]}}]
-    )
-    assert "is an address, not a field name" in problems[0]["message"]
-
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops",
-          "deliverable": {"channel": "text", "fields": [f"f{i}" for i in range(13)]}}]
-    )
-    assert "at most 12 names; you named 13" in problems[0]["message"]
-
-
-def test_min_count_rides_with_fields_and_stays_a_whole_number():
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops", "deliverable": {"channel": "text", "min_count": 3}}]
-    )
-    assert problems[0]["path"] == "steps.0.deliverable.min_count"
-    assert "rides with deliverable.fields" in problems[0]["message"]
-
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops",
-          "deliverable": {"channel": "text", "fields": ["address"], "min_count": 0}}]
-    )
-    assert "from 1 to 200" in problems[0]["message"]
-
-    problems = blocks.deliverable_problems(
-        [{"title": "Stops",
-          "deliverable": {"channel": "text", "fields": ["address"], "min_count": "two"}}]
-    )
-    assert '"two" is not one' in problems[0]["message"]
-
-
-def test_a_copied_field_blank_is_named_and_then_stripped_not_filed():
-    step = {
-        "title": "Stops",
-        "outcome_promise": "A card per stop",
-        "deliverable": {"channel": "text", "fields": ["<field>"], "min_count": 2},
-    }
-    problems = blocks.deliverable_problems([step])
-    assert "form's blank, not a field name" in problems[0]["message"]
-
-    trimmed, cleared = blocks.clear_blank_deliverables({"steps": [step]})
-    assert cleared == [0]
-    # Nothing real was left, so the shape went with it: prose, and no word of ours.
-    assert trimmed["steps"][0]["deliverable"] == {"channel": "text"}
-
-    half = dict(step, deliverable={"channel": "text", "fields": ["address", "<field>"]})
-    trimmed, cleared = blocks.clear_blank_deliverables({"steps": [half]})
-    assert cleared == [0]
-    assert trimmed["steps"][0]["deliverable"] == {"channel": "text", "fields": ["address"]}
-
-
-def test_a_file_step_carries_no_shape():
-    promise = {"channel": "file", "family": "video", "types": ["mp4"], "fields": ["x"]}
-    assert blocks.signed_fields(promise) == []
-
-
 # --------------------------------------------------------------------------
 # 2. The door, run over the document in hand.
 # --------------------------------------------------------------------------
 
 
-def test_headings_with_nothing_under_them_hand_back_nothing():
-    # Rodney's exact filing.
-    document = {
-        "blocks": [
-            {"type": "heading", "text": "Address"},
-            {"type": "heading", "text": "Hours"},
-        ]
-    }
-    refusal = blocks.cards_shortfall(SHAPE, _outcome(document))
-    assert refusal["error"] == "deliverable_fields_missing"
-    assert refusal["message"] == (
-        "This step promised 2 or more cards with address and hours; "
-        "the document has no cards block."
-    )
-    assert refusal["how"]["document"]["blocks"][0]["type"] == "cards"
-    assert refusal["how"]["document"]["blocks"][0]["items"] == [
-        {"address": "<the address>", "hours": "<the hours>"}
-    ]
-    assert refusal["certain"] is False
-
-
-def test_an_empty_box_is_refused_by_card_and_field():
-    half = {"address": "40 Elm Ave", "hours": " "}
-    refusal = blocks.cards_shortfall(SHAPE, _outcome(_document(CARD_1, half)))
-    assert refusal["error"] == "deliverable_fields_blank"
-    assert refusal["message"] == (
-        "Card 2 leaves hours empty. Every card has to fill address and hours."
-    )
-    assert refusal["blank"] == {"card": 2, "fields": ["hours"]}
-    assert refusal["certain"] is True
-
-    refusal = blocks.cards_shortfall(SHAPE, _outcome(_document({"note": "a heading only"})))
-    assert refusal["message"] == (
-        "Card 1 leaves address and hours empty. Every card has to fill address and hours."
-    )
-
-
-def test_too_few_filled_cards_is_named_with_the_count():
-    refusal = blocks.cards_shortfall(SHAPE, _outcome(_document(CARD_1)))
-    assert refusal["error"] == "deliverable_count_short"
-    assert refusal["message"] == "This step promised at least 2 cards; the document has 1."
-    assert refusal["found"] == 1
-
-
-def test_enough_filled_cards_pass_and_the_card_number_runs_across_blocks():
-    document = {
-        "blocks": [
-            {"type": "paragraph", "text": "Two stops."},
-            {"type": "cards", "items": [CARD_1]},
-            {"type": "cards", "items": [CARD_2]},
-        ]
-    }
-    assert blocks.cards_shortfall(SHAPE, _outcome(document)) is None
-    assert [n for n, _ in blocks.cards_items(document)] == [1, 2]
-
-
-def test_a_text_outcome_on_a_shaped_step_has_no_cards():
-    prose = {"note": "Done.", "text": "Address: 12 Main St. Hours: 9-5."}
-    refusal = blocks.cards_shortfall(SHAPE, prose)
-    assert refusal["error"] == "deliverable_fields_missing"
-
-
-def test_a_step_with_no_shape_counts_nothing():
-    headings = _outcome({"blocks": [{"type": "heading", "text": "x"}]})
-    assert blocks.cards_shortfall({"channel": "text"}, headings) is None
-    assert blocks.cards_shortfall(None, _outcome(_document())) is None
-
-
 # --------------------------------------------------------------------------
 # 3. The provider: said before the filing is spent, and never buried.
 # --------------------------------------------------------------------------
-
-
-def test_a_blank_box_is_refused_every_time_before_the_wire():
-    api = _StepApi(SHAPE)
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("deal-1")
-    outcome = _outcome(_document(CARD_1, {"address": "40 Elm Ave", "hours": ""}))
-
-    first = provider.file_outcome("target-1", outcome, "idem-1")
-    second = provider.file_outcome("target-1", outcome, "idem-2")
-
-    for refused in (first, second):
-        assert refused["ok"] is False
-        assert refused["error"] == "deliverable_fields_blank"
-        assert refused["message"].startswith("Card 2 leaves hours empty.")
-        assert "counts empty boxes" in refused["message"]
-        assert refused["how"]["document"]["blocks"][0]["type"] == "cards"
-        assert refused["terminal"] is False
-    assert api.filed == []
-
-
-def test_no_cards_is_named_once_and_then_the_door_decides():
-    """An earlier receipt on the same step may already carry the cards, and
-    `current-step` does not publish receipts, so the mirror speaks once."""
-    api = _StepApi(SHAPE)
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("deal-1")
-    outcome = _outcome({"blocks": [{"type": "heading", "text": "Address"}]})
-
-    first = provider.file_outcome("target-1", outcome, "idem-1")
-    second = provider.file_outcome("target-1", outcome, "idem-2")
-
-    assert first["error"] == "deliverable_fields_missing"
-    assert second == {"ok": True, "receipt_id": "r-1"}
-    assert len(api.filed) == 1
 
 
 def test_filled_cards_go_to_the_bench():

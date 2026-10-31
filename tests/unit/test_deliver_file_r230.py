@@ -400,27 +400,6 @@ def test_current_step_carries_the_promise_and_the_files_always():
     assert payload["current_step"]["file_receipts"] == []
 
 
-def test_an_outcome_over_a_promised_file_with_nothing_attached_is_refused():
-    api = _StepApi({"channel": "file", "family": "video", "types": ["mp4"]})
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("deal-1")
-
-    refused = provider.file_outcome(
-        "target-1",
-        {
-            "note": "Files delivered: stan_animation.mp4, clear audio and lip-sync.",
-            "document": {"blocks": [{"type": "paragraph", "text": "Files Delivered"}]},
-        },
-        "idem-1",
-    )
-
-    assert refused["ok"] is False
-    assert refused["error"] == "deliverable_missing"
-    assert refused["message"].startswith("This step promised an MP4; nothing attached.")
-    assert "deliver_file" in refused["message"]
-    assert api.filed == []  # the filing was never spent on it
-
-
 def test_the_same_step_closes_once_the_bytes_are_delivered(monkeypatch):
     api = _StepApi({"channel": "file", "family": "video", "types": ["mp4"]})
     provider = BookOfHousesTollBenchProvider(api)
@@ -435,28 +414,6 @@ def test_the_same_step_closes_once_the_bytes_are_delivered(monkeypatch):
 
     assert result == {"ok": True, "receipt_id": "r-1"}
     assert api.filed
-
-
-def test_the_mirror_warns_once_and_then_lets_the_door_decide():
-    """`current-step` publishes the promise but NOT the step's file receipts.
-
-    A harness restarted between the delivery and the outcome cannot see a file
-    that is genuinely on the step, so the local check speaks once -- which is
-    what the model needs, because the usual case is that nothing was ever
-    delivered -- and any second attempt goes to the bench, whose
-    `deliverable_missing` is the refusal that counts.
-    """
-    api = _StepApi({"channel": "file", "family": "video", "types": ["mp4"]})
-    provider = BookOfHousesTollBenchProvider(api)
-    provider.current_step("deal-1")
-    outcome = {"note": "Delivered.", "text": "The animation is live."}
-
-    first = provider.file_outcome("target-1", outcome, "idem-1")
-    second = provider.file_outcome("target-1", outcome, "idem-2")
-
-    assert first["error"] == "deliverable_missing"
-    assert second == {"ok": True, "receipt_id": "r-1"}
-    assert len(api.filed) == 1
 
 
 def test_the_files_this_run_delivered_show_on_the_step():
@@ -512,53 +469,6 @@ def test_the_servers_deliverable_missing_reaches_the_model_verbatim():
 # --------------------------------------------------------------------------
 
 
-def test_the_validate_mirror_names_an_empty_deliverable_blank():
-    problems = blocks.deliverable_problems(
-        [
-            {"title": "Research", "outcome_promise": "Three venues"},
-            {"title": "Deliver", "deliverable": "<name what you hand back>"},
-        ]
-    )
-
-    assert len(problems) == 1
-    assert problems[0]["path"] == "steps.1.deliverable"
-    assert "for example an MP4" in problems[0]["message"]
-    assert "do not promise it" in problems[0]["message"]
-
-
-def test_a_file_deliverable_must_name_its_family_and_its_types():
-    problems = blocks.deliverable_problems(
-        [{"deliverable": {"channel": "file", "family": "clip", "types": []}}]
-    )
-    paths = [problem["path"] for problem in problems]
-
-    assert paths == ["steps.0.deliverable.family", "steps.0.deliverable.types"]
-
-
-def test_a_type_the_platform_cannot_check_cannot_be_promised():
-    """REJ-36 at the bid door, so the mirror names it before the round is spent.
-
-    A promise nothing can check can never be kept, and freezing one would mean
-    refusing the delivery forever.
-    """
-    problems = blocks.deliverable_problems(
-        [{"deliverable": {"channel": "file", "family": "video", "types": ["gz"]}}]
-    )
-
-    assert [problem["path"] for problem in problems] == ["steps.0.deliverable.types"]
-    assert "cannot check gz" in problems[0]["message"]
-    assert "mp4" in problems[0]["message"]
-
-
-def test_a_family_that_does_not_carry_its_own_types_is_named():
-    problems = blocks.deliverable_problems(
-        [{"deliverable": {"channel": "file", "family": "video", "types": ["png"]}}]
-    )
-
-    assert [problem["path"] for problem in problems] == ["steps.0.deliverable.family"]
-    assert "does not carry png" in problems[0]["message"]
-
-
 def test_plain_text_is_one_thing_to_the_scanner():
     """Nothing in the bytes separates markdown from a note from a python file.
 
@@ -569,46 +479,6 @@ def test_plain_text_is_one_thing_to_the_scanner():
     assert sniffer.matches(b"print('hi')", ["txt"], filename="run.py") is True
     assert sniffer.matches(HTML_BYTES, ["md"]) is False
     assert sniffer.matches(b'{"a": 1}', ["txt"]) is False
-
-
-def test_a_filled_deliverable_and_a_text_channel_both_pass():
-    assert (
-        blocks.deliverable_problems(
-            [
-                {"deliverable": {"channel": "file", "family": "video", "types": ["mp4"]}},
-                {"deliverable": {"channel": "text"}},
-                {"title": "Research", "outcome_promise": "Three venues"},
-            ]
-        )
-        == []
-    )
-
-
-def test_the_copied_blank_is_removed_rather_than_filed_as_a_promise():
-    proposal = {
-        "steps": [
-            {"title": "Deliver", "deliverable": "<name what you hand back>"},
-            {"title": "Approve", "deliverable": {"channel": "file", "types": ["mp4"]}},
-        ]
-    }
-
-    trimmed, cleared = blocks.clear_blank_deliverables(proposal)
-
-    assert cleared == [0]
-    assert "deliverable" not in trimmed["steps"][0]
-    # The model's own words are never touched.
-    assert trimmed["steps"][1]["deliverable"] == {"channel": "file", "types": ["mp4"]}
-    # And a plan with nothing copied comes back as it was.
-    assert blocks.clear_blank_deliverables({"steps": [{"title": "x"}]}) == (
-        {"steps": [{"title": "x"}]},
-        [],
-    )
-
-
-def test_the_promise_is_named_the_way_the_refusal_says_it():
-    assert blocks.promise_words({"channel": "file", "types": ["mp4"]}) == "an MP4"
-    assert blocks.promise_words({"channel": "file", "family": "image"}) == "a image file"
-    assert blocks.promise_words(None) == "a file"
 
 
 # --------------------------------------------------------------------------

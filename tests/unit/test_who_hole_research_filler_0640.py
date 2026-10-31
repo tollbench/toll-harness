@@ -37,7 +37,6 @@ from tests.unit.test_step_ask import (
 from toll_harness.core.runtime import TOLL_BENCH_SYSTEM_INSTRUCTION
 from toll_harness.core.types import ModelMessage, ModelResponse
 from toll_harness.models.scripted import ScriptedModelAdapter
-from toll_harness.toll_bench import blocks
 from toll_harness.toll_bench.book_of_houses import (
     LAST_FILING_NOTE,
     BookOfHousesTollBenchProvider,
@@ -102,7 +101,7 @@ def test_the_words_stay_short():
 
 def test_the_runtime_sheet_and_the_refusal_fix_say_the_same_slot():
     sheet = _flat(TOLL_BENCH_SYSTEM_INSTRUCTION)
-    for words in (sheet, blocks.CONTACT_STEP_SENTENCE):
+    for words in (sheet,):
         assert '"contact_book"' in words
         assert '"found_by_research"' in words
         assert "`from_step`" in words
@@ -373,14 +372,3 @@ def test_the_cards_the_door_took_off_ride_the_next_read_of_that_step():
     assert LAST_FILING_KEY not in provider.current_step("d1")
 
 
-def test_the_home_mirror_reads_the_steps_own_fields():
-    provider = BookOfHousesTollBenchProvider(_ResearchApi())
-    provider.current_step("d1")
-    blank = _outcome()
-    blank["document"] = copy.deepcopy(blank["document"])
-    blank["document"]["blocks"][0]["items"][0]["phone"] = ""
-
-    refused = provider.file_outcome("t1", blank, "k-3")
-
-    assert refused["ok"] is False
-    assert "phone" in json.dumps(refused)

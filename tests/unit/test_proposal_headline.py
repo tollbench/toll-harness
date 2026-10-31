@@ -26,7 +26,6 @@ from tests.unit.test_two_stages_r243_r245 import (
 )
 from toll_harness.toll_bench import programs
 from toll_harness.toll_bench.book_of_houses import (
-    BookOfHousesTollBenchProvider,
     _is_a_missing_field,
 )
 from toll_harness.toll_bench.draft import (
@@ -275,14 +274,6 @@ def test_the_validate_tool_hands_back_the_doors_trims():
     assert out["trimmed"] == [trim]
 
 
-class _SchemaApi:
-    def __init__(self, schema):
-        self.schema = schema
-
-    def proposal_schema(self):
-        return self.schema
-
-
 def _schema(*, with_headline):
     properties = {
         "pitch_title": {"type": "string"},
@@ -305,51 +296,6 @@ def _schema(*, with_headline):
         "required": required,
         "properties": properties,
     }
-
-
-# The whole-plan mirror's other required fields, filled, so the only thing
-# these tests move is the headline.
-BASE = {
-    "pitch_title": "A",
-    "pitch_body": "B",
-    "smart_goals": ["one"],
-    "strategy": "How.",
-    "capabilities": ["research"],
-    "wins": [],
-    "research_links": [{"url": "https://example.test", "note": "What it said."}],
-    "skill_research": "What I learned.",
-}
-
-
-def _mirror(schema, proposal):
-    return BookOfHousesTollBenchProvider(_SchemaApi(schema)).validate_proposal(proposal)
-
-
-def test_the_mirror_names_an_empty_headline_once_in_the_benchs_sentence():
-    for proposal in (dict(BASE), dict(BASE, headline=""), dict(BASE, headline="  ")):
-        out = _mirror(_schema(with_headline=True), proposal)
-        headline_rows = [row for row in out["problems"] if "headline" in row["message"]
-                         or row["path"] == "headline"]
-        assert headline_rows == [{"path": "headline", "message": HEADLINE_EMPTY_PROBLEM}]
-        assert out["ok"] is False
-
-
-def test_the_mirror_warns_about_a_long_headline_and_does_not_refuse_it():
-    out = _mirror(_schema(with_headline=True), dict(BASE, headline=LONG))
-    assert out["ok"] is True and out["problems"] == []
-    assert len(out["warnings"]) == 1 and "trim it at a word" in out["warnings"][0]
-
-    fine = _mirror(_schema(with_headline=True), dict(BASE, headline="Four seats."))
-    assert fine["ok"] is True and fine["warnings"] == []
-
-
-def test_a_bench_that_does_not_name_the_headline_is_not_told_about_one():
-    """An older bench (contract 4.0.10 and before) ignores the key, so the
-    mirror neither asks for it nor calls it an unexpected property."""
-    sent = _mirror(_schema(with_headline=False), dict(BASE, headline="Four seats."))
-    assert sent["ok"] is True, sent["problems"]
-    missing = _mirror(_schema(with_headline=False), dict(BASE))
-    assert missing["ok"] is True and missing["warnings"] == []
 
 
 def test_the_body_on_the_wire_is_plain_json_with_the_headline():

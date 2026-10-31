@@ -381,10 +381,14 @@ def test_a_filing_refusal_about_something_else_is_not_retried():
             )
 
     api = Refuses()
-    with pytest.raises(BookOfHousesApiError):
-        _door_provider(api).submit_proposal(
-            "t-1", dict(SMALL, approach=dict(APPROACH)), "k-1"
-        )
+    out = _door_provider(api).submit_proposal(
+        "t-1", dict(SMALL, approach=dict(APPROACH)), "k-1"
+    )
+    # 0.74.0: the door's refusal comes back in its own words, non-terminal.
+    assert out["ok"] is False
+    assert out["rej"] == "REJ-21"
+    assert out["terminal"] is False
+    assert "617 characters" in out["detail"]
     assert len(api.filed) == 1
 
 
@@ -419,17 +423,6 @@ def test_the_draft_loop_carries_what_was_really_filed():
     assert out["row_slots_dropped"] == ["approach"]
     assert "approach" not in out["proposal"]
     assert out["proposal"]["step_estimate"] == {"total": 7, "you": 2}
-
-
-def test_the_local_mirror_ignores_a_slot_the_benchs_schema_does_not_name():
-    provider = _door_provider(_DoorApi())
-    provider.proposal_schema = lambda: {
-        "type": "object",
-        "properties": {"pitch_title": {"type": "string"}},
-        "additionalProperties": False,
-    }
-    result = provider._local_validation(dict(SMALL, approach=dict(APPROACH)))
-    assert not any("approach" in str(row.get("message")) for row in result["problems"])
 
 
 # ---------------------------------------------------------------------------
