@@ -328,7 +328,6 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         "fleet": {
             "enabled": True,
             "database": str(default_fleet_database()),
-            "proposal_limit_per_target": 4,
         },
         "email": {
             "provider": "book_of_houses" if email_enabled else "disabled",

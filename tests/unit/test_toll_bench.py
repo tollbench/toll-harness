@@ -225,37 +225,6 @@ def test_a_plan_shaped_proposal_is_filed_exactly_as_written():
     assert api.submissions == [("t1", plan_shaped, "key-1")]
 
 
-def test_submit_proposal_caps_only_this_harness_fleet_at_four(tmp_path):
-    api = FakeApi()
-    fleet = FleetStore(tmp_path / "fleet.sqlite3")
-    providers = []
-    for index in range(5):
-        agent_id = f"agent-{index}"
-        fleet.register_agent(
-            agent_id=agent_id,
-            name=f"Agent {index}",
-            config_path=tmp_path / f"agent-{index}.yaml",
-        )
-        providers.append(
-            BookOfHousesTollBenchProvider(
-                api,
-                fleet=fleet,
-                fleet_agent_id=agent_id,
-                fleet_proposal_limit=4,
-            )
-        )
-
-    results = [
-        provider.submit_proposal("t1", _valid_proposal(), f"key-{index}")
-        for index, provider in enumerate(providers)
-    ]
-
-    assert all(result.get("proposal_id") == "p1" for result in results[:4])
-    assert results[4]["error"] == "fleet_proposal_limit"
-    assert results[4]["fleet_count"] == 4
-    assert len(api.submissions) == 4
-
-
 def _fleet_provider(api, fleet, agent_id="agent-1", tmp_path=None):
     fleet.register_agent(
         agent_id=agent_id,
@@ -286,8 +255,6 @@ def test_terminal_409_marks_the_round_reviewed_instead_of_looping(tmp_path):
     assert result["terminal"] is True
     assert result["error"] == "proposal_refused_terminally"
     assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
-    # The reserved (never confirmed) slot is released, not burned.
-    assert fleet.proposal_count("t1", "1") == 0
 
 
 def test_terminal_404_refuses_without_retry_and_without_burning_a_slot(tmp_path):
@@ -305,50 +272,6 @@ def test_terminal_404_refuses_without_retry_and_without_burning_a_slot(tmp_path)
     assert result["terminal"] is True
     assert result["error"] == "target_not_open"
     assert api.submissions == []
-    assert fleet.proposal_count("t1", "1") == 0
-
-
-def test_repost_round_gets_a_fresh_fleet_slot(tmp_path):
-    # The round-1 confirmed slot must not answer for round 2: the repost is
-    # fresh work and the agent's new bid must actually reach production.
-    api = FakeApi()
-    fleet = FleetStore(tmp_path / "fleet.sqlite3")
-    provider = _fleet_provider(api, fleet, tmp_path=tmp_path)
-
-    first = provider.submit_proposal("t1", _valid_proposal(), "key-round-1")
-    assert first["proposal_id"] == "p1"
-    assert fleet.proposal_count("t1", "1") == 1
-
-    api.brief_round = 2  # the want failed and reposted
-    second = provider.submit_proposal("t1", _valid_proposal(), "key-round-2")
-
-    assert second.get("idempotent") is None
-    assert second["proposal_id"] == "p1"
-    assert len(api.submissions) == 2
-    assert fleet.proposal_count("t1", "1") == 1
-    assert fleet.proposal_count("t1", "2") == 1
-
-
-def test_repost_round_resets_the_fleet_cap(tmp_path):
-    # Four round-1 bids from this fleet must not lock the fleet out of the
-    # repost: the cap counts per round, not per target forever.
-    api = FakeApi()
-    fleet = FleetStore(tmp_path / "fleet.sqlite3")
-    providers = [
-        _fleet_provider(api, fleet, agent_id=f"agent-{index}", tmp_path=tmp_path)
-        for index in range(5)
-    ]
-    for index, provider in enumerate(providers[:4]):
-        assert provider.submit_proposal("t1", _valid_proposal(), f"r1-{index}")["ok"]
-    assert providers[4].submit_proposal("t1", _valid_proposal(), "r1-4")[
-        "error"
-    ] == "fleet_proposal_limit"
-
-    api.brief_round = 2
-    result = providers[4].submit_proposal("t1", _valid_proposal(), "r2-4")
-
-    assert result["proposal_id"] == "p1"
-    assert fleet.proposal_count("t1", "2") == 1
 
 
 def test_live_bid_on_current_round_short_circuits_and_marks_reviewed(tmp_path):

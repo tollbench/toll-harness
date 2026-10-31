@@ -882,52 +882,6 @@ def test_market_scan_does_not_retire_target_without_a_filed_proposal():
     assert reviewed == []
 
 
-def test_market_scan_selects_newest_target_that_has_not_reached_fleet_cap():
-    class Fleet:
-        def reviewed_target_keys(self, _agent_id):
-            return set()
-
-        def proposal_count(self, target_id, _target_round=None):
-            return {"newest-full": 4, "next-underfilled": 3, "oldest": 0}[target_id]
-
-    toll_bench = SimpleNamespace(
-        fleet=Fleet(),
-        fleet_proposal_limit=4,
-        list_targets=lambda: {
-            "targets": [
-                {
-                    "target_id": "oldest",
-                    "want": "Old want",
-                    "posted_at": "2026-08-24T00:00:00Z",
-                    "your_bid": None,
-                },
-                {
-                    "target_id": "next-underfilled",
-                    "want": "Next want",
-                    "posted_at": "2026-08-24T01:00:00Z",
-                    "your_bid": None,
-                },
-                {
-                    "target_id": "newest-full",
-                    "want": "Newest want",
-                    "posted_at": "2026-08-24T02:00:00Z",
-                    "your_bid": None,
-                },
-            ]
-        },
-    )
-    resources = SimpleNamespace(
-        toll_bench=toll_bench,
-        agent_identity=SimpleNamespace(id="00000002-0000-0000-0000-000000000000"),
-    )
-
-    target_count, candidates, review_targets = cli._market_scan_candidates(resources)
-
-    assert target_count == 3
-    assert [candidate["target_id"] for candidate in candidates] == ["next-underfilled"]
-    assert review_targets == [("next-underfilled:round:1", "next-underfilled", None)]
-
-
 def test_market_scan_open_bid_limit_is_opt_in_and_skips_crowded_targets():
     # fleet.open_bid_limit is an optional config knob, default OFF. When set,
     # the scan skips targets whose brief reports at least that many live bids
@@ -992,15 +946,8 @@ def test_market_scan_treats_a_repost_as_fresh_work():
     # reached zero workers. Freshness must follow reposted_at, and the round-2
     # key must not be hidden by the round-1 review.
     class Fleet:
-        def __init__(self):
-            self.counts = []
-
         def reviewed_target_keys(self, _agent_id):
             return {"reposted:round:1"}  # round 1 was reviewed before it died
-
-        def proposal_count(self, target_id, target_round=None):
-            self.counts.append((target_id, target_round))
-            return 0
 
     fleet = Fleet()
     toll_bench = SimpleNamespace(
@@ -1035,8 +982,6 @@ def test_market_scan_treats_a_repost_as_fresh_work():
     assert [candidate["target_id"] for candidate in candidates] == ["reposted"]
     assert candidates[0]["reposted_at"] == "2026-08-26T12:00:00Z"
     assert review_targets == [("reposted:round:2", "reposted", "2")]
-    # The fleet cap was checked against the CURRENT round, not the dead one.
-    assert ("reposted", "2") in fleet.counts
 
 
 def test_market_scan_advances_past_a_round_recorded_as_reviewed():

@@ -1907,7 +1907,6 @@ def _market_scan_candidates(
     targets = list(response.get("targets") or [])
     provider = resources.toll_bench
     fleet = getattr(provider, "fleet", None)
-    fleet_limit = int(getattr(provider, "fleet_proposal_limit", 4))
     identity = resources.agent_identity
     reviewed = (
         fleet.reviewed_target_keys(identity.id)
@@ -1920,8 +1919,6 @@ def _market_scan_candidates(
         if not target_id or target.get("your_bid") is not None:
             continue
         if target_key in reviewed:
-            continue
-        if fleet is not None and fleet.proposal_count(target_id, round_value) >= fleet_limit:
             continue
         # Optional crowding limit (fleet.open_bid_limit, default off): skip
         # targets whose brief reports at least this many live bids via the

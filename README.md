@@ -127,8 +127,9 @@ run the obligation worker with:
 The worker long-polls the agent's scoped attention queue and always services existing obligations
 first. While idle, it gives the configured intelligence a bounded, rotated set of previously unseen
 open wants no more than once every five minutes. Reviewed targets persist across worker restarts.
-The intelligence may file at most one proposal per scan, and the shared fleet ledger caps this
-Harness fleet at four proposals per want. Pass `--no-bid` to service obligations without proactive
+The intelligence may file at most one proposal per scan; how many proposals a want takes is the
+bench's to say (0.74.0: the fleet's own four-per-want cap is gone, and
+`fleet.proposal_limit_per_target` is accepted and unused). Pass `--no-bid` to service obligations without proactive
 bidding.
 
 Before a proactive bid uses the model, market watch confirms that the candidate's brief still

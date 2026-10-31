@@ -292,6 +292,7 @@ class BookOfHousesTollBenchProvider:
         self.api = api
         self.fleet = fleet
         self.fleet_agent_id = fleet_agent_id
+        # Accepted and unused since 0.74.0: the per-want cap is gone.
         self.fleet_proposal_limit = fleet_proposal_limit
         # Optional market-scan crowding limit; None disables the check.
         self.open_bid_limit = open_bid_limit
@@ -1035,7 +1036,7 @@ class BookOfHousesTollBenchProvider:
         Nothing is repaired here. Every mechanic was the bench's own and every
         word was the agent's, checked at the door on the way in, so the only
         things this method owns are the ones filing has always owned: the
-        reachability handshake and this fleet's slot on the want.
+        reachability handshake and this agent's own bid on the round.
         """
         reachability = self.ensure_reachable()
         if not reachability.get("ok"):
@@ -1048,7 +1049,6 @@ class BookOfHousesTollBenchProvider:
                 ),
                 "reachability": reachability,
             }
-        reservation = None
         target_round = None
         fleet_engaged = self.fleet is not None and bool(self.fleet_agent_id)
         if fleet_engaged:
@@ -1080,32 +1080,6 @@ class BookOfHousesTollBenchProvider:
                     "idempotent": True,
                     "message": "A bid from this agent is already live on the current round.",
                 }
-            reservation = self.fleet.reserve_proposal(
-                target_id=target_id,
-                target_round=target_round,
-                agent_id=self.fleet_agent_id,
-                idempotency_key=idempotency_key,
-                limit=self.fleet_proposal_limit,
-            )
-            if not reservation.allowed:
-                return {
-                    "ok": False,
-                    "error": "fleet_proposal_limit",
-                    "message": (
-                        f"This Toll Harness fleet already reserved {reservation.count} of "
-                        f"{reservation.limit} proposal slots for the target's current round."
-                    ),
-                    "fleet_count": reservation.count,
-                    "fleet_limit": reservation.limit,
-                    "target_round": target_round,
-                }
-            if reservation.status == "confirmed" and reservation.proposal_id:
-                return {
-                    "ok": True,
-                    "proposal_id": reservation.proposal_id,
-                    "idempotent": True,
-                }
-            idempotency_key = reservation.idempotency_key
         try:
             result = self.api.submit_proposal(
                 target_id, {"from_draft": True}, idempotency_key
@@ -1123,12 +1097,6 @@ class BookOfHousesTollBenchProvider:
                     "from_draft": True,
                 },
             )
-            if fleet_engaged and reservation is not None and 400 <= error.status < 500:
-                self.fleet.release_reservation(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                )
             if fleet_engaged and error.status in (404, 409):
                 self.fleet.mark_target_reviewed(
                     agent_id=self.fleet_agent_id,
@@ -1152,21 +1120,6 @@ class BookOfHousesTollBenchProvider:
                 "status": error.status,
                 "message": error.message,
             }
-        if fleet_engaged and reservation is not None:
-            proposal_id = str(result.get("proposal_id") or "")
-            if proposal_id:
-                self.fleet.confirm_proposal(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                    proposal_id=proposal_id,
-                )
-            elif result.get("ok") is False:
-                self.fleet.release_reservation(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                )
         return self._filing_receipt(result)
 
     def file_plan_from_draft(
@@ -1383,7 +1336,6 @@ class BookOfHousesTollBenchProvider:
                 ),
                 "reachability": reachability,
             }
-        reservation = None
         target_round = None
         fleet_engaged = self.fleet is not None and bool(self.fleet_agent_id)
         if fleet_engaged:
@@ -1418,32 +1370,6 @@ class BookOfHousesTollBenchProvider:
                     "idempotent": True,
                     "message": "A bid from this agent is already live on the current round.",
                 }
-            reservation = self.fleet.reserve_proposal(
-                target_id=target_id,
-                target_round=target_round,
-                agent_id=self.fleet_agent_id,
-                idempotency_key=idempotency_key,
-                limit=self.fleet_proposal_limit,
-            )
-            if not reservation.allowed:
-                return {
-                    "ok": False,
-                    "error": "fleet_proposal_limit",
-                    "message": (
-                        f"This Toll Harness fleet already reserved {reservation.count} of "
-                        f"{reservation.limit} proposal slots for the target's current round."
-                    ),
-                    "fleet_count": reservation.count,
-                    "fleet_limit": reservation.limit,
-                    "target_round": target_round,
-                }
-            if reservation.status == "confirmed" and reservation.proposal_id:
-                return {
-                    "ok": True,
-                    "proposal_id": reservation.proposal_id,
-                    "idempotent": True,
-                }
-            idempotency_key = reservation.idempotency_key
         try:
             # Filed once, as written. A refusal is the door's answer, in its
             # own words, handled below; nothing is repaired or re-filed here.
@@ -1464,12 +1390,6 @@ class BookOfHousesTollBenchProvider:
                 },
             )
             if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
-                if fleet_engaged and reservation is not None:
-                    self.fleet.release_reservation(
-                        target_id=target_id,
-                        target_round=target_round,
-                        agent_id=self.fleet_agent_id,
-                    )
                 refusal = self._block_refusal(target_id, error)
                 if refusal["terminal"] and fleet_engaged:
                     self.fleet.mark_target_reviewed(
@@ -1478,16 +1398,10 @@ class BookOfHousesTollBenchProvider:
                         target_round=target_round,
                     )
                 return refusal
-            if fleet_engaged and reservation is not None and 400 <= error.status < 500:
-                self.fleet.release_reservation(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                )
             if error.rej and 400 <= error.status < 500 and error.status not in (404, 409):
                 # A refused bid writes nothing, so the round is not spent. The
-                # reservation was released just above; the door's own words
-                # come back non-terminal, and nothing is repaired at home.
+                # door's own words come back non-terminal, and nothing is
+                # repaired at home.
                 return self._door_refused(error)
             if fleet_engaged and error.status in (404, 409):
                 # Terminal refusals for this round: bidding closed because an
@@ -1513,21 +1427,6 @@ class BookOfHousesTollBenchProvider:
                     ),
                 }
             raise
-        if fleet_engaged and reservation is not None:
-            proposal_id = str(result.get("proposal_id") or "")
-            if proposal_id:
-                self.fleet.confirm_proposal(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                    proposal_id=proposal_id,
-                )
-            elif result.get("ok") is False:
-                self.fleet.release_reservation(
-                    target_id=target_id,
-                    target_round=target_round,
-                    agent_id=self.fleet_agent_id,
-                )
         receipt = self._filing_receipt(result)
         if trims and isinstance(receipt, dict):
             # WHAT THE BENCH FIXED ON THE WAY IN rides the receipt, because
