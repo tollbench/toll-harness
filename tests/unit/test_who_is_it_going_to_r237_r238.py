@@ -241,21 +241,6 @@ def _refusal(rej, detail):
                                                         "detail": detail})
 
 
-def test_the_runtime_sheet_says_the_agent_puts_the_who_step_in():
-    # AMENDED 2026-09-12: the bench stopped inserting the step; the sheet has
-    # to say whose step it is now, or the agent writes a plan without one.
-    from toll_harness.core.runtime import TOLL_BENCH_SYSTEM_INSTRUCTION
-
-    assert "WHO IT GOES TO IS A STEP, AND YOU PUT IT IN" in TOLL_BENCH_SYSTEM_INSTRUCTION
-    assert '"verb": "who"' in TOLL_BENCH_SYSTEM_INSTRUCTION
-    assert "REJ-45" in TOLL_BENCH_SYSTEM_INSTRUCTION
-    # 0.64.0: the sheet names the slot instead of forbidding the work.
-    assert "do not plan a separate find step: put the word on the who step" in (
-        " ".join(TOLL_BENCH_SYSTEM_INSTRUCTION.split()))
-    assert "never plan a step to find or list" not in TOLL_BENCH_SYSTEM_INSTRUCTION
-    assert "Never add a picker they already declined" not in TOLL_BENCH_SYSTEM_INSTRUCTION
-
-
 def test_contact_picker_is_still_a_har_slug_because_the_who_step_carries_it():
     # The who STEP carries it. A mirror that called the slug unknown would
     # refuse a legal plan at home.

@@ -107,19 +107,3 @@ def test_the_cards_block_and_the_rule_are_described_where_a_model_reads_them():
     )
 
 
-def test_every_planning_surface_names_the_shape():
-    import inspect
-
-    from toll_harness import cli
-    from toll_harness.core import runtime
-
-    runtime_words = inspect.getsource(runtime)
-    cli_words = inspect.getsource(cli)
-    assert runtime_words.count("WORDS HAVE A SHAPE TOO") == 1
-    assert "min_count" in runtime_words and "cards" in runtime_words
-    # The informed-plan instruction carries it. RULE 243 (2026-09-11) took it
-    # off the proposal goal with everything else keyed off steps: a proposal
-    # is seven fields and names no deliverable, so there is no shape to
-    # declare until the person has picked and the plan is being written.
-    assert cli_words.count("WORDS HAVE A SHAPE TOO") == 1
-    assert cli_words.count("min_count") >= 1

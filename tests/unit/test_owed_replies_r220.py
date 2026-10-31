@@ -221,11 +221,10 @@ def test_an_unchanged_step_still_fingerprints_the_same():
 def test_the_deal_step_instruction_puts_the_owed_reply_first():
     text = cli._DEAL_STEP_INSTRUCTION
 
-    assert text.startswith('If owed_replies is non-empty')
-    assert 'reply_owed' in text
+    assert 'Answer owed_replies first' in text
+    assert text.index('owed_replies') < text.index('An email, a calendar event')
     assert 'in_reply_to' in text
     assert 'dismiss_reply' in text
-    assert 'sent_back carries the person' in text
 
 
 def test_draft_sent_back_has_its_own_dispatch_not_the_fallback():

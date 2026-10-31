@@ -380,7 +380,7 @@ def test_the_tool_is_in_the_hand_dealt_on_a_deal_step():
     assert "toll_bench.file_evidence" in entry["tools"]
     # The cue: an approved outside act is the agent's turn to go and do it.
     assert "toll_bench.file_evidence" in entry["instruction"]
-    assert "OUTSIDE ACT" in entry["instruction"]
+    assert "outside act reading approved" in entry["instruction"]
 
 
 # --------------------------------------------------------------------------

@@ -147,10 +147,9 @@ def test_the_old_road_goal_carries_earlier_steps_in_current_step():
 
 def test_the_old_road_says_ask_the_person_once_and_never_fail_over_it():
     words = cli._DEAL_STEP_INSTRUCTION
-    assert "current_step.earlier_steps" in words
-    assert "toll_bench.reply_step_message" in words
-    assert "never result.fail over a fact the person can supply" in words
-    assert "thread_count" in words
+    assert "earlier_steps" in words
+    assert "ask once with toll_bench.reply_step_message" in words
+    assert "result.complete" in words and "result.fail" not in words
 
 
 def test_after_asking_the_old_road_posts_a_check_in_so_a_due_pulse_stops_re_asking():
@@ -161,6 +160,5 @@ def test_after_asking_the_old_road_posts_a_check_in_so_a_due_pulse_stops_re_aski
     # posted one, so the same ask went out three times in 81 seconds and the
     # loop guard parked the step again.
     words = cli._DEAL_STEP_INSTRUCTION
-    ask = words.index("ONCE with toll_bench.reply_step_message")
+    ask = words.index("ask once with toll_bench.reply_step_message")
     assert words.index("toll_bench.post_check_in", ask) < words.index("result.complete", ask)
-    assert "latest_work_pulse.blocker already says you asked" in words

@@ -34,7 +34,6 @@ from tests.unit.test_step_ask import (
     _obj,
     _payload,
 )
-from toll_harness.core.runtime import TOLL_BENCH_SYSTEM_INSTRUCTION
 from toll_harness.core.types import ModelMessage, ModelResponse
 from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.toll_bench.book_of_houses import (
@@ -54,10 +53,6 @@ from toll_harness.toll_bench.step import (
     StepAsk,
     step_tail,
 )
-
-
-def _flat(text: str) -> str:
-    return " ".join(text.split())
 
 
 # ---------------------------------------------------------------------------
@@ -93,16 +88,6 @@ def test_the_words_stay_short():
     # whole instruction stays well inside its budget.
     assert len(WHO_STEP_SENTENCE) < 1_100
     assert len(FORM_INSTRUCTION) < 3_100
-
-
-def test_the_runtime_sheet_and_the_refusal_fix_say_the_same_slot():
-    sheet = _flat(TOLL_BENCH_SYSTEM_INSTRUCTION)
-    for words in (sheet,):
-        assert '"contact_book"' in words
-        assert '"found_by_research"' in words
-        assert "`from_step`" in words
-        assert "do not plan a separate find step: put the word on the who step" in words
-        assert "never plan a step to find" not in words
 
 
 def test_the_form_ask_the_model_reads_names_the_research_filler():

@@ -636,7 +636,7 @@ def test_the_deal_step_instruction_tells_the_agent_to_declare_the_wait():
     from toll_harness.cli import _DEAL_STEP_INSTRUCTION
 
     assert "toll_bench.wait_outside" in _DEAL_STEP_INSTRUCTION
-    assert "Never sit silent at agent_working" in _DEAL_STEP_INSTRUCTION
+    assert "never sit silent at agent_working" in _DEAL_STEP_INSTRUCTION
 
 
 def test_a_stand_in_422_comes_back_structured_with_the_field_and_the_fix():

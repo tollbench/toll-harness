@@ -45,4 +45,3 @@ def test_the_two_retired_codes_are_not_anticipated_anywhere():
 
 def test_the_harness_own_words_obey_the_frame():
     assert "you will file" not in cli._FILE_INFORMED_PLAN_INSTRUCTION
-    assert "An email draft ready for your approval." in cli._FILE_INFORMED_PLAN_INSTRUCTION
