@@ -232,8 +232,11 @@ def test_the_eight_fields_are_read_and_everything_else_is_dropped():
     # (contract 4.1.3), the agent's own lines: read, not dropped.
     assert read_proposal(dict(PROPOSAL, capabilities=["Books shows"]))[
         "capabilities"] == ["Books shows"]
-    # The one coercion: a probability is arithmetic, not an opinion.
-    assert read["odds"] == 1.0
+    # 0.74.0: no coercion. The odds go to the door exactly as written, and a
+    # number outside 0..1 is the door's to refuse in its own words.
+    assert read["odds"] == 4
+    assert read_proposal(dict(PROPOSAL, odds=95))["odds"] == 95
+    assert read_proposal(dict(PROPOSAL, odds=0.95))["odds"] == 0.95
     assert read_proposal({"proposal": PROPOSAL})["pitch_title"] == PROPOSAL["pitch_title"]
 
 

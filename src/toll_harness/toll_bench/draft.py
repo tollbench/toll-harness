@@ -2505,7 +2505,8 @@ PROPOSAL_INSTRUCTION = (
     "not trimmed, so count and stay inside it; do not pad it.\n"
     'Answer, approach first: {"approach": {"risk": "...", "finish": "...", '
     '"path": "..."}, "pitch_title": "...", "headline": "...", '
-    '"pitch_body": "...", "odds": 0.0, '
+    '"pitch_body": "...", "odds": <your honest chance, more than 0 and less '
+    'than 1>, '
     '"total_ask_cents": 0, "research_links": [...], "finalist_questions": '
     '[...], "tools_needed": [...], "capabilities": ["..."], '
     '"step_estimate": {"total": 0, "you": 0}}.'
@@ -2778,9 +2779,9 @@ def read_proposal(answer: dict[str, Any], notes: list[str] | None = None) -> dic
 
     FIELD NAMES ARE A CONTRACT. A field the door does not name is a field the
     door will not read, so anything else the model volunteered is dropped here
-    rather than filed. Nothing is trimmed and nothing is invented: an `odds`
-    outside 0..1 is the one coercion, because a probability is the one field
-    whose range is arithmetic rather than an opinion.
+    rather than filed. Nothing is trimmed, coerced or invented: `odds` goes
+    to the door exactly as written (0.74.0), and an `odds` outside 0..1 is
+    the door's to refuse in its own words.
 
     THE ROW SLOTS ARE OPTIONAL (contract 4.1.3). `approach`, `capabilities`
     and `step_estimate` are read when the answer carries them, in the door's
@@ -2808,7 +2809,7 @@ def read_proposal(answer: dict[str, Any], notes: list[str] | None = None) -> dic
             out[field] = value.strip()
     odds = holder.get("odds")
     if isinstance(odds, (int, float)) and not isinstance(odds, bool):
-        out["odds"] = min(1.0, max(0.0, float(odds)))
+        out["odds"] = odds
     cents = holder.get("total_ask_cents")
     if isinstance(cents, (int, float)) and not isinstance(cents, bool):
         out["total_ask_cents"] = int(cents)
