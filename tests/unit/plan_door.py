@@ -114,6 +114,7 @@ class Door:
         self.patches: list[list[dict[str, Any]]] = []
         self.drops: list[int] = []
         self.inserts: list[tuple[int, dict[str, Any]]] = []
+        self.puts: list[dict[str, Any]] = []
 
     def _next(self) -> dict[str, Any]:
         return self.answers.pop(0) if self.answers else {"ok": True, "ready": True}
@@ -135,6 +136,11 @@ class Door:
         self.patches.append(copy.deepcopy(list(patches)))
         return self._next()
 
+    def put_draft(self, target_id, body, *, kind="plan"):
+        """A whole form back in one PUT (0.68.0, the one plan road since 0.74.0)."""
+        self.puts.append(copy.deepcopy(body))
+        return self._next()
+
     def drop_draft_step(self, target_id, step, *, kind="plan"):
         self.drops.append(int(step))
         return self._next()
@@ -144,21 +150,4 @@ class Door:
         return self._next()
 
 
-class SpyDoor(Door):
-    """A door that records what it is sent and refuses NOTHING.
 
-    `Door` asserts on an address itself, which is a good belt for every test
-    that does not care -- and useless for a test ABOUT the guard, because the
-    door's own refusal would pass whether or not the harness has one. This one
-    keeps its hands down so the test can look at what really went on the wire.
-    """
-
-    def patch_draft(self, target_id, patches, *, kind="bid"):
-        self.patches.append(copy.deepcopy(list(patches)))
-        return self._next()
-
-
-class OldDoor(Door):
-    """A bench that publishes no insert call at all."""
-
-    insert_draft_step = None

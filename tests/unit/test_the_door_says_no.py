@@ -162,8 +162,8 @@ def test_a_409_handed_straight_to_the_fix_loop_is_not_worked_on():
     for body in (OLD_SHAPE_409, _new_shape_closed(), reply("paused")):
         door = Door()
         model = _model()
-        out = DraftLoop(model, door)._answer_the_fixes(
+        out = DraftLoop(model, door)._fix_every_red_row(
             "t-1", "plan", dict(body), "x")
         assert model.invocations == []
-        assert door.patches == []
+        assert door.patches == [] and door.puts == []
         assert isinstance(out, dict)

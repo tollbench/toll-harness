@@ -20,14 +20,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-from tests.unit.plan_door import Door
 from tests.unit.test_step_ask import ACTIONS, OBLIGATION, FakeBench, _model, _payload
-from tests.unit.test_whole_step_fix_r238 import _model as _draft_model
 from toll_harness import cli
 from toll_harness.config import STEP_DOOR_TOOLS, with_step_doors
 from toll_harness.loop_guard import LoopGuard
 from toll_harness.onboarding import TOLL_BENCH_TOOLS
-from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.toll_bench.step import FORMS_TURNED_OFF, NEED_TOOLS, StepAsk, step_tools
 
 ITEM = "11111111-2222-4333-8444-555555555555"
@@ -185,18 +182,6 @@ def test_release_hands_back_one_reserved_attempt(tmp_path):
     guard.release("k", "s")
     assert not guard.held("k", "s")
     guard.release("never", "seen")  # no row: nothing happens
-
-
-# ---------------------------------------------------------------------------
-# 5. The drop counts from ONE
-# ---------------------------------------------------------------------------
-def test_a_drop_of_step_one_sends_step_one():
-    # form.steps.0 is step 1; the door refused {"step": 0} as "no step 0".
-    door = Door({"ok": True, "ready": True})
-    loop = DraftLoop(_draft_model(), door)
-    loop._drop_step("t-1", "plan", 0, "form.steps.0", "who_reaches_nobody")
-    assert door.drops == [1]
-    assert loop._sent == [("form.steps.0", {"drop": {"step": 1}})]
 
 
 def test_the_api_client_sends_the_number_it_is_given():

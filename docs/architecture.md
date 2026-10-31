@@ -129,10 +129,9 @@ or a try, it shouts in the run log with its step, slot and codes, and when nothi
 run stops with `bench_must_fix`. A `person` row is a wait, not a failure (`waiting_on_the_person`).
 Both park the want for the ROUND, on the brake that was already there, and a repost asks again.
 
-**Two rows are answered with no model at all.** A key the form has no room for is taken off and the
-object at the row's `path` is sent back, read off the row's own `accepted` list. A step that reaches
-somebody with no who step above it gets the insert call, read off the slot table: a `contact` slot
-the platform fills from `person.who`, and no step marked `person_slot: "who"`.
+**No row is answered without a model (0.74.0).** Every `who_fixes: "agent"` row -- an unknown key,
+a missing who step, a key that may not be there -- goes to the model with the door's own `say` and
+`accepted`, and the model sends the whole form back. Nothing is taken off, inserted or aimed at home.
 
 THREE MISSES END IT: the door closes with `plan_failed`, the bench scores the agent "selected,
 could not present a plan", the person is told in red and picks somebody else, and that agent may
@@ -160,16 +159,15 @@ and sends the EMPTY opening `PUT` only when nothing stands, because an empty PUT
 replaces it. A bench that publishes no plan door falls back to the single-shot road, which is a
 proposal too.
 
-**Every red row, every round (0.68.0).** Once a form stands, each round works the rows that need no
-model first (the two above, plus a key the bench says may not be there), then asks ONE model call
-with the whole form, every `who_fixes: "agent"` row (step, slot, problem, `say`, path, `accepted`;
+**Every red row, every round (0.68.0), the only plan road (0.74.0).** Once a form stands, each
+round asks ONE model call with the whole form, every `who_fixes: "agent"` row (step, slot, problem, `say`, path, `accepted`;
 never the codes) and the `form_steps` entry of each of those steps, and files the whole answer back
 in ONE `PUT {"kind": "plan", "form": {...}}` over the standing form, which the bench carries its
 rounds forward on (a full form answers the row it asked about). A form missing steps it does not
 name in `drop` is never filed; an answer carrying only `odds` / `overview` / `span_days` changes
 those and keeps every step; an empty, partial or unchanged answer is asked once more saying which.
 The stall guard is unchanged: a row shown twice and still red the third time ends the draft. The
-older outline road keeps the one-row road.
+older outline road and its one-row road are gone (0.74.0).
 
 **The empty catalog is not the default catalog.** `tools_index` treats `tools: []` as "no tools on
 this want", never as "no index published". Reading an empty list as unpublished put a Slack row on
@@ -189,8 +187,7 @@ FALSE, and there the rules and the tools ride the first call ONCE instead of eve
 
 The tail is small by design: the form ask carries the want, the person's answers, the stance line,
 one worked example and the blank form; a fix round on a form carries the form and every red row
-(0.68.0), and on the older outline road the one content question and the plan's shape as one line
-per step. Never the expanded document. Each model call logs ONE line: the want, the prompt's size
+(0.68.0). Never the expanded document. Each model call logs ONE line: the want, the prompt's size
 (prefix and tail), the answer's size, the output tokens and what stopped it, and what the reply read
 as; each bench door answer logs one line at the HTTP client with the want/deal id, the status, the
 answer's size and the door's own sentence. A reply that could not be used leaves the first 600
@@ -201,13 +198,9 @@ A reply the output limit cut off -- empty, or sliced part way through its JSON -
 reasoned; otherwise the draft loop asks the same question once more for the object alone, short.
 Never both. A plan reply that never became JSON is handed back once with the parser's own words.
 
-TWO SHELVES, AND THEY ARE NOT THE SAME SHELF. The FORM ask carries the bench's own `example_plan`
--- one finished plan for a want like this one, chosen by the bench, in the same form being filled --
-and nothing of ours goes into it. The own-wins shelf is the OTHER one: before a LEGACY OUTLINE is
-written (the road a bench with no plan door still walks), the loop reads this agent's own accepted
-plans, picks the nearest by tool-family overlap with what the want needs, and seeds that outline
-with its shape so the model is asked only to adjust it; nothing overlaps, nothing seeds. Not a
-stranger's worked program, but the jobs this agent has already been picked for.
+ONE SHELF. The FORM ask carries the bench's own `example_plan` -- one finished plan for a want like
+this one, chosen by the bench, in the same form being filled -- and nothing of ours goes into it.
+(The own-wins shelf that seeded a legacy outline went with the outline road in 0.74.0.)
 
 ## What a step costs
 

@@ -38,7 +38,6 @@ from toll_harness.toll_bench.draft import (
     fixed_by,
     form_steps_of,
     problems_of,
-    says_on_step,
     step_entry,
 )
 
@@ -111,24 +110,22 @@ def test_the_old_fields_are_gone_from_the_reply():
 def test_the_fix_ask_hands_over_the_steps_own_slot_table():
     answer = holes_written(
         only(reply("email_step"), row(reply("email_step"), codes=["forecast"])))
-    # The plan already has a who step, so nothing is inserted before the ask,
-    # and its holes are written, so the fix ask is the first ask.
     answer["form_steps"][0]["person_slot"] = "who"
     door = Door({"ok": True, "ready": True})
-    model = _model({"patches": [{"path": "form.steps.1.declared_odds", "value": 0.7}]})
+    model = _model({"form": dict(answer["form"], overview="A new overview")})
 
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "Introduce me")
+    DraftLoop(model, door)._fix_every_red_row("t-1", "plan", answer, "Introduce me")
 
     ask = _said(model)
-    assert '"this_step"' in ask
-    # Every part of a slot the door published, in the door's own words.
+    # The whole-form road (0.74.0, the only plan road) hands over the step's
+    # own slot table under `what_goes_in`, in the door's own words.
+    assert '"what_goes_in"' in ask
     for word in ('"name":"subject"', '"filler":"agent"', '"state":"needed"',
                  '"kind":"contact"', '"filler":"platform"',
                  '"source":"person.who"'):
         assert word in ask, word
-    # The path to patch, and the sentence, under one heading.
-    assert '"change_this"' in ask
-    assert '"what_the_bench_says"' in ask
+    # Every red row, with the door's path and sentence.
+    assert '"red"' in ask and '"say"' in ask
 
 
 def test_no_legacy_code_ever_reaches_the_model():
@@ -136,9 +133,9 @@ def test_no_legacy_code_ever_reaches_the_model():
         only(reply("email_step"), row(reply("email_step"), codes=["forecast"])))
     answer["form_steps"][0]["person_slot"] = "who"
     door = Door({"ok": True, "ready": True})
-    model = _model({"patches": [{"path": "form.steps.1.declared_odds", "value": 0.7}]})
+    model = _model({"form": dict(answer["form"], overview="A new overview")})
 
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
+    DraftLoop(model, door)._fix_every_red_row("t-1", "plan", answer, "x")
 
     ask = _said(model)
     assert "REJ-" not in ask
@@ -160,14 +157,6 @@ def test_the_codes_ride_the_log_line_instead():
     assert line["rows"] == {"agent": 1, "person": 0, "platform": 0}
 
 
-def test_the_sentences_of_one_step_are_read_off_the_rows():
-    answer = reply("email_step")
-    said = says_on_step(problems_of(answer), 2)
-    assert len(said) == len({s for s in said})
-    assert all(isinstance(s, str) and s for s in said)
-    assert says_on_step(problems_of(answer), 1) == []
-
-
 # ---------------------------------------------------------------------------
 # 3. WHO FIXES IT IS HONOURED
 # ---------------------------------------------------------------------------
@@ -179,11 +168,11 @@ def test_a_platform_only_draft_spends_no_model_call_and_shouts(caplog):
     model = _model()  # nothing scripted: the model must not be asked at all
 
     with caplog.at_level(logging.ERROR, logger="toll_harness.draft"):
-        out = DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
+        out = DraftLoop(model, door)._fix_every_red_row("t-1", "plan", answer, "x")
 
     assert out["error"] == "bench_must_fix"
     assert model.invocations == []
-    assert door.patches == [] and door.drops == [] and door.inserts == []
+    assert door.puts == [] and door.patches == []
     # And it shouts on our side, with what a person needs to find it.
     assert "THE BENCH MUST FIX THIS" in caplog.text
     assert "REJ-22" in caplog.text
@@ -196,11 +185,11 @@ def test_a_person_only_draft_is_a_wait_and_not_a_failure():
     door = Door()
     model = _model()
 
-    out = DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
+    out = DraftLoop(model, door)._fix_every_red_row("t-1", "plan", answer, "x")
 
     assert out["error"] == "waiting_on_the_person"
     assert model.invocations == []
-    assert door.patches == []
+    assert door.puts == [] and door.patches == []
 
 
 def test_a_whole_run_on_our_own_bug_files_nothing_and_names_it():
@@ -262,12 +251,13 @@ def test_an_agent_row_beside_our_bug_is_still_the_agents_to_fix():
     mine = row(reply("unknown_fields"), path="form.steps.1.declared_odds")
     answer = only(reply("unknown_fields"), ours, mine)
     door = Door({"ok": True, "ready": True})
-    model = _model({"patches": [{"path": mine["path"], "value": 0.7}]})
+    form = dict(answer["form"], overview="The agent's own fix")
+    model = _model({"form": form})
 
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", answer, "x")
+    DraftLoop(model, door)._fix_every_red_row("t-1", "plan", answer, "x")
 
     assert len(model.invocations) == 1
-    assert door.patches == [[{"path": mine["path"], "value": 0.7}]]
+    assert len(door.puts) == 1
 
 
 # ---------------------------------------------------------------------------

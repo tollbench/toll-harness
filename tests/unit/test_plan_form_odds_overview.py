@@ -20,7 +20,6 @@ from toll_harness.toll_bench.draft import (
     FORM_STEP_FIELDS,
     DraftLoop,
     read_form,
-    read_patches,
 )
 
 # The door's published list: the PlanFormStep snapshot the parity test
@@ -104,25 +103,6 @@ def test_the_put_carries_odds_and_overview_and_files():
     sent = bench.puts[1]["form"]
     assert sent["odds"] == 0.35 and sent["overview"].startswith("I find")
     assert len(model.invocations) == 1
-
-
-def test_explicit_and_the_two_bare_shapes_answer_the_asked_odds():
-    want = [{"path": "form.odds", "value": 0.75}]
-    assert read_patches({"patches": want}, "form.odds") == want
-    assert read_patches({"odds": 0.75}, "form.odds") == want
-    assert read_patches({"form": {"odds": 0.75}}, "form.odds") == want
-    # Type preserved.
-    assert read_patches({"odds": "75%"}, "form.odds") == [{"path": "form.odds", "value": "75%"}]
-
-
-def test_missing_or_ambiguous_answers_invent_nothing():
-    assert read_patches({"odds": 0.75}) == []                       # nothing asked
-    assert read_patches({"odds": 0.75}, "form.overview") == []      # other field
-    assert read_patches({"odds": 0.75}, "form.steps.0.do_line") == []
-    assert read_patches({"odds": None}, "form.odds") == []
-    assert read_patches({"sorry": "no"}, "form.odds") == []
-    assert read_patches({}, "form.odds") == []
-    assert read_patches({"odds": 0.5, "form": {"odds": 0.9}}, "form.odds") == []
 
 
 def test_a_multi_step_plan_is_corrected_then_filed():

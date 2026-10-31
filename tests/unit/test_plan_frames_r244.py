@@ -18,90 +18,11 @@ in front of the model.
 """
 from __future__ import annotations
 
-from tests.unit.plan_door import a_row
-from tests.unit.test_draft_loop_r241 import FakeDraftBench, _model
 from toll_harness import cli
 from toll_harness.toll_bench import blocks
-from toll_harness.toll_bench.draft import BLANKS_INSTRUCTION, DraftLoop
-
-# The bench's own notes, verbatim (app/services/plan_frames.py on the bench).
-YOU_NOTE = (
-    "What the person does here, one line: starts with connect / approve / "
-    "pick / answer, names the thing. Leave it empty and the platform prints a "
-    "flat line."
-)
-WORK_FRAME = "1-3 lines, each starting with an -ing word and naming what it produces."
-
-
-class BenchWithYou(FakeDraftBench):
-    """The draft door as it now expands a step: a `you` blank on the step and
-    on its act, listed beside the promise with the bench's note."""
-
-    def put_draft(self, target_id, outline, *, kind="bid"):
-        answer = super().put_draft(target_id, outline, kind=kind)
-        # The empty open of a plan draft is the door's own round (it asks for
-        # the outline); there is no document to expand until the outline
-        # comes back.
-        if answer.get("next"):
-            return answer
-        for step in self.document["steps"]:
-            step["you"] = ""
-            step["acts"] = [{"kind": "email", "purpose": "the intro", "you": ""}]
-        return self.answer()
-
-    def blanks(self):
-        rows = super().blanks()
-        for index, step in enumerate(self.document.get("steps") or []):
-            if not step.get("you"):
-                rows.append({"path": f"steps.{index}.you", "note": YOU_NOTE,
-                             "example": "Approve the email to Grant", "required": False})
-            for ai, act in enumerate(step.get("acts") or []):
-                if not act.get("you"):
-                    rows.append({"path": f"steps.{index}.acts.{ai}.you", "note": YOU_NOTE,
-                                 "example": "Approve the email to Grant", "required": False})
-        return rows
-
 
 _OUTLINE = {"steps": [{"ask": "APPROVE", "title": "Draft the introduction email",
                        "tool": "gmail.message.send", "on": "google-gmail"}]}
-_PROMISE = "An email draft ready for review."
-
-
-def _asks(model):
-    return [inv["messages"][0].content[0]["text"] for inv in model.invocations]
-
-
-def test_the_you_blank_is_asked_for_with_the_benchs_note_and_filed():
-    bench = BenchWithYou()
-    model = _model(
-        _OUTLINE,
-        {"patches": [
-            {"path": "steps.0.outcome_promise", "value": _PROMISE},
-            {"path": "steps.0.you", "value": "Approve the email to Grant"},
-            {"path": "steps.0.acts.0.you", "value": "Approve the email to Grant"},
-        ]},
-        {"patches": [{"path": "pitch_title", "value": "An introduction, done right"}]},
-        {"patches": []},
-    )
-
-    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
-    brief={"want": "Introduce me to Grant"},
-                                idempotency_key="k")
-
-    asked = _asks(model)[1]
-    assert "steps.0.you" in asked and "steps.0.acts.0.you" in asked
-    assert "starts with connect / approve / pick / answer" in asked, "the bench's note rides"
-    assert "pinned to it" in asked, "and the instruction says to write it, not leave it"
-    filed = bench.filed[2]
-    assert filed["steps"][0]["you"] == "Approve the email to Grant"
-    assert filed["steps"][0]["acts"][0]["you"] == "Approve the email to Grant"
-
-
-def test_the_instruction_carries_the_frame_in_the_benchs_words():
-    assert "`you` blank" in BLANKS_INSTRUCTION
-    assert "starts with connect / approve / pick / answer" in BLANKS_INSTRUCTION
-    assert "names the thing you deliver, never you" in BLANKS_INSTRUCTION
-    assert "-ing word" in BLANKS_INSTRUCTION
 
 
 def test_the_two_retired_codes_are_not_anticipated_anywhere():
@@ -120,33 +41,6 @@ def test_the_two_retired_codes_are_not_anticipated_anywhere():
     source = inspect.getsource(draft)
     assert "REJ-44" not in source and "REJ-12" not in source
     assert not hasattr(blocks, "band_floor")
-
-
-def test_a_retired_code_on_a_row_is_still_answered_like_any_other():
-    """A bench that names one anyway is not a special case: the row carries
-    its own sentence and path, and the loop answers that."""
-    bench = FakeDraftBench(fixes=[a_row(
-        "steps.0.minor_detail", step=1, slot="minor_detail",
-        say="Step 1: the work line does not start with an -ing word.",
-        codes=["REJ-44"])])
-    model = _model(
-        _OUTLINE,
-        {"patches": [{"path": "steps.0.outcome_promise", "value": _PROMISE}]},
-        {"patches": [{"path": "pitch_title", "value": "The intro"}]},
-        {"patches": [{"path": "steps.0.minor_detail",
-                      "value": "Offering the invitee three times from your calendar"}]},
-        {"patches": []},
-    )
-
-    DraftLoop(model, bench).run("t-1", kind="plan", proposal_id="p-9",
-                                brief={"want": "Introduce me to Grant"},
-                                idempotency_key="k")
-
-    texts = _asks(model)
-    assert any("-ing word" in t for t in texts), texts
-    # The code itself never reaches the model.
-    assert not any("REJ-44" in t for t in texts)
-    assert bench.filed[2]["steps"][0]["minor_detail"].startswith("Offering ")
 
 
 def test_the_harness_own_words_obey_the_frame():

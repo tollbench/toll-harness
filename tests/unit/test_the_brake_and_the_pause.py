@@ -55,6 +55,18 @@ class _Silent(Door):
         raise AssertionError("a paused door must not be edited")
 
 
+class _PutDoor(Door):
+    """The plan door taking whole forms (0.68.0): every PUT recorded."""
+
+    def __init__(self, *answers):
+        super().__init__(*answers)
+        self.puts: list[dict] = []
+
+    def put_draft(self, target_id, body, *, kind="plan"):
+        self.puts.append(body)
+        return self._next()
+
+
 # ---------------------------------------------------------------------------
 # 1. ONE FAULT, THE BENCH'S OWN NAME FOR IT
 # ---------------------------------------------------------------------------
@@ -135,9 +147,9 @@ def test_the_brake_is_written_down_as_cumulative():
     `test_two_problems_taking_turns_still_trip_the_guard` pins it. The words
     said "consecutive", which is the count that let two problems taking turns
     run for ever."""
-    words = DraftLoop._answer_the_fixes.__doc__ or ""
-    assert "CUMULATIVE" in words.upper()
-    assert "THIRD consecutive round" not in words
+    words = DraftLoop._fix_every_red_row.__doc__ or ""
+    assert "counted across the whole run" in words
+    assert "consecutive" not in words
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +184,7 @@ def test_a_paused_draft_costs_no_model_call_and_no_door_call(caplog):
     loop = DraftLoop(None, _Silent())
 
     with caplog.at_level(logging.ERROR, logger="toll_harness.draft"):
-        out = loop._answer_the_fixes("t-1", "plan", answer, "a want")
+        out = loop._fix_every_red_row("t-1", "plan", answer, "a want")
 
     assert out["error"] == DRAFT_PAUSED
     assert loop.calls == 0 and loop.rounds == 0
@@ -185,18 +197,16 @@ def test_a_pause_that_arrives_mid_loop_stops_the_next_round():
                   closed=None, rounds={"used": 1, "left": 40, "cap": 42})
     open_row = row(reply("email_step"), slot="subject")
     answer = only(reply("email_step"), open_row)
-    # The plan already has a who step, so the round is a patch and nothing else.
-    answer["form_steps"][0]["person_slot"] = "who"
-    door = Door(paused)
+    door = _PutDoor(paused)
 
     loop = DraftLoop(None, door)
-    loop._ask = lambda *a, **k: {"patches": [{"path": open_row["path"],
-                                             "value": "An introduction"}]}
-    out = loop._answer_the_fixes("t-1", "plan", answer, "a want")
+    form = dict(answer["form"], overview="A changed overview")
+    loop._ask = lambda *a, **k: {"form": form}
+    out = loop._fix_every_red_row("t-1", "plan", answer, "a want")
 
     assert out["error"] == DRAFT_PAUSED
-    # One patch went out before the bench said stop, and not a second one.
-    assert len(door.patches) == 1
+    # One whole form went out before the bench said stop, and not a second.
+    assert len(door.puts) == 1
 
 
 def test_a_whole_run_on_a_paused_door_sends_nothing():

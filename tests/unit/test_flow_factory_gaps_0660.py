@@ -213,21 +213,18 @@ def test_operator_materials_are_compact_and_budgeted():
     assert len(rows[0]["text"]) == 20_000 and not rows[0].get("text_trimmed")
 
 
-def test_the_outline_and_form_asks_carry_the_materials():
+def test_the_form_ask_carries_the_materials():
     loop = draft.DraftLoop(model=None, provider=None)
-    brief = {"want": "A storybook about you", "flow_materials": MATERIALS}
-    outline = loop._outline_payload("A storybook about you", None, brief, None)
-    assert outline[draft.MATERIALS_KEY][0]["title"] == "Dr. Moose recipe"
     form = loop._the_form_ask(
         {"blanks": [], "form": {"steps": []}, "flow_materials": MATERIALS},
         "A storybook about you", None, {"want": "A storybook about you"})
     assert form[draft.MATERIALS_KEY][1]["public_url"].endswith("watercolor.png")
-    bare = loop._outline_payload("A want", None, {"want": "A want"}, None)
+    bare = loop._the_form_ask(
+        {"blanks": [], "form": {"steps": []}}, "A want", None, {"want": "A want"})
     assert draft.MATERIALS_KEY not in bare
 
 
 def test_every_plan_instruction_names_the_materials():
-    for words in (draft.PLAN_OUTLINE_INSTRUCTION, draft.SEEDED_OUTLINE_INSTRUCTION,
-                  draft.FORM_INSTRUCTION, draft.form_instruction(None)):
+    for words in (draft.FORM_INSTRUCTION, draft.form_instruction(None)):
         assert draft.MATERIALS_KEY in words
         assert "get_flow_material" in words

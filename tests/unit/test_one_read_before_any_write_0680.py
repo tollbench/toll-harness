@@ -172,3 +172,22 @@ def test_an_operator_reply_turns_the_kept_read_stale(monkeypatch):
         {"ok": True}, 1, 3, already_read=dict(NO_DRAFT),
     )
     assert seen["already_read"] is None
+
+
+def test_a_closed_standing_draft_is_read_and_never_put_over():
+    """Ported from the outline road (0.74.0). The bench counts a repeated PUT
+    as a round and holds a used-up draft closed until it expires, so a fresh
+    form over a closed draft burns the cap and costs the want a day. The run
+    reads it, asks no model, and leaves."""
+    closed = dict(reply("clean"), ok=False, ready=False,
+                  closed="this draft used its rounds.")
+    door = Door(standing=closed)
+
+    out = DraftLoop(_model(), door).run(
+        "t-1", kind="plan", proposal_id="p-9", brief={"want": "Book a table"},
+        idempotency_key="k",
+    )
+
+    assert out["ok"] is False and out["error"] == "draft_closed", out
+    assert door.calls == ["GET"]
+    assert door.filed is None

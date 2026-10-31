@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import json
 
-from tests.unit.plan_door import OldDoor, holes_written, only, reply, row
+from tests.unit.plan_door import holes_written, only, reply, row
 from toll_harness.core.types import ModelMessage, ModelResponse
 from toll_harness.models.scripted import ScriptedModelAdapter
-from toll_harness.toll_bench.draft import DraftLoop
 
 
 def _says(text: str) -> ModelResponse:
@@ -47,8 +46,6 @@ def _said(model, index=0):
 # The real answer: step 2 sends mail, no step above it asks who.
 EMAIL = reply("email_step")
 NO_WHO = row(EMAIL, problem="no_source", step=2)
-SEND_STEP = EMAIL["form"]["steps"][1]
-
 
 def _answer(*rows):
     # The holes on the send step are written already: this file is about the
@@ -71,17 +68,6 @@ def test_the_send_step_carries_a_contact_slot_the_platform_fills():
     mine = [s["name"] for s in entry["slots"] if s["filler"] == "agent"]
     assert "subject" in mine and "body" in mine
     assert "to" not in mine and "from" not in mine
-
-
-def test_a_door_with_no_insert_call_falls_back_to_asking_the_agent():
-    door = OldDoor({"ok": True, "ready": True})
-    model = _model({"drop": {"step": 2}})
-
-    DraftLoop(model, door)._answer_the_fixes("t-1", "plan", _answer(), "x")
-
-    assert door.inserts == []
-    assert door.drops == [2]  # the door counts from ONE (0.56.2)
-    assert "TWO EXITS" in _said(model)
 
 
 # ---------------------------------------------------------------------------

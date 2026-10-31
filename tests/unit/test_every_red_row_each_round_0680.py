@@ -231,3 +231,35 @@ def test_only_a_held_form_in_the_one_language_takes_the_whole_form():
     older = {k: v for k, v in held.items() if k != "problems"}
     assert not DraftLoop.takes_the_whole_form("plan", older)
     assert not DraftLoop.takes_the_whole_form("plan", {"draft": {"steps": [{}]}})
+
+
+def test_two_rows_taking_turns_still_trip_the_brake():
+    """The count is per row key across the whole run, not per consecutive
+    round: a door that alternates between two rows it never clears used to run
+    for ever. Ported from the one-row road (0.74.0)."""
+    a = a_row("form.steps.0.do_line", step=1, slot="do_line", problem="wrong_kind",
+              say="Step 1's title says what you do.")
+    b = a_row("form.overview", slot="overview", say="The plan needs its pitch.")
+    door = ScriptDoor(_standing(b), _standing(a), _standing(b), _standing(a))
+    model = _model(*({"form": _whole(do_line=f"Try {n}")} for n in range(6)))
+
+    out = _run(model, door, _standing(a))
+
+    assert out["ok"] is False and out["error"] == "draft_stalled", out
+    # a, b, a, b answered; the third naming of a ends it with no fifth call.
+    assert len(model.invocations) == 4
+    assert [call[0] for call in door.calls] == ["PUT"] * 4
+
+
+def test_a_draft_that_keeps_clearing_rows_runs_past_three_rounds():
+    """Not a cap on a long job: every round names a NEW row, so the brake never
+    trips and only the bench's own readiness ends the loop."""
+    rows = [a_row("form.steps.0.do_line", step=1, slot="do_line", problem="wrong_kind",
+                  say=f"Fault {n}.", key=f"k{n}") for n in range(5)]
+    door = ScriptDoor(*(_standing(row) for row in rows[1:]), reply("clean"))
+    model = _model(*({"form": _whole(do_line=f"Try {n}")} for n in range(5)))
+
+    out = _run(model, door, _standing(rows[0]))
+
+    assert out["filed"] is True, out
+    assert len(model.invocations) == 5

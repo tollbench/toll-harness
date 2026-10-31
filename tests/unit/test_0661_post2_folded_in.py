@@ -154,16 +154,6 @@ def test_an_old_bench_step_carries_nothing_new():
     assert _act_row(dict(OLD_STEP["acts"][0], read_results=[]))["read_results"] == []
 
 
-def test_an_old_bench_plan_ask_carries_no_materials():
-    loop = draft.DraftLoop(model=None, provider=None)
-    brief = {"want": "A want"}
-    assert draft.operator_materials(brief, {"blanks": []}) in (None, [])
-    outline = loop._outline_payload("A want", None, brief, None)
-    assert draft.MATERIALS_KEY not in outline
-    form = loop._the_form_ask({"blanks": [], "form": {"steps": []}}, "A want", None, brief)
-    assert draft.MATERIALS_KEY not in form
-
-
 def test_last_round_is_only_offered_for_a_rounds_step():
     tools = {tool.name: tool
              for tool in add_toll_bench_tools(build_standard_registry()).definitions()}
