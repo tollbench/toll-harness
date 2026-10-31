@@ -2129,10 +2129,10 @@ def _bid_through_the_draft_loop(
         outcome.get("error") in _CLOSED_DOOR_ERRORS or bool(outcome.get("declined")))
     if closed:
         _LOGGER.info(
-            "the door closed want %s for this round (%s); not asked again "
-            "until it is posted again",
+            "%s want %s for this round (%s); not asked again until it is posted again",
+            "declined" if outcome.get("declined") else "the door closed",
             target_id,
-            outcome.get("error"),
+            outcome.get("reason") if outcome.get("declined") else outcome.get("error"),
         )
     if _door_is_missing(outcome):
         _LOGGER.warning(
