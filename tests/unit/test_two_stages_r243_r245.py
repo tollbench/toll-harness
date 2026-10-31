@@ -24,9 +24,7 @@ import json
 from tests.unit.plan_door import a_row
 from tests.unit.test_draft_loop_r241 import _model
 from toll_harness.toll_bench.draft import (
-    FORM_CHAR_BUDGET,
     FORM_STEP_FIELDS,
-    PROMPT_CHAR_BUDGET,
     PROPOSAL_QUESTIONS_MAX,
     DraftLoop,
     block_grammar_summary,
@@ -1152,10 +1150,9 @@ def test_a_form_answer_that_carries_a_document_is_not_an_ask_for_the_form():
 # ---------------------------------------------------------------------------
 # THE PROMPT BUDGET — a seventeen-step example must not blow the ask
 # ---------------------------------------------------------------------------
-def test_the_form_ask_stays_inside_the_prompt_budget_with_a_big_example():
+def test_the_form_ask_carries_a_big_example_whole():
     """Steven's test 4 is a seventeen-step plan, so the example shelf can hand
-    back one. The ask sheds the example before it sheds the question, and the
-    question always survives."""
+    back one. Since 0.74.0 nothing is shed: the example rides whole."""
     bench = FormBench(steps=17, example=EXAMPLE_PLAN)
     model = _model(_filled(17))
 
@@ -1164,10 +1161,6 @@ def test_the_form_ask_stays_inside_the_prompt_budget_with_a_big_example():
         brief={"want": "One million views, and a car"}, idempotency_key="k")
 
     tail = model.invocations[0]["messages"][0].content[0]["text"]
-    # The form ask has a budget of its own: it replaces thirty small rounds,
-    # and the bench's finished example is the thing that makes a weak model
-    # work, so it must not be the first thing shed on the biggest plans.
-    assert PROMPT_CHAR_BUDGET < len(tail) <= FORM_CHAR_BUDGET
     # The example survived, whole.
     assert tail.count("TaskRabbit") >= 17
     # The question survived whatever was shed.

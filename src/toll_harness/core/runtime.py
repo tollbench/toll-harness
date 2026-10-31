@@ -254,7 +254,9 @@ class HarnessRuntime:
         # INPUT tokens this run may spend before it stops itself. Measured
         # from the provider's own usage numbers after every call; 0 turns the
         # guard off. See core/budget.py for what forced it.
-        self.context_budget_tokens = resolve_context_budget(context_budget_tokens)
+        self.context_budget_tokens = resolve_context_budget(
+            context_budget_tokens, getattr(model, "context_window_tokens", None)
+        )
         self.system_instruction = system_instruction
 
     def start(self, goal: str, mode: AutonomyMode = AutonomyMode.AUTONOMOUS) -> RunResult:

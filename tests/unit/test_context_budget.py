@@ -34,7 +34,6 @@ from toll_harness.models.scripted import ScriptedModelAdapter
 from toll_harness.storage.filesystem import FilesystemArtifactStore
 from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench.book_of_houses import (
-    BRIEF_CHAR_BUDGET,
     MAX_VALIDATE_ATTEMPTS,
     STEP_ACT_LIMIT,
     STEP_THREAD_MESSAGE_LIMIT,
@@ -250,25 +249,6 @@ class BriefApi:
 
     def proposal_schema(self):
         return {"type": "object"}
-
-
-def test_a_brief_over_the_budget_sheds_its_own_copies_of_itself():
-    fat = {"meeting": [{"title": "x" * 4000} for _ in range(16)]}
-    api = BriefApi(
-        _brief(
-            block_templates=fat,
-            bid_template={"steps": [{"title": "y" * 8000}]},
-            bid_template_notes=["title: name the step"],
-        )
-    )
-    brief = BookOfHousesTollBenchProvider(api).read_brief("t-1")["brief"]
-
-    assert brief["bid_template"] is None
-    assert brief["bid_template_note"]
-    assert brief["bid_template_notes"] == ["title: name the step"]
-    assert brief["block_templates"] == {"meeting": 16}
-    assert brief["block_templates_note"]
-    assert len(json.dumps(brief)) < BRIEF_CHAR_BUDGET
 
 
 # ---------------------------------------------------------------------------

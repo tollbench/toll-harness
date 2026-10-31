@@ -46,28 +46,27 @@ step the run was holding. One line goes to the log per model call, carrying the 
 tokens, so a run's growth is readable after the fact.
 
 `runtime.context_budget_tokens` sets it per agent, `TOLL_HARNESS_CONTEXT_BUDGET_TOKENS` across a
-fleet, and the default is 90,000; 0 turns the guard off. WHAT FORCED IT: on 2026-09-09 four
+fleet; 0 turns the guard off. The default follows the model's window: 90,000 on a 131,072-token
+window and in the same proportion above it (0.74.0). WHAT FORCED IT: on 2026-09-09 four
 production agents died inside Bedrock on prompts over 129,000 tokens against a 131,072-token
 context. A run that stops itself leaves a record and an honest failure; a run the provider stops
 leaves a stack trace. The budget is a floor under a bug, not a fix for one -- when a run hits it,
 the thing to shrink is what the tools hand back.
 
-THE ROOM A PROMPT GETS FOLLOWS THE MODEL'S WINDOW (0.73.0). Every model adapter carries
-`context_window_tokens`: `model.context_window_tokens` in `agent.yaml`, else
-`TOLL_HARNESS_CONTEXT_WINDOW_TOKENS`, else the window `core/window.py` knows for the model id, else
-131,072. The table is conservative: a plain Claude id is 200,000 and only an id carrying `[1m]` is
-1,000,000; Gemini 2/3 is 1,048,576. Every character budget the harness keeps for a
-prompt it builds -- the brief a tool hands back, each draft-loop ask, the step ask, the tools index,
-what the person said, the operator's materials, one step -- is the number written for a
-131,072-token window, times the model's window over 131,072, and never less than that number.
-What still has to come off comes off in a fixed order: on the brief, the program index and the
-earlier attempts first, then the example's proposal, the bid template, the tools' arguments and,
-last of all, the block catalog (to its kinds and step counts); in the draft loop, the outline lines
-and the forecast numbers first, then the slot tables, then the example, then the tools. The draft
-loop reads the brief whole (`read_whole_brief`): it never sends the brief in one piece, so the fit
-belongs to the tool result alone. WHAT FORCED IT: lab agent Nia (claude-opus-5-5), 2026-10-26, bid
-and planned a song workflow without the block menu, the bid template, the example, her tools and
-the forecast context, every one shed to fit a budget set for a 131,072-token window.
+THE WINDOW IS A SETTING (0.73.0). Every model adapter carries `context_window_tokens`:
+`model.context_window_tokens` in `agent.yaml`, else `TOLL_HARNESS_CONTEXT_WINDOW_TOKENS`, else the
+window `core/budget.py` knows for the model id, else 131,072. The table is conservative: a plain
+Claude id is 200,000 and only an id carrying `[1m]` is 1,000,000; Gemini 2/3 is 1,048,576.
+
+NOTHING A PROMPT CARRIES IS SHED (0.74.0). The per-prompt character budgets of 0.34.0-0.73.0 (the
+brief a tool hands back, each draft-loop ask, the step ask, the tools index, what the person said,
+the operator's materials, one step) and their shed orders are gone: the brief, the example, the
+tools, the block menu and the person's words ride whole, and the run-level budget above is the one
+guard. WHAT FORCED IT: lab agent Nia (claude-opus-5-5), 2026-10-26, bid and planned a song workflow
+without the block menu, the bid template, the example, her tools and the forecast context, every
+one shed to fit a budget set for a 131,072-token window; the harness thinness audit (2026-10-28)
+then found every one of those budgets was written for raw 131k models while the paid agents run
+rails that manage their own context.
 
 ## Two stages: the proposal, then the plan form
 

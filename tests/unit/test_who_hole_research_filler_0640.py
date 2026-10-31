@@ -42,7 +42,6 @@ from toll_harness.toll_bench.book_of_houses import (
     BookOfHousesTollBenchProvider,
 )
 from toll_harness.toll_bench.draft import (
-    FORM_CHAR_BUDGET,
     FORM_INSTRUCTION,
     WHO_FROM_CONTACT_BOOK,
     WHO_FROM_RESEARCH,
@@ -96,7 +95,6 @@ def test_the_words_stay_short():
     # whole instruction stays well inside its budget.
     assert len(WHO_STEP_SENTENCE) < 1_100
     assert len(FORM_INSTRUCTION) < 3_100
-    assert len(FORM_INSTRUCTION) < FORM_CHAR_BUDGET // 4
 
 
 def test_the_runtime_sheet_and_the_refusal_fix_say_the_same_slot():

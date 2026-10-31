@@ -207,11 +207,10 @@ def test_operator_materials_are_compact_and_budgeted():
     rows = draft.operator_materials({"flow_materials": MATERIALS},
                                     {"flow_materials": [MATERIALS[0]]})
     assert [r["id"] for r in rows] == ["m-1"]
-    # a recipe past the budget is cut and says so
-    long = dict(MATERIALS[0], text="x" * (draft.MATERIALS_CHAR_BUDGET + 10))
+    # 0.74.0: a long recipe rides whole; `text_trimmed` is the bench's own flag
+    long = dict(MATERIALS[0], text="x" * 20_000)
     rows = draft.operator_materials({"flow_materials": [long, MATERIALS[0]]})
-    assert len(rows[0]["text"]) == draft.MATERIALS_CHAR_BUDGET and rows[0]["text_trimmed"]
-    assert "text" not in rows[1] and rows[1]["text_trimmed"]
+    assert len(rows[0]["text"]) == 20_000 and not rows[0].get("text_trimmed")
 
 
 def test_the_outline_and_form_asks_carry_the_materials():

@@ -89,7 +89,6 @@ from toll_harness.core.own_means import (
     with_own_means,
 )
 from toll_harness.core.types import ModelMessage
-from toll_harness.core.window import room, window_of
 from toll_harness.models.base import (
     asked_again_over_a_cut_off,
     empty_reply_note,
@@ -123,39 +122,15 @@ EMAIL_SEND = "email.send"
 # dozens of PUTs on the same targets in two minutes, red the same number every
 # time, almost no PATCH between them. A run now READS first (a GET costs no
 # round) and PUTs only when there is nothing standing to carry on with.
-# A loop prompt is SMALL BY DESIGN -- one step, or one problem, never the
-# document. The 90k context budget in core/budget.py still guards a runtime run;
-# these are the guards for a prompt this module builds itself. Four characters
-# to a token, so 8,000 characters is about 2,000 tokens of tail on top of a
-# cached prefix.
-#
-# 0.73.0: EVERY CHARACTER BUDGET IN THIS MODULE IS THE NUMBER FOR A
-# 131,072-TOKEN WINDOW. The loop sizes each one from its model's own window
-# (core/window.py `room`): never less than the number written here, 1.5 times
-# it on a 200,000-token window and 7.6 times on 1,000,000. Nia (claude-opus-5-5)
-# had her proposal ask warn at 14,000 against 8,000 and her fix rounds drop the
-# example, her tools and the forecast context to fit 16,000 (2026-10-26).
-PROMPT_CHAR_BUDGET = 8_000
-# THE FORM ASK GETS ITS OWN, AND IT IS BIGGER (2026-09-11). The budget above
-# was written for a loop of thirty small rounds; the form ask REPLACES those
-# rounds -- one call, the whole plan -- and what rides on it is the thing that
-# makes a weak model work: the bench's own finished example, whole. Steven's
-# test 4 is a seventeen-step plan, and a seventeen-step example is ~4KB on its
-# own, so at 8,000 the example was the first thing shed on exactly the wants
-# that need it most. 16,000 characters is about 4,000 input tokens for the one
-# call that writes the plan, against the 25,000-40,000 the old road spent
-# writing it thirty times.
-FORM_CHAR_BUDGET = 16_000
-# ONE STEP, and one step is not a document. A thirty-step draft has thirty of
-# these and the round is only ever shown the one it is about.
-STEP_CHAR_BUDGET = 3_000
+# 0.74.0: NO PROMPT IS CUT TO FIT A PER-ASK BUDGET. Every ask goes whole --
+# the step, the example, the tools on this want, what the person said and the
+# operator's materials -- and the one run-level budget (core/budget.py) is the
+# only guard, for a raw adapter. The per-ask budgets of 0.34.0-0.73.0 (8,000,
+# 16,000, 3,000, ...) were all written for a 131,072-token window and shed the
+# very things a plan is built from (Nia, 2026-10-26).
 # The plan's SHAPE for a fix round: one line per step, so the model can see
 # where the thing it is changing sits without being handed the whole draft.
 OUTLINE_LINE_CHARS = 80
-# The keys of an expanded step that are the platform's own machinery and the
-# first thing to shed when a step's context runs long. The blanks themselves
-# are never shed: they are the question.
-_HEAVY_STEP_KEYS = ("service_setup", "statement", "har_blocks", "examples")
 
 # THE FRONT DOOR — said ONCE, at the top of every call, byte for byte.
 #
@@ -220,10 +195,8 @@ SHORT_FRONT_DOOR = (
 # No prompt here carried them, so Dr. Moose's first plan asked the person for
 # the recipe his operator had already given him (2026-10-21). They ride the
 # outline ask, the form ask and the proposal ask under one key, compact and
-# within a budget of their own (never under the 3,000-character strategy
-# budget, which a recipe would empty in one row).
+# whole (0.74.0: no budget of their own).
 MATERIALS_KEY = "what_your_operator_gave_you"
-MATERIALS_CHAR_BUDGET = 12_000
 MATERIALS_SENTENCE = (
     "`what_your_operator_gave_you`, when present, is the recipe your operator "
     "put in the materials box for this flow -- notes, links, documents, "
@@ -242,14 +215,12 @@ MATERIALS_SENTENCE_SHORT = (
 )
 
 
-def operator_materials(
-    brief: Any, answer: Any = None, *, budget: int = MATERIALS_CHAR_BUDGET
-) -> list[dict[str, Any]] | None:
+def operator_materials(brief: Any, answer: Any = None) -> list[dict[str, Any]] | None:
     """The operator's materials, compact, or None when there are none.
 
     Read off the plan-door `answer` first (it is the newer copy), then the
     brief. Each row keeps id, kind, title, url, public_url, use_in_flow and
-    its inline text; text past the budget is cut and `text_trimmed` says so.
+    its inline text, whole; `text_trimmed` is the bench's own flag.
     """
     rows: Any = None
     for source in (answer, brief):
@@ -260,7 +231,6 @@ def operator_materials(
     if not rows:
         return None
     out: list[dict[str, Any]] = []
-    left = budget
     for item in rows:
         if not isinstance(item, dict):
             continue
@@ -272,13 +242,7 @@ def operator_materials(
         text = item.get("text")
         trimmed = bool(item.get("text_trimmed"))
         if isinstance(text, str) and text:
-            room = max(0, left)
-            if len(text) > room:
-                text = text[:room]
-                trimmed = True
-            left -= len(text)
-            if text:
-                row["text"] = text
+            row["text"] = text
         if trimmed:
             row["text_trimmed"] = True
         out.append(row)
@@ -1785,23 +1749,6 @@ def outline_summary(document: Any) -> list[str]:
     return lines
 
 
-def _fit(value: Any, budget: int = STEP_CHAR_BUDGET) -> Any:
-    """A step small enough to hand over. The platform's own machinery comes
-    off first; the agent's words and the blanks never do."""
-    if value is None:
-        return None
-    text = json.dumps(value, separators=(",", ":"), default=str)
-    if len(text) <= budget or not isinstance(value, dict):
-        return value
-    trimmed = dict(value)
-    for key in _HEAVY_STEP_KEYS:
-        if key in trimmed:
-            trimmed.pop(key)
-            if len(json.dumps(trimmed, separators=(",", ":"), default=str)) <= budget:
-                break
-    return trimmed
-
-
 # ---------------------------------------------------------------------------
 # WHAT THE OUTLINE CALL IS TOLD — the want, the strategy, the grammar, the tools
 # ---------------------------------------------------------------------------
@@ -1858,7 +1805,6 @@ def block_grammar_summary(brief: Any, act_kinds: Any = None) -> str:
 # the draft door writes the required arguments into the document and hands them
 # back as blanks with their own sentences, one step at a time. So the index is
 # narrowed here rather than pasted in.
-TOOLS_CHAR_BUDGET = 4_000
 
 
 def _tool_row(row: Any) -> dict[str, str] | None:
@@ -1874,7 +1820,7 @@ def _tool_row(row: Any) -> dict[str, str] | None:
     return out
 
 
-def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, str]]:
+def tools_index(brief: Any) -> list[dict[str, str]]:
     """The tools an outline may name.
 
     THE BENCH PUBLISHES THIS NOW (bench 965e61c5a): `tools` on the brief is
@@ -1887,10 +1833,9 @@ def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, s
     at all (the programs stay public at GET /api/bench/plan-examples and are
     never pushed), and nothing in this loop reads them.
 
-    The last row of the bench's index is the wildcard -- composio:<service>/
-    <TOOL>, the door to ~1,500 other services -- so it is kept whatever the
-    budget does to the rows above it: an index that silently ends at the
-    budget would read as "these are all the tools there are".
+    The index goes whole (0.74.0): no budget cuts rows off it. Its last row
+    is the wildcard -- composio:<service>/<TOOL>, the door to ~1,500 other
+    services.
 
     AN EMPTY LIST IS AN ANSWER (2026-09-11). `tools: []` is the bench saying
     this want offers NO tools; only a MISSING key (or a null) means "this
@@ -1905,28 +1850,11 @@ def tools_index(brief: Any, budget: int = TOOLS_CHAR_BUDGET) -> list[dict[str, s
     """
     published = (brief or {}).get("tools") if isinstance(brief, dict) else None
     if isinstance(published, list):
-        rows = [row for row in (_tool_row(entry) for entry in published) if row]
-        if not rows:
-            return []
-        wildcard = rows[-1] if "<" in rows[-1]["tool"] else None
-        body = rows[:-1] if wildcard else rows
-        kept: list[dict[str, str]] = []
-        spent = len(json.dumps(wildcard, default=str)) if wildcard else 0
-        for row in body:
-            spent += len(json.dumps(row, default=str))
-            if spent > budget and kept:
-                break
-            kept.append(row)
-        if wildcard:
-            kept.append(wildcard)
-        return kept
+        return [row for row in (_tool_row(entry) for entry in published) if row]
     return []
 
 
-# What the person said, in the order it matters to an outline. The list is
-# also the order things come OFF when the answer runs long: the last line the
-# person wrote about this want beats a list of facts from every want they ever
-# posted.
+# What the person said, in the order it matters to an outline.
 _STRATEGY_KEYS = (
     "want_in_own_words",
     "feedback_first",
@@ -1937,17 +1865,12 @@ _STRATEGY_KEYS = (
     "public_answers",
     "person_facts",
 )
-# The outline call is the one prompt that carries free text the harness did not
-# write. A brief can hold a lot of it, and the loop's whole point is a small
-# question, so this is where it stops.
-STRATEGY_CHAR_BUDGET = 3_000
 
 
 def stable_prefix(
     brief: Any = None,
     act_kinds: Any = None,
     with_tools: bool = True,
-    tools_budget: int = TOOLS_CHAR_BUDGET,
 ) -> str:
     """THE PREFIX EVERY CALL ON A WANT OPENS WITH, byte for byte.
 
@@ -1973,7 +1896,7 @@ def stable_prefix(
         # ride the outline call once (`the_rules` in its payload).
         return SHORT_FRONT_DOOR
     parts = [FRONT_DOOR, block_grammar_summary(brief, act_kinds)]
-    tools = tools_index(brief, tools_budget)
+    tools = tools_index(brief)
     if tools:
         parts.append(
             "THE TOOLS YOU MAY NAME (`tool`, the service it runs `on`, what it "
@@ -1983,25 +1906,16 @@ def stable_prefix(
     return "\n\n".join(part for part in parts if part)
 
 
-def person_strategy(brief: Any, budget: int = STRATEGY_CHAR_BUDGET) -> Any:
+def person_strategy(brief: Any) -> Any:
     """What the person said about how they want this done, in their words.
 
     Not a summary and not this module's opinion: the fields the brief already
-    publishes for it, in priority order, up to the budget, and null where the
+    publishes for it, in priority order, whole (0.74.0), and null where the
     person said nothing.
     """
     if not isinstance(brief, dict):
         return None
-    strategy: dict[str, Any] = {}
-    for key in _STRATEGY_KEYS:
-        value = brief.get(key)
-        if not value:
-            continue
-        candidate = dict(strategy)
-        candidate[key] = value
-        if len(json.dumps(candidate, default=str)) > budget and strategy:
-            continue
-        strategy = candidate
+    strategy = {key: brief[key] for key in _STRATEGY_KEYS if brief.get(key)}
     return strategy or None
 
 
@@ -2287,8 +2201,7 @@ def example_plan(answer: Any) -> Any:
     looked up, no model call), so the harness never picks one and never
     invents one: it prints what the door's answer carries on `example` and
     nothing else. For a weak model this is the single biggest lever there is,
-    which is why, since 0.73.0, it is among the LAST things shed when a tail
-    runs long (DraftLoop.LAST_TO_SHED) -- and only the question outlasts it.
+    and it rides every ask whole (0.74.0).
     """
     if not isinstance(answer, dict):
         return None
@@ -3347,32 +3260,9 @@ class DraftLoop:
         self.last_text = ""
 
     # -- the model ---------------------------------------------------------
-    # WHAT COMES OFF WHEN A TAIL RUNS LONG, IN ORDER (0.73.0). Only a tail
-    # still over its budget AFTER the budget has grown with the model's window
-    # sheds at all. The outline lines and the forecast numbers go first; the
-    # example and the tools this want offers are the LAST things ever shed
-    # (LAST_TO_SHED), because they are what a plan is built from. Before 0.73.0
-    # the example went first. THE QUESTION NEVER GOES: a tail that dropped the
-    # form would spend a call asking nothing.
-    SHED_ORDER = ("outline_you_ran", "plan", "steps_you_bid", "forecast_context", "example")
-    # A FIX ROUND carries the door's slot tables as well; they go before the
-    # example, and this want's tools go after it, last.
-    FIX_SHED_ORDER = ("forecast_context", "what_goes_in", "example", "tools_on_this_want")
-    # What every shed order in this loop keeps until nothing else is left.
-    LAST_TO_SHED = ("example", "tools_on_this_want")
-
-    def window_tokens(self) -> int:
-        """This loop's model's context window, in tokens (0.73.0)."""
-        return window_of(self.model)
-
-    def _room(self, base: int) -> int:
-        """A character budget written for a 131,072-token window, sized to this
-        model's window: never less than `base` (0.73.0)."""
-        return room(base, self.window_tokens())
-
     def _tools(self, brief: Any) -> list[dict[str, str]]:
-        """This want's tools index, under this model's room (0.73.0)."""
-        return tools_index(brief, self._room(TOOLS_CHAR_BUDGET))
+        """This want's tools index, whole."""
+        return tools_index(brief)
 
     def _tail(
         self,
@@ -3402,61 +3292,16 @@ class DraftLoop:
         what: str = "",
         *,
         head: Sequence[tuple[str, Any]] = (),
-        budget: int = PROMPT_CHAR_BUDGET,
-        shed_order: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """One question: the stable prefix as the system, the variable tail as
         the message. Every call is measured, and what the cache did is logged
-        where the provider reports it. `shed_order` names what may come off a
-        tail that runs long, in order (SHED_ORDER when not given).
+        where the provider reports it. The tail goes whole (0.74.0).
 
         A reply the output limit cut off -- empty, or sliced part way through
         its JSON -- is asked ONCE more (0.68.0), unless the adapter already
-        asked again over it; `cut_off_retried` says so to the caller.
-
-        `budget` is the number for a 131,072-token window; the ask uses it
-        grown to this model's window (0.73.0), so a large-window model sheds
-        nothing a small one would not have to."""
-        budget = self._room(budget)
+        asked again over it; `cut_off_retried` says so to the caller."""
         head = list(head)
         tail = self._tail(instruction, payload, head)
-        if len(tail) > budget:
-            # THE QUESTION IS THE LAST THING STANDING. Shed in the published
-            # order -- the example, then the outline lines -- and say what
-            # went, rather than quietly spending a window on a prompt this
-            # loop was built to keep small.
-            payload = dict(payload)
-            for name in (self.SHED_ORDER if shed_order is None else shed_order):
-                if len(tail) <= budget:
-                    break
-                before = len(tail)
-                shed_head = [row for row in head if row[0] != name]
-                shed = len(shed_head) != len(head)
-                head = shed_head
-                if name in payload:
-                    payload.pop(name)
-                    shed = True
-                if not shed:
-                    continue
-                tail = self._tail(instruction, payload, head)
-                self.log.info(
-                    "draft loop tail was %d characters (budget %d); dropped "
-                    "`%s` and it is now %d",
-                    before,
-                    budget,
-                    name,
-                    len(tail),
-                )
-        if len(tail) > budget:
-            # A loop prompt should never come near this. Say so out loud
-            # rather than quietly spending a window on it.
-            self.log.warning(
-                "draft loop tail ran to %d characters (budget %d) with nothing "
-                "left to shed but the question; the loop's prompts are small "
-                "by design, so this is worth reading",
-                len(tail),
-                budget,
-            )
         self.cut_off_retried = False
         response, parsed = self._call(tail, what)
         if was_cut_off(response) and asked_again_over_a_cut_off(response):
@@ -3920,7 +3765,7 @@ class DraftLoop:
         self, want: Any, strategy: Any, brief: Any, seed: dict[str, Any] | None
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"want": want, "what_the_person_said": strategy}
-        materials = operator_materials(brief, budget=self._room(MATERIALS_CHAR_BUDGET))
+        materials = operator_materials(brief)
         if materials:
             payload[MATERIALS_KEY] = materials
         if seed:
@@ -3975,9 +3820,7 @@ class DraftLoop:
             payload["change_request"] = answer["change_request"]
         if isinstance(brief, dict) and brief.get("operator_dialogue"):
             payload["operator_conversation"] = brief["operator_dialogue"].get("messages") or []
-        materials = operator_materials(
-            brief, answer, budget=self._room(MATERIALS_CHAR_BUDGET)
-        )
+        materials = operator_materials(brief, answer)
         if materials:
             payload[MATERIALS_KEY] = materials
         send = answer.get("send") or ""
@@ -4028,7 +3871,6 @@ class DraftLoop:
             payload,
             "form",
             head=self._head(answer),
-            budget=FORM_CHAR_BUDGET,
         )
         form = read_form(reply)
         if not form.get("steps") and not self.cut_off_retried:
@@ -4043,7 +3885,6 @@ class DraftLoop:
                 payload,
                 "form (unreadable, again)",
                 head=self._head(answer),
-                budget=FORM_CHAR_BUDGET,
             )
             form = read_form(reply)
         if not form.get("steps"):
@@ -4105,13 +3946,11 @@ class DraftLoop:
         """
         payload: dict[str, Any] = {
             "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
-            "what_the_person_said": person_strategy(
-                brief, self._room(STRATEGY_CHAR_BUDGET)
-            ),
+            "what_the_person_said": person_strategy(brief),
             "budget_cents": budget_of(brief),
             "tools_on_this_want": self._tools(brief),
         }
-        materials = operator_materials(brief, budget=self._room(MATERIALS_CHAR_BUDGET))
+        materials = operator_materials(brief)
         if materials:
             payload[MATERIALS_KEY] = materials
         if self.standing_direction:
@@ -4565,7 +4404,7 @@ class DraftLoop:
                 "step_number": None if index is None else index + 1,
                 # ONE step. The draft has every other one and the model needs
                 # none of them to write this one's words.
-                "step": _fit(self._step_for(answer, index), self._room(STEP_CHAR_BUDGET)),
+                "step": self._step_for(answer, index),
                 "blanks": [self._blank_row(row) for row in rows],
             }
             if index is None:
@@ -4637,9 +4476,7 @@ class DraftLoop:
                 {
                     "step_number": number,
                     "action": (entry or {}).get("action") or "",
-                    "step": _fit(
-                        self._step_for(answer, number - 1), self._room(STEP_CHAR_BUDGET)
-                    ),
+                    "step": self._step_for(answer, number - 1),
                     "needs": [
                         {
                             "name": slot.get("name"),
@@ -5214,9 +5051,7 @@ class DraftLoop:
             # fix is the cost this loop exists to avoid.
             payload["plan"] = outline_summary(answer.get("draft"))
             if place or index is not None:
-                payload["step"] = _fit(
-                    self._step_for(answer, index), self._room(STEP_CHAR_BUDGET)
-                )
+                payload["step"] = self._step_for(answer, index)
             # WHAT GOES IN THIS STEP, as the door states it. A plain step has
             # no slots and says so; an email step names every argument, who
             # fills it and where its value comes from.
@@ -5757,9 +5592,7 @@ class DraftLoop:
                 len({row.get('step') for row in red}),
                 "; ".join(row["_key"] for row in red),
             )
-            shed = self.FIX_SHED_ORDER
-            reply = self._ask(instruction, payload, what, head=self._head(answer),
-                              budget=FORM_CHAR_BUDGET, shed_order=shed)
+            reply = self._ask(instruction, payload, what, head=self._head(answer))
             form, why = self._whole_form_from(reply, standing)
             if form is None and not self.cut_off_retried:
                 self.log.info(
@@ -5772,8 +5605,7 @@ class DraftLoop:
                     again = UNREADABLE_REPLY_INSTRUCTION.format(
                         why=self._what_was_wrong(reply, "form")) + again
                 reply = self._ask(again + instruction, payload,
-                                  f"{what} (again)", head=self._head(answer),
-                                  budget=FORM_CHAR_BUDGET, shed_order=shed)
+                                  f"{what} (again)", head=self._head(answer))
                 form, why = self._whole_form_from(reply, standing)
             if form is None:
                 self._failed_reply(
@@ -6025,7 +5857,7 @@ class DraftLoop:
         self.target_id = str(target_id or "")
         self.kind = str(kind or "")
         want = (brief or {}).get("want") if isinstance(brief, dict) else None
-        strategy = person_strategy(brief, self._room(STRATEGY_CHAR_BUDGET))
+        strategy = person_strategy(brief)
         # ONCE, and byte-identical from here to the end of the run: the front
         # door, the block index and the tools index. Everything after this is
         # a small tail on top of a prefix the provider has already seen.
@@ -6035,10 +5867,7 @@ class DraftLoop:
         # the same bytes on every ask of the run. They sit outside the tail
         # each ask measures, so they never make an ask shed or warn.
         self.prefix = with_operator_block(
-            stable_prefix(
-                brief, act_kinds, with_tools=caches,
-                tools_budget=self._room(TOOLS_CHAR_BUDGET),
-            ),
+            stable_prefix(brief, act_kinds, with_tools=caches),
             self.operator_instructions,
         )
         self._tools_ride_the_outline = not caches

@@ -388,20 +388,15 @@ Ordinary wording corrections retain the existing agent workflow. Failed or held
 replacement attempts are reported as such; they are not silently retried as new
 work. Older servers simply do not emit this obligation.
 
-### The room follows the model's window (0.73.0)
+### Nothing a prompt carries is shed; the run budget follows the window (0.73.0, 0.74.0)
 
-Every prompt budget the harness keeps -- the brief a tool hands back (60,000 characters), each
-draft-loop ask (8,000; the plan form and its fix rounds 16,000), the step ask (8,000), the tools
-index, what the person said, the operator's materials and one step -- was set against a
-131,072-token window. Each now grows with the model's own window and never shrinks below that
-number: a 200,000-token model gets 1.5 times the room, a 1,000,000-token one 7.6 times, and a
-model at or under 131,072 (or one the harness cannot name) keeps exactly what it had. Set the
-window with `model.context_window_tokens`. Unset, a plain Claude id is taken as 200,000 tokens and
-only an id carrying `[1m]` as 1,000,000, whatever the model can do; Gemini 2/3 is 1,048,576. When something
-still has to come off, the block menu, the tools on this want, the bid template and the example
-are the LAST things shed, never the first, and the block menu is the very last; a shed menu is
-still every kind and its step count, and shed tools are still every tool by name. The draft loop
-reads the brief whole, since it never sends the brief in one piece. WHAT FORCED IT: lab agent Nia
-(claude-opus-5-5) bid and planned a song workflow on 2026-10-26 without the block menu, the bid
-template, the example, her tools and the forecast context, all shed to fit budgets set for a
-131,072-token window.
+The brief, the example, the tools on this want, the block menu, what the person said, the
+operator's materials and every step ride whole: the per-prompt character budgets of 0.34.0-0.73.0
+and their shed orders are gone (0.74.0). The one budget left is the run's
+(`runtime.context_budget_tokens`, a raw adapter's guard against the provider's window), and its
+default follows the model's window: 90,000 on 131,072 tokens and in the same proportion above it.
+Set the window with `model.context_window_tokens`. Unset, a plain Claude id is taken as 200,000
+tokens and only an id carrying `[1m]` as 1,000,000, whatever the model can do; Gemini 2/3 is
+1,048,576. WHAT FORCED IT: lab agent Nia (claude-opus-5-5) bid and planned a song workflow on
+2026-10-26 without the block menu, the bid template, the example, her tools and the forecast
+context, all shed to fit budgets set for a 131,072-token window.

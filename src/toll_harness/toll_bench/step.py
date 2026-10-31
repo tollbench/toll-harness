@@ -54,18 +54,35 @@ from toll_harness.core.budget import ContextBudget
 from toll_harness.core.operator_block import with_operator_block
 from toll_harness.core.own_means import OwnMeans, with_own_means
 from toll_harness.core.types import ModelMessage, ToolDefinition
-from toll_harness.core.window import room, window_of
 from toll_harness.models.base import what_came_back
 from toll_harness.toll_bench.draft import (
     PERSON_SAID_INSTRUCTION,
     PERSON_SAID_KEY,
-    PROMPT_CHAR_BUDGET,
-    _fit,
     cached_input_tokens,
     stable_prefix,
 )
 
 _LOGGER = logging.getLogger("toll_harness.step")
+
+# The keys of a step row that are the platform's own machinery: the first to
+# come off a row this module clips. The agent's words never do.
+_HEAVY_STEP_KEYS = ("service_setup", "statement", "har_blocks", "examples")
+
+
+def _fit(value: Any, budget: int) -> Any:
+    """A row small enough to hand over: the machinery keys come off first."""
+    if value is None:
+        return None
+    text = json.dumps(value, separators=(",", ":"), default=str)
+    if len(text) <= budget or not isinstance(value, dict):
+        return value
+    trimmed = dict(value)
+    for key in _HEAVY_STEP_KEYS:
+        if key in trimmed:
+            trimmed.pop(key)
+            if len(json.dumps(trimmed, separators=(",", ":"), default=str)) <= budget:
+                break
+    return trimmed
 
 # The one-ball state that means the agent holds the step.
 AGENT_STEP_STATE = "agent_working"
@@ -1083,29 +1100,6 @@ def submission_for_tail(submission: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _shed(tail: dict[str, Any]) -> bool:
-    """One step of trimming, for a tail that runs long. True when it did something.
-
-    0.59.0: THE PERSON'S OWN MATERIAL IS NEVER SHED. Their messages on the
-    thread (`from_the_person`), the reasons they sent a draft back
-    (`drafts_sent_back`) and the materials they handed over
-    (`released_materials`) ride whole, beside what they said and the earlier
-    steps' words, which were never on this list. Only the machinery sheds.
-    Steven, 2026-10-06: "I dont want the harness to hobble, we want to make
-    sure the agents have full capabilites." A tail still long after this is
-    logged, never cut further.
-    """
-    for key, floor in (("acts", 1), ("declared_acts", 1)):
-        rows = tail.get(key)
-        if isinstance(rows, list) and len(rows) > floor:
-            tail[key] = rows[-floor:]
-            return True
-    if tail.get("inbound_replies"):
-        tail["inbound_replies"] = []
-        return True
-    return False
-
-
 # ---------------------------------------------------------------------------
 # 3b. WHAT A REPLY ANSWERS (0.56.1)
 # ---------------------------------------------------------------------------
@@ -1245,22 +1239,10 @@ class StepAsk:
     def _ask(
         self, instruction: str, tail: dict[str, Any], what: str, tools: list[ToolDefinition]
     ) -> Any:
-        # 0.73.0: the 8,000 is the number for a 131,072-token window and grows
-        # with this model's own (core/window.py): 12,207 on a 200,000-token
-        # window, 61,035 on 1,000,000.
-        budget = room(PROMPT_CHAR_BUDGET, window_of(self.model))
+        # 0.74.0: the tail goes whole. Nothing is shed to fit a per-ask
+        # budget; the run-level budget (core/budget.py) guards a raw adapter.
         body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
         text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
-        while len(text) > budget and _shed(tail):
-            body = json.dumps(tail, separators=(",", ":"), sort_keys=True, default=str)
-            text = STEP_DOOR + "\n\n" + instruction + "\n\n" + body
-        if len(text) > budget:
-            self.log.warning(
-                "step ask tail ran to %d characters (budget %d) after shedding; "
-                "the step ask is small by design, so this is worth reading",
-                len(text),
-                budget,
-            )
         self.calls += 1
         self.prompt_chars += len(text)
         deal = str(self.ids.get("deal_id") or "?")

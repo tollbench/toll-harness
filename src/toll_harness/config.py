@@ -9,6 +9,7 @@ from uuid import UUID
 import yaml
 
 from toll_harness.browser.playwright import PlaywrightBrowserProvider
+from toll_harness.core.budget import resolve_context_window
 from toll_harness.core.cost_ledger import CostLedger
 from toll_harness.core.own_means import own_means_from_config
 from toll_harness.core.runtime import (
@@ -21,7 +22,6 @@ from toll_harness.core.types import (
     AutonomyMode,
     EmailProvisioningStatus,
 )
-from toll_harness.core.window import resolve_context_window
 from toll_harness.email.book_of_houses import (
     BookOfHousesApiClient,
     BookOfHousesEmailProvider,
@@ -237,8 +237,8 @@ def _build_model(config: dict, *, root: Path, data_dir: Path) -> ModelAdapter:
     """The adapter, carrying the model's context window (0.73.0).
 
     `model.context_window_tokens` wins, then TOLL_HARNESS_CONTEXT_WINDOW_TOKENS,
-    then the window core/window.py can source for the model id, then 131,072.
-    Every prompt budget the harness keeps is sized from it.
+    then the window core/budget.py can source for the model id, then 131,072.
+    The run-level budget's default follows it (0.74.0).
     """
     model_config = config.get("model", {}) or {}
     configured = model_config.get("context_window_tokens")
@@ -499,8 +499,6 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     model.cost_ledger = cost_ledger
     if toll_bench_provider is not None:
         toll_bench_provider.cost_ledger = cost_ledger
-        # 0.73.0: the brief a tool hands back is sized from the same window.
-        toll_bench_provider.context_window_tokens = getattr(model, "context_window_tokens", None)
     approach_default = approach_from_config(config)
     return RuntimeResources(
         runtime=runtime,
@@ -522,8 +520,8 @@ model:
   profile: null
   model_id: null  # Set from `toll-harness bedrock probe` output.
   max_tokens: 2048
-  # The model's context window in tokens; every prompt the harness builds is
-  # sized from it. Unset: the window known for model_id, else 131072.
+  # The model's context window in tokens; the run budget's default follows
+  # it. Unset: the window known for model_id, else 131072.
   # context_window_tokens: 1000000
   temperature: 0
 runtime:

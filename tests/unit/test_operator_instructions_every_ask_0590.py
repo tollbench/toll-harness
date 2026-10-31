@@ -38,7 +38,7 @@ from toll_harness.core.operator_block import (
     with_operator_block,
 )
 from toll_harness.toll_bench import draft
-from toll_harness.toll_bench.step import PROMPT_CHAR_BUDGET, StepAsk
+from toll_harness.toll_bench.step import StepAsk
 
 # Longer than any cap the old profile line or a prompt budget ever had, on
 # purpose: the whole of it must ride.
@@ -168,13 +168,6 @@ def test_a_step_ask_is_byte_for_byte_unchanged_without_instructions():
         assert _step(payload).invocations == _step(payload, "").invocations
 
 
-def test_a_long_block_never_makes_the_step_ask_shed_or_warn(caplog):
-    with caplog.at_level(logging.WARNING, logger="toll_harness.step"):
-        model = _step(_payload(), SKILL)
-    assert len(_message(model)) <= PROMPT_CHAR_BUDGET
-    assert not [r for r in caplog.records if "tail ran to" in r.getMessage()]
-
-
 # ---------------------------------------------------------------------------
 # 4. The step ask sheds machinery, never the person's own material
 # ---------------------------------------------------------------------------
@@ -190,8 +183,6 @@ def test_the_persons_messages_reasons_and_materials_are_never_shed(caplog):
         drafts_sent_back=[{"approval_id": "ap-1",
                            "sent_back_reason": "Warmer, and say her name in the chorus."}],
         released_materials=[{"name": "photo-of-us.jpg", "url": "https://example.org/p.jpg"}],
-        # 0.63.1 took the forms out of the tail, so the machinery here is
-        # larger to keep the tail over the budget and the shed in play.
         acts=[{"act_id": f"a{i}", "kind": "email", "state": "sent", "subject": f"S{i}",
                "words": "machine words " * 57} for i in range(4)],
         inbound_replies=[{"id": f"r{i}", "body": "out of office " * 57} for i in range(2)],
@@ -204,8 +195,8 @@ def test_the_persons_messages_reasons_and_materials_are_never_shed(caplog):
         assert message[:40] in text
     assert "Warmer, and say her name in the chorus." in text
     assert "photo-of-us.jpg" in text
-    # The machinery went first: one act left, no inbound replies.
-    assert text.count('"act_id":"a') == 1 and '"inbound_replies":[]' in text
+    # 0.74.0: nothing is shed at all; the machinery rides too.
+    assert text.count('"act_id":"a') == 4
 
 
 # ---------------------------------------------------------------------------

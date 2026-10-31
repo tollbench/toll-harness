@@ -799,9 +799,9 @@ def test_the_tools_index_is_the_one_the_bench_publishes():
     ]
 
 
-def test_the_wildcard_row_survives_the_budget():
-    # The last row is the door to every other service. An index that silently
-    # ended at the budget would read as "these are all the tools there are".
+def test_the_whole_index_goes_with_the_wildcard_last():
+    # The last row is the door to every other service. Since 0.74.0 no budget
+    # cuts rows off the index: every row goes, the wildcard last.
     published = [
         {"provider": f"svc-{n}", "tool": f"svc.tool.{n}",
          "one_line": "x" * 120}
@@ -812,9 +812,9 @@ def test_the_wildcard_row_survives_the_budget():
          "one_line": "Any of ~1,500 other services."}
     )
 
-    index = tools_index({"tools": published}, budget=1_000)
+    index = tools_index({"tools": published})
 
-    assert len(index) < len(published)
+    assert len(index) == len(published)
     assert index[-1]["tool"] == "composio:<service>/<TOOL>"
 
 

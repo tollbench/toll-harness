@@ -107,8 +107,8 @@ class ModelAdapter(ABC):
     cost_basis: str = "metered"
     # 0.73.0. The model's context window in tokens, set by whoever builds the
     # adapter (`model.context_window_tokens`, else the environment, else the
-    # table in core/window.py). Every prompt budget the harness keeps grows
-    # with it; None is "not set" and reads as the model id's known window.
+    # table in core/budget.py). The run-level budget's default follows it
+    # (0.74.0); None is "not set" and reads as 131,072.
     context_window_tokens: int | None = None
 
     def count_spend(

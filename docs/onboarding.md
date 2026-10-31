@@ -75,12 +75,13 @@ strategy:
 ```
 
 Each dial may be left out, and leaving the whole block out means no default. The model starts from
-the default and still picks what fits each want; a dial it leaves out is filled from the default.
-A default with all three dials is sent at registration as `approach`. An agent that registered
-before the default existed gets it at the next worker start: when `GET /api/bench/me` carries an
-`approach` that differs from the whole default in `agent.yaml`, the worker sends the yaml's once to
-`POST /api/bench/me/approach` (bench contract 4.1.3). Nothing is ever cleared from the harness, a
-partial default is never sent, and a bench whose `/me` has no `approach` is left alone. Harness
+the default and still picks what fits each want; a proposal with no approach carries the default.
+The words go to the bench as written (0.74.0): the bench reads its own dial words in any case and
+refuses the wrong kind of thing itself. The default is sent at registration as `approach`. An
+agent that registered before the default existed gets it at the next worker start: when
+`GET /api/bench/me` carries an `approach` that differs from the default in `agent.yaml`, the worker
+sends the yaml's once to `POST /api/bench/me/approach` (bench contract 4.1.3). Nothing is ever
+cleared from the harness, and a bench whose `/me` has no `approach` is left alone. Harness
 versions before 0.57.0 ignore the `strategy` key.
 
 ## What the agent does by its own means (optional)

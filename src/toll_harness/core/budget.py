@@ -26,18 +26,26 @@ since. When the next call would cross the line the run ends with
 called. A run that stops itself leaves a record; a run the provider stops
 leaves a stack trace.
 
-The default is 90,000: comfortably under the 131,072 the fleet runs on, with
+The default is 90,000 on a 131,072-token window: comfortably under it, with
 room for one more large tool result and the 2,048 output tokens the adapters
-reserve. Configure it per agent with ``runtime.context_budget_tokens`` or
-across a fleet with ``TOLL_HARNESS_CONTEXT_BUDGET_TOKENS``; 0 turns the guard
-off, which is a thing to do on a model with a million-token window, not a
-thing to do to make a failing run pass.
+reserve. Since 0.74.0 THE DEFAULT FOLLOWS THE MODEL'S WINDOW in the same
+proportion (137,329 on 200,000; 686,645 on 1,000,000): this is the ONE budget
+the harness keeps, and it is a run's, never a prompt's. Configure it per agent
+with ``runtime.context_budget_tokens`` or across a fleet with
+``TOLL_HARNESS_CONTEXT_BUDGET_TOKENS``; 0 turns the guard off.
+
+THE WINDOW IS A SETTING (0.73.0). ``model.context_window_tokens`` in
+agent.yaml wins, then ``TOLL_HARNESS_CONTEXT_WINDOW_TOKENS``, then a small
+conservative table (a plain Claude id is 200,000, an id carrying ``[1m]`` is
+1,000,000, Gemini 2/3 is 1,048,576), then 131,072. A model the table does not
+list is never guessed at.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,9 +64,64 @@ CHARS_PER_TOKEN = 4
 
 TERMINAL_REASON = "context_budget_exceeded"
 
+# The window the 90,000 default was set against (the fleet's model, 2026-09-09),
+# and the window assumed for a model this package cannot name.
+REFERENCE_WINDOW_TOKENS = 131_072
+DEFAULT_CONTEXT_WINDOW_TOKENS = REFERENCE_WINDOW_TOKENS
+# Fleet-wide lever. A per-agent `model.context_window_tokens` wins over it.
+CONTEXT_WINDOW_ENV = "TOLL_HARNESS_CONTEXT_WINDOW_TOKENS"
+ONE_MILLION = 1_000_000
+# First match wins, on the lower-cased id with any provider prefix taken off.
+KNOWN_WINDOWS: tuple[tuple[str, int], ...] = (
+    ("claude-", 200_000),
+    ("gemini-2", 1_048_576),
+    ("gemini-3", 1_048_576),
+)
+_PREFIX = re.compile(r"^(?:(?:us|eu|apac|global)\.)?(?:anthropic|google|openai)[./]")
 
-def resolve_context_budget(configured: Any = None) -> int:
-    """The budget for this run: the config, else the environment, else 90,000.
+
+def _positive_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(str(value).strip().replace("_", ""))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def known_window(model_id: Any) -> int | None:
+    """The window this package can source for a model id, or None."""
+    text = str(model_id or "").strip().lower()
+    if not text:
+        return None
+    if "[1m]" in text:
+        return ONE_MILLION
+    text = _PREFIX.sub("", text.split("@", 1)[0]).replace(".", "-")
+    for prefix, tokens in KNOWN_WINDOWS:
+        if text.startswith(prefix):
+            return tokens
+    return None
+
+
+def resolve_context_window(configured: Any = None, model_id: Any = None) -> int:
+    """The window for this agent: the config, the environment, the table, 131,072.
+
+    An unreadable or non-positive setting falls through to the next source
+    rather than raising: a window that cannot be read is never a reason a
+    model call does not happen.
+    """
+    for value in (configured, os.environ.get(CONTEXT_WINDOW_ENV)):
+        tokens = _positive_int(value)
+        if tokens is not None:
+            return tokens
+    return known_window(model_id) or DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def resolve_context_budget(configured: Any = None, window_tokens: Any = None) -> int:
+    """The budget for this run: the config, else the environment, else the
+    default for this model's window (90,000 on 131,072, in proportion above
+    it, never below 90,000).
 
     Anything unreadable falls back to the default rather than raising -- a
     typo in a fleet-wide environment variable must not stop seven agents.
@@ -71,7 +134,10 @@ def resolve_context_budget(configured: Any = None) -> int:
         except (TypeError, ValueError):
             continue
         return max(0, budget)
-    return DEFAULT_CONTEXT_BUDGET_TOKENS
+    window = _positive_int(window_tokens) or REFERENCE_WINDOW_TOKENS
+    if window <= REFERENCE_WINDOW_TOKENS:
+        return DEFAULT_CONTEXT_BUDGET_TOKENS
+    return DEFAULT_CONTEXT_BUDGET_TOKENS * window // REFERENCE_WINDOW_TOKENS
 
 
 def measure(value: Any) -> int:

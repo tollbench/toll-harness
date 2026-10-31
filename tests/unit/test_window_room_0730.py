@@ -1,32 +1,21 @@
-"""THE ROOM FOLLOWS THE MODEL'S WINDOW, AND THE MENU IS SHED LAST (0.73.0).
+"""THE WINDOW IS A SETTING; NOTHING A PROMPT CARRIES IS SHED (0.73.0, 0.74.0).
 
 WHAT FORCED IT: lab agent Nia (DJ 4-Fun, claude-opus-5-5 on the claude_code
-rail), 2026-10-26. Steven asked her to revise a song
-workflow and her log read:
-
-    Brief for target 8d06fe06 ran to 41352 characters; shed bid_template,
-    block_templates to fit the window (budget 60000)
-    draft loop tail ran to 14000 characters (budget 8000) with nothing left
-    to shed but the question
-    draft loop tail was 21379 characters (budget 16000); dropped `example`
-    ... dropped `tools_on_this_want` ... dropped `forecast_context`
-
-So she bid and planned without the block menu, the bid template, the example,
-her tools on this want and the forecast context. Every budget was a number set
-against a 131,072-token window, and the block menu was the second thing shed.
+rail), 2026-10-26. Her log read "Brief for target 8d06fe06 ran to 41352
+characters; shed bid_template, block_templates to fit the window (budget
+60000)" and "draft loop tail was 21379 characters (budget 16000); dropped
+`example` ... dropped `tools_on_this_want` ... dropped `forecast_context`".
+0.73.0 grew every budget with the window; 0.74.0 (the harness thinness audit,
+item 6) deleted the per-prompt budgets and their shed orders outright.
 
 Tested here:
   1. the window is a setting: agent.yaml, then the environment, then the
      models this package can name, then 131,072 -- and a plain Claude id is
      200,000, only a `[1m]` id 1,000,000;
-  2. every budget grows with the window and never shrinks below today's;
-  3. a large-window model gets the whole 64k brief with nothing shed;
-  4. a small-window model still sheds, in the new order: copies first, then
-     the example, the bid template, the tools, and the block menu LAST;
-  5. the draft loop's asks: Nia's fix round and proposal ask pass whole at
-     200,000, and on a small window the example and the tools go last;
-  6. the 0.70.0 board preflight confirms the brief WHOLE, since that is the
-     brief the draft loop then works from, and the step ask grows too.
+  2. the ONE budget left, the run's, follows the window (90,000 on 131,072);
+  3. the brief is handed back whole on any window, and the loop and the
+     board preflight read the same brief;
+  4. the draft loop's asks and the step ask go whole on a small window.
 """
 
 from __future__ import annotations
@@ -43,29 +32,20 @@ import pytest
 from tests.unit.test_draft_loop_r241 import _says
 from toll_harness import cli
 from toll_harness.config import build_model_adapter
-from toll_harness.core import window
-from toll_harness.core.budget import measure
-from toll_harness.core.window import (
+from toll_harness.core.budget import (
+    CONTEXT_BUDGET_ENV,
     CONTEXT_WINDOW_ENV,
     DEFAULT_CONTEXT_WINDOW_TOKENS,
     REFERENCE_WINDOW_TOKENS,
     known_window,
+    measure,
+    resolve_context_budget,
     resolve_context_window,
-    room,
-    window_of,
 )
 from toll_harness.email.book_of_houses import BookOfHousesApiError
 from toll_harness.models.scripted import ScriptedModelAdapter
-from toll_harness.toll_bench.book_of_houses import (
-    BRIEF_CHAR_BUDGET,
-    BRIEF_SHED_ORDER,
-    BookOfHousesTollBenchProvider,
-)
-from toll_harness.toll_bench.draft import (
-    FORM_CHAR_BUDGET,
-    PROMPT_CHAR_BUDGET,
-    DraftLoop,
-)
+from toll_harness.toll_bench.book_of_houses import BookOfHousesTollBenchProvider
+from toll_harness.toll_bench.draft import DraftLoop
 from toll_harness.toll_bench.step import StepAsk
 
 NIA_MODEL = "claude-opus-5-5"  # her agent.yaml model_id: a plain id, 200,000
@@ -124,7 +104,6 @@ def test_a_built_adapter_carries_its_window(tmp_path):
                         "binary": sys.executable}}
     adapter = build_model_adapter(config, root=tmp_path, data_dir=tmp_path)
     assert adapter.context_window_tokens == 200_000
-    assert window_of(adapter) == 200_000
 
     config["model"]["model_id"] = NIA_1M
     adapter = build_model_adapter(config, root=tmp_path, data_dir=tmp_path)
@@ -145,28 +124,22 @@ def test_a_built_adapter_carries_its_window(tmp_path):
             build_model_adapter(config, root=tmp_path, data_dir=tmp_path)
 
 
-def test_an_adapter_nobody_set_a_window_on_reads_its_model_id():
-    assert window_of(ScriptedModelAdapter([], model_id=NIA_MODEL)) == 200_000
-    assert window_of(ScriptedModelAdapter([], model_id=NIA_1M)) == 1_000_000
-    assert window_of(ScriptedModelAdapter([])) == 131_072
-    assert window_of(SimpleNamespace()) == 131_072
-
-
 # ---------------------------------------------------------------------------
-# 2. THE ROOM GROWS WITH THE WINDOW AND NEVER SHRINKS
+# 2. THE ONE BUDGET LEFT IS THE RUN'S, AND IT FOLLOWS THE WINDOW
 # ---------------------------------------------------------------------------
-def test_every_budget_grows_with_the_window_and_never_below_todays():
-    for base in (PROMPT_CHAR_BUDGET, FORM_CHAR_BUDGET, BRIEF_CHAR_BUDGET):
-        assert room(base, None) == base
-        assert room(base, SMALL_WINDOW) == base
-        assert room(base, 131_072) == base
-        assert room(base, 200_000) > base
-    assert room(BRIEF_CHAR_BUDGET, 200_000) == 91_552
-    assert room(FORM_CHAR_BUDGET, 200_000) == 24_414
-    assert room(PROMPT_CHAR_BUDGET, 200_000) == 12_207
-    assert room(BRIEF_CHAR_BUDGET, 1_000_000) == 457_763
-    assert room(FORM_CHAR_BUDGET, 1_000_000) == 122_070
-    assert room(PROMPT_CHAR_BUDGET, 1_000_000) == 61_035
+def test_the_run_budget_follows_the_window(monkeypatch):
+    monkeypatch.delenv(CONTEXT_BUDGET_ENV, raising=False)
+    assert resolve_context_budget() == 90_000
+    assert resolve_context_budget(None, None) == 90_000
+    assert resolve_context_budget(None, SMALL_WINDOW) == 90_000
+    assert resolve_context_budget(None, 131_072) == 90_000
+    assert resolve_context_budget(None, 200_000) == 137_329
+    assert resolve_context_budget(None, 1_000_000) == 686_645
+    # The config and the environment still win, and 0 still turns it off.
+    assert resolve_context_budget(50_000, 1_000_000) == 50_000
+    assert resolve_context_budget(0, 1_000_000) == 0
+    monkeypatch.setenv(CONTEXT_BUDGET_ENV, "70000")
+    assert resolve_context_budget(None, 1_000_000) == 70_000
 
 
 # ---------------------------------------------------------------------------
@@ -235,54 +208,24 @@ class _BriefApi:
         return {"ok": True, "brief": copy.deepcopy(self._brief)}
 
 
-def _provider(brief: dict, window_tokens: int | None) -> BookOfHousesTollBenchProvider:
-    provider = BookOfHousesTollBenchProvider(_BriefApi(brief))
-    provider.context_window_tokens = window_tokens
-    return provider
+def _provider(brief: dict) -> BookOfHousesTollBenchProvider:
+    return BookOfHousesTollBenchProvider(_BriefApi(brief))
 
 
-def _shed_named(caplog) -> list[str]:
-    for record in caplog.records:
-        found = re.search(r"; shed (.+) to fit the window", record.getMessage())
-        if found:
-            return found.group(1).split(", ")
-    return []
-
-
-@pytest.mark.parametrize("window_tokens", [200_000, 1_000_000])
-def test_a_large_window_gets_the_whole_64k_brief_with_nothing_shed(caplog, window_tokens):
+def test_the_brief_is_handed_back_whole(caplog):
     caplog.set_level(logging.WARNING, logger="toll_harness.toll_bench")
-    whole = _provider(_brief(), None).read_whole_brief("8d06fe06")["brief"]
+    read = _provider(_brief()).read_brief("8d06fe06")["brief"]
 
-    read = _provider(_brief(), window_tokens).read_brief("8d06fe06")["brief"]
-
-    assert read == whole
+    assert read == _provider(_brief()).read_whole_brief("8d06fe06")["brief"]
     assert measure(read) > 62_000
-    assert read["block_templates"] == _brief()["block_templates"]
-    assert read["bid_template"] == _brief()["bid_template"]
-    assert read["tools"] == _brief()["tools"]
-    assert read["nearest_program"]["proposal"] == _brief()["nearest_program"]["proposal"]
-    assert not set(read) & {f"{name}_note" for name in BRIEF_SHED_ORDER}
-    assert _shed_named(caplog) == []
-
-
-@pytest.mark.parametrize(("model_id", "budget"), [(NIA_MODEL, 91_552), (NIA_1M, 457_763)])
-def test_nias_own_adapter_sizes_the_brief(tmp_path, caplog, model_id, budget):
-    """Her plain id is 200,000 tokens, and her ~64k brief still passes whole."""
-    caplog.set_level(logging.WARNING, logger="toll_harness.toll_bench")
-    adapter = build_model_adapter(
-        {"model": {"adapter": "claude_code", "model_id": model_id, "binary": sys.executable}},
-        root=tmp_path, data_dir=tmp_path,
-    )
-    provider = _provider(_brief(), adapter.context_window_tokens)
-    assert provider.brief_char_budget() == budget
-    read = provider.read_brief("8d06fe06")["brief"]
-    assert read == provider.read_whole_brief("8d06fe06")["brief"]
-    assert _shed_named(caplog) == []
+    for key in ("block_templates", "bid_template", "tools", "past_attempts"):
+        assert read[key] == _brief()[key]
+    assert not [key for key in read if key.endswith("_note")]
+    assert "to fit the window" not in caplog.text
 
 
 def test_the_loop_reads_the_brief_whole_whatever_the_window():
-    provider = _provider(_brief(catalog_steps=14), SMALL_WINDOW)
+    provider = _provider(_brief(catalog_steps=14))
     resources = SimpleNamespace(toll_bench=provider)
 
     brief = cli._brief_for_the_loop(resources, "8d06fe06")
@@ -313,7 +256,6 @@ def test_the_board_preflight_confirms_the_brief_whole_for_the_loop():
     it reads it whole: on a small window the loop still gets the block menu and
     the bid template, and a closed card is still skipped on its 404."""
     provider = BookOfHousesTollBenchProvider(_BoardApi(_brief(catalog_steps=14)))
-    provider.context_window_tokens = SMALL_WINDOW
     resources = SimpleNamespace(toll_bench=provider, agent_identity=None)
     try:
         count, summaries, _keys = cli._market_scan_candidates(resources)
@@ -326,8 +268,8 @@ def test_the_board_preflight_confirms_the_brief_whole_for_the_loop():
     assert verified == provider.read_whole_brief("older-open")["brief"]
     assert verified["block_templates"] == _brief(catalog_steps=14)["block_templates"]
     assert verified["bid_template"] == _brief()["bid_template"]
-    # The tool read of the same brief is still the fitted one.
-    assert provider.read_brief("older-open")["brief"] != verified
+    # The tool read of the same brief is the same brief (0.74.0).
+    assert provider.read_brief("older-open")["brief"] == verified
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +287,7 @@ def _fix_round(loop: DraftLoop, caplog) -> tuple[str, list[str]]:
         "tools_on_this_want": [{"tool": "T" * 4_000}],
     }
     caplog.clear()
-    loop._ask("Fix the red rows.", payload, "fix", head=head,
-              budget=FORM_CHAR_BUDGET, shed_order=loop.FIX_SHED_ORDER)
+    loop._ask("Fix the red rows.", payload, "fix", head=head)
     tail = loop.model.invocations[-1]["messages"][0].content[0]["text"]
     dropped = re.findall(r"dropped `([a-z_]+)`", caplog.text)
     return tail, dropped
@@ -365,7 +306,7 @@ def test_nias_fix_round_goes_whole_at_200k(caplog):
     assert "tail ran to" not in caplog.text
 
 
-def test_a_small_window_fix_round_keeps_the_example_and_the_tools_last(caplog):
+def test_a_small_window_fix_round_goes_whole_too(caplog):
     caplog.set_level(logging.INFO, logger="toll_harness.draft")
     model = ScriptedModelAdapter([_says("{}")])
     model.context_window_tokens = SMALL_WINDOW
@@ -373,10 +314,9 @@ def test_a_small_window_fix_round_keeps_the_example_and_the_tools_last(caplog):
 
     tail, dropped = _fix_round(loop, caplog)
 
-    assert len(tail) <= FORM_CHAR_BUDGET
-    # Before 0.73.0 this round dropped the example, then the tools.
-    assert dropped == ["forecast_context", "what_goes_in", "example"]
-    assert "TTTT" in tail
+    assert dropped == []
+    for marker in ("EEEE", "TTTT", "FFFF", "GGGG"):
+        assert marker in tail
 
 
 def _proposal_ask(model_id: str, caplog) -> str:
@@ -389,32 +329,15 @@ def _proposal_ask(model_id: str, caplog) -> str:
     return caplog.text
 
 
-def test_nias_proposal_ask_goes_whole_at_200k_and_says_it_ran_long(caplog):
-    """At 200,000 the proposal ask's budget is 12,207: her 14k tail goes whole
-    -- nothing in a proposal ask is on a shed list -- and the long-tail line is
-    still written, as it was before."""
-    said = _proposal_ask(NIA_MODEL, caplog)
-    assert "dropped `" not in said
-    assert "tail ran to" in said and "budget 12207" in said
-
-
-def test_a_1m_id_proposal_ask_goes_whole_with_no_warning(caplog):
-    said = _proposal_ask(NIA_1M, caplog)
+@pytest.mark.parametrize("model_id", [None, NIA_MODEL, NIA_1M])
+def test_a_proposal_ask_goes_whole_with_no_warning(caplog, model_id):
+    said = _proposal_ask(model_id, caplog)
     assert "tail ran to" not in said and "dropped `" not in said
 
 
-def test_every_shed_order_keeps_the_example_and_the_tools_for_last():
-    for order in (DraftLoop.SHED_ORDER, DraftLoop.FIX_SHED_ORDER):
-        protected = [index for index, name in enumerate(order) if name in DraftLoop.LAST_TO_SHED]
-        others = [index for index, name in enumerate(order) if name not in DraftLoop.LAST_TO_SHED]
-        assert protected and max(others) < min(protected)
-    assert DraftLoop.FIX_SHED_ORDER[-1] == "tools_on_this_want"
-    assert "tools_on_this_want" not in DraftLoop.SHED_ORDER
-
-
 def test_the_prefix_stays_byte_identical_across_asks_on_a_large_window():
-    """The cacheable prefix is built once per run from the window; growing the
-    budgets must not make it vary between asks."""
+    """The cacheable prefix is built once per run and never varies between
+    asks; the whole tool index rides it."""
     brief = {"want": "w", "tools": _tools(200), "block_templates": {"song": []}}
     model = ScriptedModelAdapter([_says("{}")] * 3, model_id=NIA_1M)
     model.caches_a_stable_prefix = lambda: True
@@ -422,9 +345,7 @@ def test_the_prefix_stays_byte_identical_across_asks_on_a_large_window():
     loop.run("t", kind="bid", brief=brief, file=False)
     systems = {json.dumps(call["system"], default=str) for call in model.invocations}
     assert len(systems) == 1
-    # And on a 1M window the whole 200-tool index rides it, not the first 4KB.
     assert "service199.song.make" in loop.prefix
-    assert window.room(4_000, 131_072) == 4_000
 
 
 def _step_ask(model_id: str | None, window_tokens: int | None, caplog) -> dict:
@@ -442,11 +363,9 @@ def _step_ask(model_id: str | None, window_tokens: int | None, caplog) -> dict:
     return json.loads(model.invocations[-1]["messages"][0].content[0]["text"].rsplit("\n\n", 1)[1])
 
 
-def test_a_step_ask_of_ten_thousand_goes_whole_at_200k_and_sheds_on_a_small_window(caplog):
-    whole = _step_ask(NIA_MODEL, None, caplog)
-    assert len(whole["acts"]) == 5 and whole["inbound_replies"]
-    assert "step ask tail ran to" not in caplog.text
-
-    caplog.clear()
-    small = _step_ask(None, SMALL_WINDOW, caplog)
-    assert len(small["acts"]) == 1
+def test_a_step_ask_of_ten_thousand_goes_whole_on_any_window(caplog):
+    for model_id, window_tokens in ((NIA_MODEL, None), (None, SMALL_WINDOW)):
+        caplog.clear()
+        whole = _step_ask(model_id, window_tokens, caplog)
+        assert len(whole["acts"]) == 5 and whole["inbound_replies"]
+        assert "step ask tail ran to" not in caplog.text
