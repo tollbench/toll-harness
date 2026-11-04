@@ -30,8 +30,9 @@ TOOL_WORD = re.compile(
     r"(?<![\w./])((?:toll_bench|email|files|web|browser|http|state|result|human|wake|"
     r"agent_secret)\.[a-z_]+)"
 )
-# Event names and a file name that share a tool family's prefix.
-NOT_TOOLS = {"human.message", "human.requested", "result.bin"}
+# Event names, a file name and an agent.yaml key (0.75.0: the thinking
+# stream's switch) that share a tool family's prefix.
+NOT_TOOLS = {"human.message", "human.requested", "result.bin", "toll_bench.thinking"}
 
 SPEC = {
     "paths": {

@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from toll_harness.core import thinking
 from toll_harness.core.types import (
     JsonObject,
     ModelMessage,
@@ -346,6 +347,10 @@ class _CliRailAdapter(ModelAdapter):
         tools: Sequence[ToolDefinition],
     ) -> ModelResponse:
         prompt = _render_prompt(system, messages, tools)
+        # 0.75.0: what the CLI did inside this call (its reasoning, its words
+        # between tools, each native tool and what came back), collected only
+        # while the thinking stream is on, for the want's log.
+        self._trail: list[JsonObject] = []
         raw, usage = self._invoke_cli(prompt)
         try:
             commentary, calls, normalized = _parse_envelope(raw, tools_offered=bool(tools))
@@ -368,7 +373,7 @@ class _CliRailAdapter(ModelAdapter):
                     tool_calls=[],
                     usage=usage,
                     stop_reason="envelope_unparsed",
-                    raw_metadata={"model": self.model_id},
+                    raw_metadata=self._metadata(),
                 )
         if not normalized:
             normalized = [{"type": "text", "text": ""}]
@@ -378,8 +383,23 @@ class _CliRailAdapter(ModelAdapter):
             tool_calls=calls,
             usage=usage,
             stop_reason="tool_use" if calls else "end_turn",
-            raw_metadata={"model": self.model_id},
+            raw_metadata=self._metadata(),
         )
+
+    def _metadata(self) -> JsonObject:
+        metadata: JsonObject = {"model": self.model_id}
+        trail = getattr(self, "_trail", None)
+        if trail:
+            metadata["trail"] = list(trail)
+        return metadata
+
+    def _streaming(self) -> bool:
+        return thinking.stream_of(self) is not None
+
+    def _keep_trail(self, items: list[JsonObject]) -> None:
+        if not hasattr(self, "_trail"):
+            self._trail = []
+        self._trail.extend(items)
 
 
 class ClaudeCodeCliAdapter(_CliRailAdapter):
@@ -577,6 +597,8 @@ class ClaudeCodeCliAdapter(_CliRailAdapter):
             raise ModelInvocationError(
                 self.provider, str(payload.get("subtype") or "error"), str(payload.get("result"))
             )
+        if self._streaming():
+            self._keep_trail(claude_trail(completed.stdout, str(payload.get("result") or "")))
         return str(payload.get("result") or ""), _claude_usage(payload)
 
 
@@ -621,6 +643,143 @@ def _read_claude_output(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
             if name and name not in names:
                 names.append(name)
     return payload, names
+
+
+def _json_lines(stdout: Any) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line in str(stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _result_words(content: Any) -> Any:
+    """A native tool result as the log reads it: its text, an image as
+    "[image]", anything else as it came."""
+    if isinstance(content, str) or content is None:
+        return content or ""
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+            elif isinstance(block, dict) and block.get("type") == "image":
+                parts.append("[image]")
+            else:
+                parts.append(json.dumps(block, ensure_ascii=False, default=str))
+        return "\n".join(parts)
+    return content
+
+
+def _drop_the_reply(items: list[JsonObject], reply: str) -> list[JsonObject]:
+    """The final words the CLI printed ARE the turn's reply, sent as the
+    turn's own think line; the trail does not say them twice."""
+    said = reply.strip()
+    for index in range(len(items) - 1, -1, -1):
+        item = items[index]
+        if item.get("kind") == "think" and not item.get("reasoning"):
+            if str(item.get("text") or "").strip() == said:
+                return items[:index] + items[index + 1:]
+            break
+    return items
+
+
+def claude_trail(stdout: Any, reply: str = "") -> list[JsonObject]:
+    """What the Claude Code CLI did inside one call, in order, read off its
+    stream-json (0.75.0): its thinking, its words between tools, each native
+    tool it called and what came back. Never raises: a line it cannot read
+    is skipped."""
+    items: list[JsonObject] = []
+    try:
+        names: dict[str, str] = {}
+        for event in _json_lines(stdout):
+            message = event.get("message") if isinstance(event.get("message"), dict) else {}
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                kind = block.get("type")
+                if event.get("type") == "assistant":
+                    if kind == "thinking" and str(block.get("thinking") or "").strip():
+                        items.append({"kind": "think", "text": str(block["thinking"]),
+                                      "reasoning": True})
+                    elif kind == "text" and str(block.get("text") or "").strip():
+                        items.append({"kind": "think", "text": str(block["text"])})
+                    elif kind == "tool_use":
+                        name = str(block.get("name") or "?")
+                        names[str(block.get("id") or "")] = name
+                        arguments = block.get("input")
+                        items.append({"kind": "tool_call", "tool": name,
+                                      "arguments": arguments if isinstance(arguments, dict)
+                                      else {"input": arguments}})
+                elif event.get("type") == "user" and kind == "tool_result":
+                    items.append({"kind": "tool_result",
+                                  "tool": names.get(str(block.get("tool_use_id") or ""), "?"),
+                                  "result": _result_words(block.get("content")),
+                                  "is_error": bool(block.get("is_error"))})
+    except Exception:  # noqa: BLE001 - the trail is never worth the call
+        pass
+    return _drop_the_reply(items, reply) if reply else items
+
+
+def codex_trail(stdout: Any, reply: str = "") -> list[JsonObject]:
+    """What the Codex CLI did inside one call, read off `codex exec --json`
+    (0.75.0), tolerantly: the event stream changes shape release to release,
+    so only the completed items it can name are read (reasoning, messages,
+    commands, MCP tool calls, web searches, file changes) and the rest is
+    skipped. Never raises."""
+    items: list[JsonObject] = []
+    try:
+        for event in _json_lines(stdout):
+            item = event.get("item") if event.get("type") == "item.completed" else None
+            msg = event.get("msg") if isinstance(event.get("msg"), dict) else {}
+            if not isinstance(item, dict):
+                if msg.get("type") == "agent_reasoning" and str(msg.get("text") or "").strip():
+                    items.append({"kind": "think", "text": str(msg["text"]), "reasoning": True})
+                continue
+            kind = item.get("type") or item.get("item_type")
+            text = str(item.get("text") or "")
+            if kind == "reasoning" and text.strip():
+                items.append({"kind": "think", "text": text, "reasoning": True})
+            elif kind in ("agent_message", "assistant_message") and text.strip():
+                items.append({"kind": "think", "text": text})
+            elif kind == "command_execution":
+                items.append({"kind": "tool_call", "tool": "shell",
+                              "arguments": {"command": item.get("command")}})
+                exit_code = item.get("exit_code")
+                items.append({"kind": "tool_result", "tool": "shell",
+                              "result": item.get("aggregated_output") or "",
+                              "is_error": exit_code not in (None, 0)})
+            elif kind == "mcp_tool_call":
+                tool = ".".join(str(part) for part in (item.get("server"), item.get("tool"))
+                                if part) or "mcp"
+                arguments = item.get("arguments")
+                items.append({"kind": "tool_call", "tool": tool,
+                              "arguments": arguments if isinstance(arguments, dict) else {}})
+                if item.get("result") is not None or item.get("error") is not None:
+                    items.append({"kind": "tool_result", "tool": tool,
+                                  "result": item.get("result") if item.get("error") is None
+                                  else item.get("error"),
+                                  "is_error": item.get("error") is not None
+                                  or item.get("status") == "failed"})
+            elif kind == "web_search":
+                items.append({"kind": "tool_call", "tool": "web_search",
+                              "arguments": {"query": item.get("query")}})
+            elif kind == "file_change":
+                items.append({"kind": "tool_call", "tool": "file_change",
+                              "arguments": {"changes": item.get("changes")}})
+    except Exception:  # noqa: BLE001 - the trail is never worth the call
+        pass
+    return _drop_the_reply(items, reply) if reply else items
 
 
 def _claude_usage(payload: dict[str, Any]) -> ModelUsage:
@@ -735,6 +894,8 @@ class CodexCliAdapter(_CliRailAdapter):
             self._native_images.extend(collect_codex_images(completed.stdout))
             try:
                 raw = last_message.read_text()
+                if self._streaming():
+                    self._keep_trail(codex_trail(completed.stdout, raw))
             except FileNotFoundError as error:
                 raise ModelInvocationError(
                     self.provider,

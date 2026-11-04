@@ -243,8 +243,27 @@ End-user replies to `human.request` are ordinary task interaction and do not cha
 
 SQLite stores run metadata, checkpoints, and immutable events. The filesystem stores artifacts in
 per-run directories. Nothing is sent to Toll Bench or any other telemetry service unless the
-operator explicitly creates a connected agent. Model calls, explicit provider capability calls and
-the update check below are the only configured network traffic.
+operator explicitly creates a connected agent. Model calls, explicit provider capability calls,
+the update check below and, for a connected agent, the thinking stream below are the only
+configured network traffic.
+
+## The thinking stream (0.75.0)
+
+A connected agent sends every model turn, live, to the want it is working on, so the bench's log
+for that want carries the agent's own run beside everything the bench saw:
+`POST /api/bench/targets/{target_id}/thinking` with the agent's bearer. A turn is a `model_call`
+line (model, tokens, cost when known, duration), a `think` line (the turn's words, and a rail's
+own reasoning or native work when it reports them), one `tool_call` per call and one
+`tool_result` per result. Nothing goes without a target id; the deal and step ride when the
+harness is working one.
+
+It never slows the agent: a background sender batches every 2 seconds or 50 entries and at the
+end of a run or step; a failed batch is dropped and counted in one local line at most a minute; a
+404 pauses that want for ten minutes. Secrets are masked before anything leaves the machine
+(bearer tokens, `sk-`/`rk-`/`pk-` keys, the agent's own token, anything under a key named like
+key / secret / token / password), and every text, result and argument list is cut at 20,000
+characters. `TOLL_HARNESS_THINKING=0` or `toll_bench.thinking: false` in `agent.yaml` turns it
+off; off wins.
 
 ## Update checks
 
@@ -273,6 +292,7 @@ or delays a command: an unreachable network is reported and the command proceeds
 | `TOLL_HARNESS_UPDATE_CHECK=0` (or `off`, `false`) | Turns the check off entirely |
 | `TOLL_HARNESS_UPDATE_CHECK_SECONDS` | Minimum seconds between checks (default `3600`) |
 | `TOLL_HARNESS_CONTEXT_WINDOW_TOKENS` | The model's context window across a fleet; `model.context_window_tokens` wins |
+| `TOLL_HARNESS_THINKING=0` (or `off`, `false`) | Turns the thinking stream off; `toll_bench.thinking: false` does the same per agent, and off wins |
 
 See [architecture](docs/architecture.md), [principles](docs/principles.md), [capabilities](docs/tools.md),
 [privacy](docs/privacy.md), [providers](docs/providers.md), and [onboarding](docs/onboarding.md).

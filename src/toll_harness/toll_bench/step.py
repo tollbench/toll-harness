@@ -34,11 +34,13 @@ import json
 import logging
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from toll_harness.core import thinking
 from toll_harness.core.budget import ContextBudget
 from toll_harness.core.operator_block import with_operator_block
 from toll_harness.core.own_means import OwnMeans, with_own_means
@@ -461,6 +463,9 @@ class StepAsk:
         self.budget = ContextBudget(limit=0)
         # The deal and step this ask is on, for its log lines (0.68.0).
         self.ids: dict[str, Any] = {}
+        # This ask's own run id on the want's log (0.75.0): one step ask is
+        # one run there, the way one runtime run is.
+        self.run_id: str = uuid.uuid4().hex
         # What the agent does by its own means (0.58.0); empty changes nothing.
         self.own_means: tuple[OwnMeans, ...] = ()
         # The operator's standing instructions (0.59.0): one labeled block,
@@ -479,10 +484,14 @@ class StepAsk:
         deal = str(self.ids.get("deal_id") or "?")
         step = str(self.ids.get("step_id") or "?")
         try:
-            response = self.model.invoke(
+            # 0.75.0: the turn, live, on the want's log; with no stream this
+            # is the plain call.
+            response = thinking.invoke(
+                self.model,
                 system=self.prefix,
                 messages=[ModelMessage.text("user", text)],
                 tools=tools,
+                place=self._place(),
             )
         except Exception as exc:
             # The exception CLASS only: provider messages can echo headers.
@@ -512,6 +521,29 @@ class StepAsk:
             what_came_back(response),
         )
         return response
+
+    def _place(self) -> dict[str, str]:
+        """The want, deal and step this ask is on, for the want's log."""
+        return thinking.here(
+            target_id=self.ids.get("target_id"), deal_id=self.ids.get("deal_id"),
+            step_id=self.ids.get("step_id"), run_id=self.run_id,
+        )
+
+    def _stream_the_answer(self, response: Any, picked: Any) -> None:
+        """What the harness made of the turn, on the want's log (0.75.0): a
+        call the model wrote as text gets its tool_call line, and a reply the
+        harness could not use says why."""
+        if isinstance(picked, tuple):
+            if not getattr(response, "tool_calls", None):
+                thinking.tool_call(self.model, picked[0], picked[1], place=self._place())
+            return
+        if isinstance(picked, dict) and picked.get("call"):
+            thinking.tool_result(self.model, picked["call"], picked, is_error=True,
+                                 duration_ms=0, place=self._place())
+        elif isinstance(picked, dict):
+            thinking.note(self.model, f"the reply made no usable tool call "
+                                      f"({picked.get('failure')}): {picked.get('message')}",
+                          place=self._place())
 
     @staticmethod
     def _one_call(
@@ -750,7 +782,16 @@ class StepAsk:
         })
 
     # -- the run -----------------------------------------------------------
-    def run(
+    def run(self, obligation: dict[str, Any], payload: dict[str, Any],
+            **options: Any) -> dict[str, Any]:
+        """One step (see `_run`). Whatever the step ends with, what the
+        thinking stream holds for it goes now (0.75.0)."""
+        try:
+            return self._run(obligation, payload, **options)
+        finally:
+            thinking.flush(self.model, self.run_id)
+
+    def _run(
         self,
         obligation: dict[str, Any],
         payload: dict[str, Any],
@@ -858,11 +899,14 @@ class StepAsk:
                 words, tail, f"step {number}" + (" again" if attempt == 2 else ""), definitions
             )
             picked = self._one_call(response, tools)
+            self._stream_the_answer(response, picked)
             if isinstance(picked, dict):
                 name, result = picked.get("call"), picked
             else:
                 name, answer = picked
                 if tools[name]["action"] == NEED_TOOLS:
+                    thinking.note(self.model, "the model asked for its tools: the agentic road "
+                                              "takes this step", place=self._place())
                     return {
                         "ok": False,
                         "road": ROAD_AGENTIC,
@@ -870,7 +914,12 @@ class StepAsk:
                         "model_calls": self.calls,
                         "prompt_chars": self.prompt_chars,
                     }
+                started = time.monotonic()
                 result = self._make_the_call(ids, tools[name], answer, payload)
+                thinking.tool_result(
+                    self.model, name, result, is_error=not result.get("ok", True),
+                    duration_ms=int((time.monotonic() - started) * 1000), place=self._place(),
+                )
             self._note(name, result)
             if result.get("ok"):
                 break

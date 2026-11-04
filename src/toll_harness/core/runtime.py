@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
 
 from toll_harness.browser.base import BrowserProvider
+from toll_harness.core import thinking
 from toll_harness.core.budget import ContextBudget, measure, resolve_context_budget
 from toll_harness.core.own_means import OwnMeans, own_means_line
 from toll_harness.core.types import (
@@ -279,6 +281,8 @@ class HarnessRuntime:
         iterations: int,
     ) -> RunResult:
         self.state_store.set_run_status(run_id, status)
+        # The end of a run: what the thinking stream holds goes now (0.75.0).
+        thinking.flush(self.model, run_id)
         event_kind = "run.waiting" if status is RunStatus.WAITING else "run.finished"
         self.event_store.append_event(
             run_id,
@@ -344,10 +348,15 @@ class HarnessRuntime:
                 self.event_store.append_event(run_id, "run.context_budget", "harness", report)
                 return self._finish(run_id, RunStatus.FAILED, report, usage, iteration)
             try:
-                response = self.model.invoke(
+                # 0.75.0: the turn, live, on the want's log (core/thinking.py);
+                # with no stream this is the plain call.
+                response = thinking.invoke(
+                    self.model,
                     system=self.system_instruction,
                     messages=messages,
                     tools=definitions,
+                    place=self._thinking_place(run_id, budget.place),
+                    audit=self._audit_arguments,
                 )
             except Exception as error:
                 self.event_store.append_event(
@@ -450,6 +459,7 @@ class HarnessRuntime:
                         "arguments": self._audit_arguments(call.name, call.arguments),
                     },
                 )
+                started = time.monotonic()
                 if call.name not in self.enabled_tools:
                     tool_result = replace(
                         self.tools.execute(context, call.id, "__disabled__", {}),
@@ -459,6 +469,15 @@ class HarnessRuntime:
                 else:
                     tool_result = self.tools.execute(context, call.id, call.name, call.arguments)
                 self._note_place(budget.place, call.name, call.arguments, tool_result.output)
+                redacted_output = self._redact(tool_result.output)
+                thinking.tool_result(
+                    self.model,
+                    call.name,
+                    redacted_output,
+                    is_error=tool_result.is_error,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    place=self._thinking_place(run_id, budget.place),
+                )
                 if call.name in PROTECTED_WRITE_TOOLS:
                     failed = tool_result.is_error or tool_result.output.get("ok") is False
                     if failed:
@@ -479,7 +498,7 @@ class HarnessRuntime:
                     {
                         "call_id": call.id,
                         "name": call.name,
-                        "output": self._redact(tool_result.output),
+                        "output": redacted_output,
                         "is_error": tool_result.is_error,
                     },
                 )
@@ -563,6 +582,15 @@ class HarnessRuntime:
     def _conversation_chars(messages: list[ModelMessage]) -> int:
         """How big the prompt for the next call would be, in characters."""
         return sum(measure(message.content) for message in messages)
+
+    @staticmethod
+    def _thinking_place(run_id: str, held: JsonObject) -> dict[str, str]:
+        """Where this run's turns go on the bench (0.75.0): the want, deal and
+        step the run holds, over whatever the caller is working on."""
+        return thinking.here(
+            run_id=run_id,
+            **{key: held.get(key) for key in ("target_id", "deal_id", "step_id")},
+        )
 
     @staticmethod
     def _note_place(

@@ -27,6 +27,7 @@ from toll_harness.config import (
     load_config,
     with_step_doors,
 )
+from toll_harness.core import thinking
 from toll_harness.core.runtime import HarnessRuntime
 from toll_harness.core.types import AutonomyMode, ModelMessage
 from toll_harness.fleet import market_target_key
@@ -1849,7 +1850,8 @@ def _attention_cycle(
                                            if name in obligation_tools]
         meter = _dispatch_meter(kind, goal, resources.runtime.enabled_tools)
         try:
-            with _cost_scope(resources, obligation, step_state):
+            with _cost_scope(resources, obligation, step_state), \
+                    _thinking_scope(obligation, step_state):
                 result = resources.runtime.start(goal, mode)
         finally:
             resources.runtime.enabled_tools = original_tools
@@ -2457,6 +2459,24 @@ def _cost_scope(
     )
 
 
+def _thinking_scope(
+    obligation: dict[str, Any], step_state: Any = None
+) -> contextlib.AbstractContextManager[Any]:
+    """The model turns inside this block are about the obligation's want,
+    deal and step, on the want's log (0.75.0), until a turn names its own."""
+    state = step_state if isinstance(step_state, dict) else {}
+    deal = state.get("deal") if isinstance(state.get("deal"), dict) else {}
+    current = state.get("current_step") if isinstance(state.get("current_step"), dict) else {}
+    parent_deal_id = (obligation.get("parent_deal_id")
+                      if obligation.get("kind") in {"paid_pack_work", "paid_pack_review"}
+                      else None)
+    return thinking.working_on(
+        target_id=obligation.get("target_id") or deal.get("target_goal_id"),
+        deal_id=obligation.get("deal_id") or parent_deal_id or deal.get("id"),
+        step_id=obligation.get("step_id") or current.get("id"),
+    )
+
+
 def _the_step_ask(
     resources: Any,
     obligation: dict[str, Any],
@@ -2484,7 +2504,8 @@ def _the_step_ask(
     ask = StepAsk(resources.runtime.model, resources.toll_bench)
     ask.own_means = _own_means(resources)
     _hand_on_the_operator_instructions(resources, ask)
-    with _cost_scope(resources, obligation, step_state):
+    with _cost_scope(resources, obligation, step_state), \
+            _thinking_scope(obligation, step_state):
         outcome = ask.run(
             obligation,
             _permitted_step_state(resources, step_state),

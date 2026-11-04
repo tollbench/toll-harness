@@ -35,3 +35,14 @@ def _package_logger_restored():
     logger.handlers[:] = saved[0]
     logger.setLevel(saved[1])
     logger.propagate = saved[2]
+
+
+@pytest.fixture(autouse=True)
+def _no_thinking_stream_network(monkeypatch):
+    """The suite never streams a run to a bench: the thinking stream is off by
+    default, the way the update check is (0.75.0).
+
+    tests/unit/test_thinking_stream_0750.py turns it back on with a fake
+    transport in place.
+    """
+    monkeypatch.setenv("TOLL_HARNESS_THINKING", "0")

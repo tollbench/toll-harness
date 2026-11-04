@@ -19,6 +19,48 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.75.0 — The agent's own run, live, on the want's log, 2026-11-04
+
+What forced it: Steven, 2026-11-04. The server keeps one plain-text log per want (`wants.log`)
+that follows the want from posting to the end; everything the bench saw was on it and nothing the
+agent thought was, because that lived only on the agent's own machine. He picked "the harness
+streams everything". A minor release because behavior changes: a connected agent now sends its
+model turns to the bench, on by default. Nothing removed. No fields or calls deprecated.
+
+- Added: `core/thinking.py`. Every model turn on the three roads (the runtime's run, the step
+  ask, the draft loop) goes, live, to `POST /api/bench/targets/{target_id}/thinking` with the
+  agent's bearer: `model_call` (the model that answered, tokens, cost in cents when the price
+  table knows the model, else null, and the duration), `think` (the turn's words), one
+  `tool_call` per call, then one `tool_result` per result as each tool returns (result,
+  `is_error`, duration). A model call that fails is a `note` naming the exception class only. A
+  rail that reasons in words sends them too, marked "(reasoning)": an OpenAI-compatible
+  `reasoning` / `reasoning_details`, Bedrock's `reasoningContent`, and, for the `claude_code` and
+  `codex` rails, what the CLI did inside its own call (its thinking, its words between tools,
+  each native tool and what came back). Nothing is sent without a target id; `deal_id` and
+  `step_id` ride when the harness is working a deal or a step; a run's turns before it names a
+  want are held (200 at most) and go with the turn that names it.
+- Added: never in the way. A background sender batches every 2 seconds or 50 entries, whichever
+  first, and at the end of every run, step ask and draft loop. Recording never raises, never
+  touches the network and never waits on the sender. A failed batch is dropped, counted and said
+  in one local line at most once a minute; the queue holds 2,000 entries and drops the oldest past
+  that, counted; a 404 (no door yet, or a want this agent cannot see) quietly stops sending for
+  that want for ten minutes; the door gets 10 seconds a batch and never a redirect with the
+  bearer. At the end of a process what is left gets two seconds, no more.
+- Added: secrets stay home. Bearer and basic credentials, `sk-`/`rk-`/`pk-` keys (and AWS,
+  GitHub, Slack and JWT tokens), the agent's own bench token, and anything under a key named like
+  key / secret / token / password / credential / cookie are masked before an entry leaves the
+  machine. Text, results and arguments are cut at 20,000 characters with "... (N more
+  characters)"; the patterns never read more than twice that, so a 5 MB tool result costs the run
+  no more than a small one.
+- Added: the switch. `TOLL_HARNESS_THINKING=0` (or `off`, `false`, `no`) or
+  `toll_bench.thinking: false` in agent.yaml turns it off; off wins. Default on for a connected
+  agent; an agent that is not connected sends nothing, as before.
+- Changed: `ModelAdapter` carries `thinking` (the stream, set by `build_runtime` the way
+  `cost_ledger` is) and `count_spend` also notes each billed call for the turn being measured;
+  `RuntimeResources` carries `thinking` and `close()` gives it its two seconds;
+  `BookOfHousesApiClient.post_thinking(target_id, payload)`. With the stream off every model
+  call, response and request is byte for byte what it was.
+
 ## 0.74.0 — The thin core, 2026-10-31
 
 What forced it: the heat logs of 2026-10-27 (lane 3 and the thinness audit). The harness had grown

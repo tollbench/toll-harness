@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from toll_harness.core import thinking
 from toll_harness.core.types import (
     JsonObject,
     ModelMessage,
@@ -155,8 +156,16 @@ class BedrockModelAdapter(ModelAdapter):
         normalized: list[JsonObject] = []
         calls: list[ToolCall] = []
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         for block in output.get("content", []):
-            if "text" in block:
+            if "reasoningContent" in block:
+                # 0.75.0: a model that reasons in words (Converse's
+                # reasoningContent) has them sent to the want's log; the
+                # conversation carries them no further, as before.
+                said = (block.get("reasoningContent") or {}).get("reasoningText") or {}
+                if isinstance(said, dict) and isinstance(said.get("text"), str):
+                    reasoning_parts.append(said["text"])
+            elif "text" in block:
                 text = block["text"]
                 text_parts.append(text)
                 normalized.append({"type": "text", "text": text})
@@ -196,5 +205,12 @@ class BedrockModelAdapter(ModelAdapter):
                 raw=usage,
             ),
             stop_reason=response.get("stopReason"),
-            raw_metadata={"metrics": response.get("metrics", {})},
+            raw_metadata=self._metadata(response, reasoning_parts),
         )
+
+    def _metadata(self, response: Any, reasoning_parts: list[str]) -> JsonObject:
+        metadata: JsonObject = {"metrics": response.get("metrics", {})}
+        reasoning = "\n".join(part for part in reasoning_parts if part.strip())
+        if reasoning and thinking.stream_of(self) is not None:
+            metadata["reasoning_text"] = reasoning
+        return metadata

@@ -9,6 +9,7 @@ from uuid import UUID
 import yaml
 
 from toll_harness.browser.playwright import PlaywrightBrowserProvider
+from toll_harness.core import thinking
 from toll_harness.core.budget import resolve_context_window
 from toll_harness.core.cost_ledger import CostLedger
 from toll_harness.core.own_means import own_means_from_config
@@ -180,10 +181,19 @@ class RuntimeResources:
     # a hand-back (0.63.0). The model adapter counts into it, the Toll Bench
     # provider reads it, and the work on a deal runs inside `deal(...)`.
     cost_ledger: Any | None = None
+    # Every model turn, live, to the want's log on the bench (0.75.0); None
+    # when the agent is not connected or the switch is off.
+    thinking: Any | None = None
 
     def close(self) -> None:
         if self.browser is not None:
             self.browser.close()
+        if self.thinking is not None:
+            # What is left gets two seconds, never more (core/thinking.py).
+            try:
+                self.thinking.close()
+            except Exception:  # noqa: BLE001 - the stream never fails a command
+                pass
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -404,7 +414,11 @@ def build_runtime(path: str | Path) -> RuntimeResources:
             config_path=config_path,
         )
     toll_bench_config = config.get("toll_bench", {})
+    # 0.75.0: `toll_bench.thinking` (default true) and TOLL_HARNESS_THINKING;
+    # off wins. Read here so a typo is a load error, like every other key.
+    thinking_on = thinking.configured_switch(toll_bench_config.get("thinking"))
     connected_api = None
+    token = None
     if toll_bench_config.get("connected"):
         token_name = toll_bench_config.get("token_secret")
         maker_id = toll_bench_config.get("maker_id")
@@ -510,6 +524,15 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     model.cost_ledger = cost_ledger
     if toll_bench_provider is not None:
         toll_bench_provider.cost_ledger = cost_ledger
+    # 0.75.0: every model turn, live, to the want's log on the bench. The
+    # stream rides the model adapter (the three roads all hold it) and masks
+    # the agent's own token wherever it would appear.
+    thinking_stream = None
+    if connected_api is not None and thinking_on and thinking.enabled():
+        thinking_stream = thinking.ThinkingStream(
+            connected_api.post_thinking, secrets=[token] if token else []
+        )
+        model.thinking = thinking_stream
     approach_default = approach_from_config(config)
     return RuntimeResources(
         runtime=runtime,
@@ -519,6 +542,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
         toll_bench=toll_bench_provider,
         approach_default=approach_default,
         cost_ledger=cost_ledger,
+        thinking=thinking_stream,
     )
 
 

@@ -110,6 +110,10 @@ class ModelAdapter(ABC):
     # table in core/budget.py). The run-level budget's default follows it
     # (0.74.0); None is "not set" and reads as 131,072.
     context_window_tokens: int | None = None
+    # 0.75.0. The stream that carries every model turn, live, to the want's
+    # log on the bench (core/thinking.py), set by whoever builds the runtime
+    # the way `cost_ledger` is. None sends nothing.
+    thinking: Any = None
 
     def count_spend(
         self,
@@ -121,7 +125,21 @@ class ModelAdapter(ABC):
         model: object = None,
     ) -> None:
         """Put one billed call on the current deal's tab. No ledger, no deal, or
-        no tokens counts nothing, and counting never fails a model call."""
+        no tokens counts nothing, and counting never fails a model call.
+
+        0.75.0: while the thinking stream measures a turn it hangs a list on
+        `_spend_meter`, and every billed call in the turn is noted there too,
+        so the turn's line can say its tokens and cost."""
+        meter = getattr(self, "_spend_meter", None)
+        if isinstance(meter, list):
+            try:
+                meter.append({
+                    "model": str(model or self.model_id),
+                    "fresh_in": fresh_in, "cache_read": cache_read,
+                    "cache_write": cache_write, "out": out,
+                })
+            except Exception:  # noqa: BLE001 - the meter is never worth the call
+                pass
         ledger = self.cost_ledger
         if ledger is None:
             return

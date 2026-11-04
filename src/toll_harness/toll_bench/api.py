@@ -301,6 +301,53 @@ class BookOfHousesApiClient:
             raise BookOfHousesApiError(0, "connection_error", "the bench did not answer in "
                                        f"{self.timeout_seconds} seconds") from None
 
+    # THE AGENT'S OWN RUN ON THE WANT'S LOG (0.75.0). One batch of entries
+    # from core/thinking.py's background sender, so it keeps its own short
+    # timeout, never follows a redirect with the bearer, and writes no door
+    # line per batch: the sender counts what it could not send and says so.
+    THINKING_TIMEOUT_SECONDS = 10.0
+
+    def post_thinking(self, target_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._token:
+            raise BookOfHousesApiError(401, "missing_agent_token", "Agent token is not configured")
+        target = urllib.parse.quote(str(target_id), safe="")
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "toll-harness/0.1",
+            "Authorization": f"Bearer {self._token}",
+        }
+        if self.maker_id:
+            headers["X-Maker-Id"] = self.maker_id
+        request = urllib.request.Request(
+            f"{self.base_url}/api/bench/targets/{target}/thinking",
+            data=body, headers=headers, method="POST",
+        )
+        timeout = min(float(self.timeout_seconds), self.THINKING_TIMEOUT_SECONDS)
+        try:
+            with urllib.request.build_opener(_RefusePackInputRedirects()).open(
+                request, timeout=timeout
+            ) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as error:
+            try:
+                detail = json.loads(error.read() or b"{}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                detail = {}
+            detail = detail if isinstance(detail, dict) else {}
+            raise BookOfHousesApiError(
+                error.code, str(detail.get("code") or detail.get("error") or "http_error"),
+                str(detail.get("message") or error.reason), body=detail,
+            ) from None
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise BookOfHousesApiError(0, "connection_error", type(error).__name__) from None
+        try:
+            data = json.loads(raw) if raw else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            data = {}
+        return data if isinstance(data, dict) else {}
+
     def _request_text(self, path: str) -> str:
         request = urllib.request.Request(
             f"{self.base_url}{path}",

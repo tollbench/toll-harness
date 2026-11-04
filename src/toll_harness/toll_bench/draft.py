@@ -38,10 +38,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from toll_harness.core import thinking
 from toll_harness.core.operator_block import with_operator_block
 from toll_harness.core.own_means import (
     OWN_MEANS_PLAN_RULE,
@@ -1988,6 +1990,8 @@ class DraftLoop:
         # a caller that asks before `run` (the operator dialogue) sets the id.
         self.target_id: str = ""
         self.kind: str = ""
+        # This loop's own run id on the want's log (0.75.0).
+        self.run_id: str = uuid.uuid4().hex
         # True when the LAST ask already spent its one retry on a reply the
         # output limit cut off, so the caller does not ask a third time.
         self.cut_off_retried = False
@@ -2065,10 +2069,14 @@ class DraftLoop:
         self.prompt_chars += len(tail)
         self.last_text = ""
         try:
-            response = self.model.invoke(
+            # 0.75.0: the turn, live, on the want's log; with no stream this
+            # is the plain call.
+            response = thinking.invoke(
+                self.model,
                 system=self.prefix,
                 messages=[ModelMessage.text("user", tail)],
                 tools=[],
+                place=thinking.here(target_id=self.target_id, run_id=self.run_id),
             )
         except Exception as exc:
             # The exception CLASS only: provider messages can echo headers.
@@ -3353,7 +3361,15 @@ class DraftLoop:
         return self._paused(target_id, kind, answer) or answer
 
     # -- the whole thing ---------------------------------------------------
-    def run(
+    def run(self, target_id: str, **options: Any) -> dict[str, Any]:
+        """One want (see `_run`). Whatever it ends with, what the thinking
+        stream holds for it goes now (0.75.0)."""
+        try:
+            return self._run(target_id, **options)
+        finally:
+            thinking.flush(self.model, self.run_id)
+
+    def _run(
         self,
         target_id: str,
         *,

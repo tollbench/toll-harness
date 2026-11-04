@@ -4,6 +4,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from toll_harness.core import thinking
 from toll_harness.core.types import (
     JsonObject,
     ModelMessage,
@@ -63,6 +64,22 @@ def _field(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
+
+
+def _reasoning_text(model_message: Any) -> str:
+    """The reasoning a reply carried as words (0.75.0), for the want's log:
+    `reasoning` as a string, else the text and summaries of OpenRouter's
+    `reasoning_details`. Empty when the provider kept it."""
+    reasoning = _field(model_message, "reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
+    parts: list[str] = []
+    for detail in _field(model_message, "reasoning_details") or []:
+        for name in ("text", "summary"):
+            value = _field(detail, name)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+    return "\n".join(parts)
 
 
 def _reasoning_tokens(usage: Any) -> int:
@@ -362,6 +379,7 @@ class OpenAIModelAdapter(ModelAdapter):
             "reasoning": bool(reasoning) or bool(_field(model_message, "reasoning_details")),
             "reasoning_chars": reasoning_chars,
             "reasoning_tokens": reasoning_tokens,
+            "reasoning_text": _reasoning_text(model_message),
             # Empty, no tool call, and the budget is what stopped it.
             "cut_off": (
                 not text.strip()
@@ -402,6 +420,9 @@ class OpenAIModelAdapter(ModelAdapter):
         }
         if read.get("retry"):
             metadata["retry"] = read["retry"]
+        if read.get("reasoning_text") and thinking.stream_of(self) is not None:
+            # 0.75.0: the words the model reasoned in, for the want's log only.
+            metadata["reasoning_text"] = read["reasoning_text"]
         if cut is not None and not read.get("same_call"):
             first = {
                 "finish_reason": cut["finish_reason"],
