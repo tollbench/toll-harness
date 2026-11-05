@@ -69,6 +69,22 @@ deprecated.
   form REQUIRES `url` on a link step, the provider refused the field before it left the
   machine, and without it the form's own schema refused the filing, so a staging agent looped on
   a finished calendar step.
+- Added: a pass names the missing tool, and the bench's ask back gets one more turn (contract
+  4.1.65). What forced it (Steven, 2026-11-05): the staging agent Milo declined "Call my friend
+  and wish him happy birthday" because no tool on the want could ring a phone, and offered
+  nothing else; the reason went nowhere. The bid and repair asks now say: when no tool on this
+  want can do a part of it, add `"missing_tools": [...]` in plain words (up to 3).
+  `missing_tools_of` reads it (strings only, stripped, 3 at most, each cut at 120 characters;
+  `decline_of` is unchanged), and `decline_target(..., missing_tools=...)` sends it only when it
+  names something, never as an empty list. When the bench's decline answer carries a non-null
+  `alternative_ask` (`ask`, `tool_slugs`, `how`), the draft loop asks the model ONCE more, on the
+  same prefix, stance and payload it drafted on, with the bench's words and its own pass on top:
+  a proposal back goes through the same doors as any bid (links and headline asks, the free
+  validate door, one repair, the filing door; a refusal is a refused bid as before), and a pass
+  back lets the first pass stand and files nothing more. Never a second alternative in one run;
+  a repair of the alternative that passes again lets the first pass stand. The turn is on the
+  market log and, as a note plus the model turn, on the thinking stream. An older bench answers
+  without the keys and nothing changes.
 
 ## 0.74.0 — The thin core, 2026-10-31
 

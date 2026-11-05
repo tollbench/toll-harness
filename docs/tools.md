@@ -50,6 +50,10 @@ a hand-cut list is left as written.
 THE BID ROAD RELAYS THE BENCH (0.74.0). A pass is an answer: a model that answers
 `{"decline": "<one line>"}` is sent to the bench's decline door (contract 4.1.55) and the want is
 marked reviewed, so nothing more is asked on it; a bench without that door keeps the local record.
+A pass for a tool the want lacks also names it, `"missing_tools": [...]` in plain words (up to 3,
+contract 4.1.65), and when the bench answers with `alternative_ask` the model is asked ONCE more
+for a proposal with the tools the want has; that proposal takes the same doors as any bid, and a
+pass back lets the first pass stand with nothing more filed.
 The free validate door is asked before filing, and only what passes is filed: when it names a
 problem, its rows ride ONE repair ask, the answer goes back to the free door, and a proposal it
 still refuses is recorded and never filed. An unreadable reply gets one more ask carrying the

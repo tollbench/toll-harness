@@ -41,7 +41,7 @@ import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from toll_harness.core import thinking
 from toll_harness.core.operator_block import with_operator_block
@@ -940,6 +940,20 @@ PROPOSAL_BODY_SAID = 400
 # proposal door answers 200, and the want leaves this agent's open list. The
 # line is trimmed at a word by the bench past this.
 DECLINE_MAX = 280
+# THE MISSING TOOL IS A SLOT ON THE PASS (contract 4.1.65, Steven 2026-11-05).
+# WHAT FORCED IT: Milo passed on "Call my friend and wish him happy birthday"
+# because no tool on the want could ring a phone, and the reason went nowhere.
+# A pass now names what was missing, in plain words; the bench flags it for
+# building and asks back, once, for another way with the tools the want has
+# (`alternative_ask`). Up to 3, each up to 120 characters: the bench trims
+# past that and says so, it never refuses, and this package cuts the same way.
+MISSING_TOOLS_MAX = 3
+MISSING_TOOL_CHARS = 120
+MISSING_TOOLS_LINE = (
+    "If the reason is that no tool on this want can do a part of it, add "
+    '"missing_tools": ["<each missing capability in plain words, e.g. place a '
+    f'phone call>"], up to {MISSING_TOOLS_MAX}; otherwise leave it out.'
+)
 # The provider's answer when the free validate door refused and nothing was
 # filed (0.74.0: no "filing anyway").
 REFUSED_AT_VALIDATE = "proposal_refused_at_validate"
@@ -1164,8 +1178,8 @@ PROPOSAL_INSTRUCTION = (
     f"A paragraph over {PROPOSAL_BODY_SAID} characters is trimmed at a word by "
     "the bench; do not pad it.\n"
     "A PASS IS AN ANSWER: if this want is not one you can deliver or should "
-    'bid on, answer only {"decline": "<one line: why>"} -- no other field, '
-    "no penalty.\n"
+    'bid on, answer only {"decline": "<one line: why>"} -- no penalty. '
+    + MISSING_TOOLS_LINE + "\n"
     'Answer, approach first: {"approach": {"risk": "...", "finish": "...", '
     '"path": "..."}, "pitch_title": "...", "headline": "...", '
     '"pitch_body": "...", "odds": <your honest chance, more than 0 and less '
@@ -1207,7 +1221,22 @@ PROPOSAL_REPAIR_INSTRUCTION = (
     "`the_bench_refused` is its own words, row by row. Answer with the whole "
     "proposal again, the same fields as JSON, changing only what those rows "
     "name. If this want is not one you should bid on after all, answer only "
-    '{"decline": "<one line: why>"}.'
+    '{"decline": "<one line: why>"}. ' + MISSING_TOOLS_LINE
+)
+
+# THE ALTERNATIVE, ONCE (contract 4.1.65). A pass that named a missing tool
+# comes back from the bench with its own question: is there another way with
+# the tools this want has? It rides on top of the proposal ask itself, so the
+# answer is a whole proposal, the same shape, through the same doors.
+ALTERNATIVE_INSTRUCTION = (
+    "You passed on this want; `your_pass` is what you said. The bench has "
+    "flagged the missing tool for building, and `the_bench_asks` is its own "
+    "question back: `ask`, the tools this want does have (`tool_slugs`) and "
+    "`how` to bid instead. Is there a reasonable other set of actions that "
+    "gets this person what they want with only those tools? If there is, "
+    "answer with a whole proposal as set out below, every entry in "
+    "`tools_needed` copied from `tools_on_this_want`. If there is not, answer "
+    'only {"decline": "<one line: why>"} and your pass stands.'
 )
 # The keys of a refusal row the repair ask carries: the door's own words.
 REFUSAL_ROW_KEYS = ("code", "rej", "field", "path", "detail", "message", "fix",
@@ -1225,6 +1254,36 @@ def decline_of(answer: Any) -> str | None:
     reason = value if isinstance(value, str) else answer.get("reason")
     line = " ".join(str(reason or "").split())
     return line[:DECLINE_MAX] or "No reason given."
+
+
+def missing_tools_of(answer: Any) -> list[str]:
+    """What a pass names as missing (contract 4.1.65): strings only, each
+    stripped and cut at MISSING_TOOL_CHARS, the first MISSING_TOOLS_MAX. A
+    lone string counts as one; anything else is []."""
+    if not isinstance(answer, dict):
+        return []
+    value = answer.get("missing_tools")
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    lines = [" ".join(item.split())[:MISSING_TOOL_CHARS].strip()
+             for item in value if isinstance(item, str)]
+    return [line for line in lines if line][:MISSING_TOOLS_MAX]
+
+
+def alternative_ask_of(answer: Any) -> dict[str, Any] | None:
+    """The bench's ask back on a pass (contract 4.1.65), as it sent it, or
+    None: null, absent (an older bench) or empty is none."""
+    ask = answer.get("alternative_ask") if isinstance(answer, dict) else None
+    return dict(ask) if isinstance(ask, dict) and ask else None
+
+
+class _Pass(NamedTuple):
+    """A pass the repair ask came back with: the line and what was missing."""
+
+    reason: str
+    missing_tools: tuple[str, ...] = ()
 
 
 def refusal_rows(refusal: Any) -> list[dict[str, Any]]:
@@ -1997,6 +2056,9 @@ class DraftLoop:
         self.cut_off_retried = False
         # The last reply's own text, for the failure excerpt only (0.68.0).
         self.last_text = ""
+        # Whether this proposal already had its one alternative ask after a
+        # pass (contract 4.1.65); never a second.
+        self._alternative_asked = False
 
     # -- the model ---------------------------------------------------------
     def _tools(self, brief: Any) -> list[dict[str, str]]:
@@ -2543,7 +2605,42 @@ class DraftLoop:
         the door refuses that too; a long headline is only logged, because the
         door trims it. Anything the door still corrects comes back on
         `bench_fixed` or `trimmed` and is logged, never retried.
+
+        A pass goes to the bench with what was missing (`missing_tools`), and
+        the bench's ask back gets ONE more turn (`_after_the_pass`).
         """
+        self._alternative_asked = False
+        payload = self._proposal_payload(brief)
+        slot_notes: list[str] = []
+        instruction = self._proposal_instruction()
+        answer = self._ask(instruction, payload, "proposal", head=self._head())
+        proposal = read_proposal(answer, slot_notes)
+        if (decline_of(answer) is None and not proposal.get("pitch_title")
+                and not proposal.get("pitch_body")):
+            # ONE MORE TRY WITH THE PARSER'S WORDS (0.74.0): an unreadable
+            # reply is asked once more, saying what could not be read.
+            why = self._what_was_wrong(answer, "pitch_title or pitch_body")
+            answer = self._ask(UNREADABLE_AGAIN.format(why=why) + instruction, payload,
+                               "proposal (unreadable, again)", head=self._head())
+            proposal = read_proposal(answer, slot_notes)
+        declined = decline_of(answer)
+        if declined is not None:
+            out = self._decline(target_id, declined, file, missing_tools_of(answer))
+            return self._after_the_pass(target_id, brief, out, idempotency_key, file)
+        if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
+            return self._gave_up(
+                target_id,
+                "bid",
+                "no_proposal",
+                "The model was asked for a proposal and answered with no "
+                "title and no paragraph.",
+            )
+        return self._file_the_proposal(
+            target_id, brief, proposal, slot_notes, idempotency_key, file)
+
+    def _proposal_payload(self, brief: Any) -> dict[str, Any]:
+        """What the proposal ask carries: the want, what the person said, the
+        budget, this want's tools, and the agent's own standing pieces."""
         payload: dict[str, Any] = {
             "want": (brief or {}).get("want") if isinstance(brief, dict) else None,
             "what_the_person_said": person_strategy(brief),
@@ -2563,29 +2660,27 @@ class DraftLoop:
             # Nothing caches here, so the rules ride the one call that makes
             # the choice rather than a prefix nobody is charged less for.
             payload["the_rules"] = SHORT_FRONT_DOOR
-        slot_notes: list[str] = []
-        instruction = with_own_means(PROPOSAL_INSTRUCTION, self.own_means)
-        answer = self._ask(instruction, payload, "proposal", head=self._head())
-        proposal = read_proposal(answer, slot_notes)
-        if (decline_of(answer) is None and not proposal.get("pitch_title")
-                and not proposal.get("pitch_body")):
-            # ONE MORE TRY WITH THE PARSER'S WORDS (0.74.0): an unreadable
-            # reply is asked once more, saying what could not be read.
-            why = self._what_was_wrong(answer, "pitch_title or pitch_body")
-            answer = self._ask(UNREADABLE_AGAIN.format(why=why) + instruction, payload,
-                               "proposal (unreadable, again)", head=self._head())
-            proposal = read_proposal(answer, slot_notes)
-        declined = decline_of(answer)
-        if declined is not None:
-            return self._decline(target_id, declined, file)
-        if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
-            return self._gave_up(
-                target_id,
-                "bid",
-                "no_proposal",
-                "The model was asked for a proposal and answered with no "
-                "title and no paragraph.",
-            )
+        return payload
+
+    def _proposal_instruction(self) -> str:
+        return with_own_means(PROPOSAL_INSTRUCTION, self.own_means)
+
+    def _file_the_proposal(
+        self,
+        target_id: str,
+        brief: Any,
+        proposal: dict[str, Any],
+        slot_notes: list[str],
+        idempotency_key: str,
+        file: bool,
+        standing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """A READ PROPOSAL, THROUGH THE SAME DOORS EVERY BID TAKES: the row
+        slots, the want's own tool list, the links and headline asks, the cap,
+        the free validate door, one repair, then the filing door.
+
+        `standing` is the pass this proposal is the alternative to: a repair
+        that passes again lets that pass stand and files nothing more."""
         proposal = self._the_row_slots(target_id, proposal, slot_notes)
         # THE TOOL LIST IS THE WANT'S, NOT THE MODEL'S (REJ-01). One name the
         # list does not carry costs the whole bid, so an off-list name comes
@@ -2669,8 +2764,12 @@ class DraftLoop:
         filed = filed if isinstance(filed, dict) else {}
         if not filed.get("ok") and filed.get("error") == REFUSED_AT_VALIDATE:
             repaired = self._repair(target_id, brief, proposal, filed)
-            if isinstance(repaired, str):
-                return self._decline(target_id, repaired, file)
+            if isinstance(repaired, _Pass):
+                if standing is not None:
+                    return self._the_pass_stands(target_id, standing, repaired.reason)
+                out = self._decline(target_id, repaired.reason, file,
+                                    list(repaired.missing_tools))
+                return self._after_the_pass(target_id, brief, out, idempotency_key, file)
             if repaired is not None:
                 proposal = repaired
                 filed = self.provider.submit_proposal(target_id, proposal, idempotency_key)
@@ -2728,13 +2827,13 @@ class DraftLoop:
 
     def _repair(
         self, target_id: str, brief: Any, proposal: dict[str, Any], refusal: dict[str, Any]
-    ) -> dict[str, Any] | str | None:
+    ) -> dict[str, Any] | _Pass | None:
         """ONE small repair ask carrying the door's own rows (H3, 0.74.0).
 
         The validate door is free and files nothing, so its words ride one
         more ask and the answer goes back to it; only what passes is filed.
-        A string back is a pass (the model declined); None is no usable
-        answer, and the refusal stands as the record."""
+        A `_Pass` back is a pass (the model declined, with what was missing);
+        None is no usable answer, and the refusal stands as the record."""
         rows = refusal_rows(refusal)
         if not rows:
             return None
@@ -2749,7 +2848,7 @@ class DraftLoop:
                            head=self._head())
         declined = decline_of(answer)
         if declined is not None:
-            return declined
+            return _Pass(declined, tuple(missing_tools_of(answer)))
         fixed = read_proposal(answer)
         if not fixed.get("pitch_title") and not fixed.get("pitch_body"):
             self.log.warning("proposal for target=%s: the repair ask came back unreadable "
@@ -2760,10 +2859,14 @@ class DraftLoop:
                       target_id, len(rows))
         return self._fit_the_body(target_id, merged)
 
-    def _decline(self, target_id: str, reason: str, file: bool) -> dict[str, Any]:
-        """A PASS IS AN ANSWER (contract 4.1.55). The bench is told, and the
-        caller marks the want reviewed so nothing more is asked on it. A bench
+    def _decline(
+        self, target_id: str, reason: str, file: bool, missing_tools: Sequence[str] = ()
+    ) -> dict[str, Any]:
+        """A PASS IS AN ANSWER (contract 4.1.55). The bench is told, with what
+        was missing when the model named it (contract 4.1.65), and the caller
+        marks the want reviewed so nothing more is asked on it. A bench
         without the decline door still gets the local record."""
+        missing = list(missing_tools or [])
         out: dict[str, Any] = {
             "ok": True,
             "filed": False,
@@ -2774,16 +2877,92 @@ class DraftLoop:
             "model_calls": self.calls,
             "trail": self.trail,
         }
+        if missing:
+            out["missing_tools"] = missing
         sender = getattr(self.provider, "decline_target", None)
         if file and callable(sender):
-            answer = sender(target_id, reason)
+            answer = (sender(target_id, reason, missing_tools=missing) if missing
+                      else sender(target_id, reason))
             out["response"] = answer
             if not (isinstance(answer, dict) and answer.get("declined")):
                 out["declined_locally"] = True
         else:
             out["declined_locally"] = True
-        self.log.info("proposal for target=%s: declined (%s)%s", target_id, reason,
+        self.log.info("proposal for target=%s: declined (%s)%s%s", target_id, reason,
+                      f"; missing: {'; '.join(missing)}" if missing else "",
                       " -- recorded here only" if out.get("declined_locally") else "")
+        return out
+
+    def _after_the_pass(
+        self,
+        target_id: str,
+        brief: Any,
+        out: dict[str, Any],
+        idempotency_key: str,
+        file: bool,
+    ) -> dict[str, Any]:
+        """THE ALTERNATIVE, ONCE (contract 4.1.65, Steven 2026-11-05).
+
+        WHAT FORCED IT: Milo passed on a birthday call because no tool on the
+        want could ring a phone, and offered nothing else. When the bench's
+        answer to a pass carries `alternative_ask`, the model is asked ONE
+        more time, on the same prefix, stance and payload it drafted on, with
+        the bench's own words on top: a whole proposal with the tools this
+        want has goes through the same doors as any bid (and lifts the pass
+        at the bench); a pass back lets the first one stand and files nothing
+        more. Never a second alternative in one run. An older bench answers
+        without the key, and nothing changes.
+        """
+        ask = alternative_ask_of(out.get("response"))
+        if ask is None or not file or self._alternative_asked:
+            return out
+        self._alternative_asked = True
+        reason = str(out.get("reason") or "")
+        missing = list(out.get("missing_tools") or [])
+        payload = self._proposal_payload(brief)
+        payload["your_pass"] = {"decline": reason, "missing_tools": missing}
+        payload["the_bench_asks"] = ask
+        slugs = ask.get("tool_slugs") if isinstance(ask.get("tool_slugs"), list) else []
+        said = (f"the bench flagged {'; '.join(missing) or 'a missing tool'} for "
+                f"building and asked for another way with {len(slugs)} tool(s) "
+                "this want has; asking the model once")
+        self.log.info("proposal for target=%s: %s", target_id, said)
+        thinking.note(self.model, f"after the pass: {said}",
+                      place=thinking.here(target_id=self.target_id, run_id=self.run_id))
+        instruction = ALTERNATIVE_INSTRUCTION + "\n\n" + self._proposal_instruction()
+        answer = self._ask(instruction, payload, "proposal (alternative)", head=self._head())
+        again = decline_of(answer)
+        if again is not None:
+            return self._the_pass_stands(target_id, out, again)
+        slot_notes: list[str] = []
+        proposal = read_proposal(answer, slot_notes)
+        if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
+            self.log.warning(
+                "proposal for target=%s: the alternative came back unreadable (%s); "
+                "the pass stands, nothing more filed", target_id, self.last_reply)
+            out["alternative"] = {"asked": True, "answer": "unreadable"}
+            out["model_calls"] = self.calls
+            return out
+        self.log.info("proposal for target=%s: the alternative is a proposal; filing it "
+                      "the way every bid is filed", target_id)
+        filed = self._file_the_proposal(
+            target_id, brief, proposal, slot_notes, idempotency_key, file, standing=out)
+        if filed is out:
+            return out
+        filed["declined_first"] = {"reason": reason, "missing_tools": missing,
+                                   "response": out.get("response")}
+        filed["alternative"] = {"asked": True, "answer": "proposal", "ask": ask}
+        return filed
+
+    def _the_pass_stands(
+        self, target_id: str, out: dict[str, Any], again: str
+    ) -> dict[str, Any]:
+        """The model passed again on the alternative: the first pass stands
+        and nothing more is filed."""
+        self.log.info("proposal for target=%s: the alternative is a pass too (%s); "
+                      "the first pass stands, nothing more filed", target_id, again)
+        out["alternative"] = {"asked": True, "answer": "declined", "reason": again}
+        out["model_calls"] = self.calls
         return out
 
     def _the_row_slots(

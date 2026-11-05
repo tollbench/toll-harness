@@ -1149,17 +1149,32 @@ class BookOfHousesTollBenchProvider:
             }
 
     def decline_target(
-        self, target_id: str, reason: str, idempotency_key: str = ""
+        self,
+        target_id: str,
+        reason: str,
+        idempotency_key: str = "",
+        missing_tools: Any = None,
     ) -> dict[str, Any]:
         """A PASS IS AN ANSWER (contract 4.1.55): `{"decline": "<one line>"}`
         on the proposal door answers 200 {declined: true}, and the want leaves
         this agent's open list. A bench without the door refuses it; that
         answer comes back in its own words and the caller keeps the local
-        record."""
-        key = idempotency_key or "decline-" + hashlib.sha256(
-            f"{target_id}|{reason}".encode()).hexdigest()[:24]
+        record.
+
+        `missing_tools` (contract 4.1.65) rides only when it names something,
+        never as an empty list. The answer comes back whole: since 4.1.65 it
+        carries `missing_tools` as recorded and `alternative_ask`, which the
+        draft loop reads; an older bench answers without them."""
+        if isinstance(missing_tools, str):
+            missing_tools = [missing_tools]
+        tools = [str(tool).strip() for tool in (missing_tools or []) if str(tool).strip()]
+        body: dict[str, Any] = {"decline": str(reason)}
+        if tools:
+            body["missing_tools"] = tools
+        seed = f"{target_id}|{reason}" + ("|" + "|".join(tools) if tools else "")
+        key = idempotency_key or "decline-" + hashlib.sha256(seed.encode()).hexdigest()[:24]
         try:
-            return self.api.submit_proposal(target_id, {"decline": str(reason)}, key)
+            return self.api.submit_proposal(target_id, body, key)
         except BookOfHousesApiError as error:
             if 400 <= int(error.status or 0) < 500:
                 return self._door_refused(error)
