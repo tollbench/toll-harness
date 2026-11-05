@@ -68,6 +68,7 @@ from toll_harness.storage.local import SQLiteStore
 from toll_harness.toll_bench import draft
 from toll_harness.toll_bench.api import BookOfHousesApiError
 from toll_harness.toll_bench.draft import APPROACH_DIALS, DraftLoop
+from toll_harness.toll_bench.book_of_houses import bid_is_live
 from toll_harness.toll_bench.step import (
     FORMS_TURNED_OFF,
     ROAD_AGENTIC,
@@ -1921,7 +1922,7 @@ def _market_scan_candidates(
     eligible = []
     for target in targets:
         target_key, target_id, round_value = _market_target_key(target)
-        if not target_id or target.get("your_bid") is not None:
+        if not target_id or bid_is_live(target.get("your_bid")):
             continue
         if target_key in reviewed:
             continue
@@ -2704,7 +2705,7 @@ def _process_market_opportunities(
         + "Respond to the single open Toll Bench want below with ONE PROPOSAL and "
         "submit it once with a stable idempotency key. This scan handles new wants "
         "only; do not service existing obligations here. Do not merely review or summarize the "
-        "want. Never bid on a target whose brief reports your_bid, and do not "
+        "want. Never bid on a target whose brief reports a live your_bid (filed or accepted), and do not "
         "inspect targets outside this candidate set. Do not request human input.\n"
         "A PROPOSAL IS EIGHT FIELDS AND NOTHING ELSE. It is your short answer to "
         "what this person wants, and it is what they choose between. Read the "

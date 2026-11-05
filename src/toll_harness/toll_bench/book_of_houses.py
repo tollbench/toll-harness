@@ -17,6 +17,26 @@ from toll_harness.tools import sniff as sniffer
 
 _LOGGER = logging.getLogger("toll_harness.toll_bench")
 
+# A BID THAT ENDED DOES NOT END THE AGENT'S CHANCE (0.75.0, 2026-11-05). The
+# bench blocks a new bid only while one of this agent's bids on the want is
+# LIVE ("Withdraw it before refiling"; Steven 2026-08-05: "if you fail you
+# should be able to apply again"). WHAT FORCED IT: Milo's bid on staging want
+# 9b2fc180 was withdrawn, and the harness never looked at the want again,
+# because the brief and the board still carried `your_bid` (status withdrawn)
+# and every reader here took any `your_bid` as "already bid, done".
+DEAD_BID_STATUSES = frozenset({"withdrawn", "declined_by_agent", "expired", "rejected"})
+
+
+def bid_is_live(your_bid: Any) -> bool:
+    """True while this agent's bid on the want still blocks a new one. None or
+    an empty dict is no bid; a bid with no readable status counts as live, so
+    an unclear answer never files a second bid."""
+    if your_bid is None or your_bid == {}:
+        return False
+    if not isinstance(your_bid, dict):
+        return True
+    return str(your_bid.get("status") or "").strip().lower() not in DEAD_BID_STATUSES
+
 # The block door's two refusals a filing can correct once (rule 229).
 REJ_BLOCK_DECLARATION = "REJ-33"
 REJ_HOLLOW_BLOCK = "REJ-34"
@@ -1049,22 +1069,12 @@ class BookOfHousesTollBenchProvider:
                 brief = {}
             target_round = str(brief.get("round") or 1)
             your_bid = brief.get("your_bid") or None
-            if your_bid:
+            if bid_is_live(your_bid):
                 self.fleet.mark_target_reviewed(
                     agent_id=self.fleet_agent_id,
                     target_id=target_id,
                     target_round=target_round,
                 )
-                if your_bid.get("status") == "withdrawn":
-                    return {
-                        "ok": False,
-                        "error": "participation_ended_this_round",
-                        "terminal": True,
-                        "message": (
-                            "This agent withdrew from the current round; "
-                            "participation is over until the want reposts."
-                        ),
-                    }
                 return {
                     "ok": True,
                     "proposal_id": your_bid.get("proposal_id"),
@@ -1369,25 +1379,17 @@ class BookOfHousesTollBenchProvider:
             # brief the required blocks came from, one read for both.
             target_round = str(brief.get("round") or 1)
             your_bid = brief.get("your_bid") or None
-            if your_bid:
-                # Participation on the current round already exists — filed or
-                # withdrawn, production will refuse a second bid. Record the
-                # round as reviewed so the market scan moves on.
+            if bid_is_live(your_bid):
+                # A LIVE bid on the current round already exists, and the
+                # bench refuses a second one while it stands. Record the round
+                # as reviewed so the market scan moves on. A withdrawn,
+                # rejected or expired bid is over and blocks nothing
+                # (bid_is_live): this one files.
                 self.fleet.mark_target_reviewed(
                     agent_id=self.fleet_agent_id,
                     target_id=target_id,
                     target_round=target_round,
                 )
-                if your_bid.get("status") == "withdrawn":
-                    return {
-                        "ok": False,
-                        "error": "participation_ended_this_round",
-                        "terminal": True,
-                        "message": (
-                            "This agent withdrew from the current round; "
-                            "participation is over until the want reposts."
-                        ),
-                    }
                 return {
                     "ok": True,
                     "proposal_id": your_bid.get("proposal_id"),

@@ -29,6 +29,7 @@ leaves the machine unless the operator asks, and our own agents turn it on in th
 minor release because there is a new switch and a new call. Nothing removed. No fields or calls
 deprecated.
 
+- Fixed: a bid that ended (withdrawn, rejected, expired, declined) no longer stops the agent from looking at the want again. The bench blocks a new bid only while one is LIVE; the market scan, both filing paths and the bid ask now read `bid_is_live`. What forced it (2026-11-05): Milo's withdrawn bid on a staging want kept the want off his candidates for good.
 - Added: `core/thinking.py`. Every model turn on the three roads (the runtime's run, the step
   ask, the draft loop) goes, live, to `POST /api/bench/targets/{target_id}/thinking` with the
   agent's bearer: `model_call` (the model that answered, tokens, cost in cents when the price
