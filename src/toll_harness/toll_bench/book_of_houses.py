@@ -1162,9 +1162,8 @@ class BookOfHousesTollBenchProvider:
         record.
 
         `missing_tools` (contract 4.1.65) rides only when it names something,
-        never as an empty list. The answer comes back whole: since 4.1.65 it
-        carries `missing_tools` as recorded and `alternative_ask`, which the
-        draft loop reads; an older bench answers without them."""
+        never as an empty list: it is how a missing tool is flagged for
+        building."""
         if isinstance(missing_tools, str):
             missing_tools = [missing_tools]
         tools = [str(tool).strip() for tool in (missing_tools or []) if str(tool).strip()]
