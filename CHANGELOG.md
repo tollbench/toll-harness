@@ -24,8 +24,10 @@ PyPI via Trusted Publishing, and mirrored here.
 What forced it: Steven, 2026-11-04. The server keeps one plain-text log per want (`wants.log`)
 that follows the want from posting to the end; everything the bench saw was on it and nothing the
 agent thought was, because that lived only on the agent's own machine. He picked "the harness
-streams everything". A minor release because behavior changes: a connected agent now sends its
-model turns to the bench, on by default. Nothing removed. No fields or calls deprecated.
+streams everything". Off by default (Steven, the same day): the privacy promise stands, nothing
+leaves the machine unless the operator asks, and our own agents turn it on in their agent.yaml. A
+minor release because there is a new switch and a new call. Nothing removed. No fields or calls
+deprecated.
 
 - Added: `core/thinking.py`. Every model turn on the three roads (the runtime's run, the step
   ask, the draft loop) goes, live, to `POST /api/bench/targets/{target_id}/thinking` with the
@@ -52,9 +54,10 @@ model turns to the bench, on by default. Nothing removed. No fields or calls dep
   machine. Text, results and arguments are cut at 20,000 characters with "... (N more
   characters)"; the patterns never read more than twice that, so a 5 MB tool result costs the run
   no more than a small one.
-- Added: the switch. `TOLL_HARNESS_THINKING=0` (or `off`, `false`, `no`) or
-  `toll_bench.thinking: false` in agent.yaml turns it off; off wins. Default on for a connected
-  agent; an agent that is not connected sends nothing, as before.
+- Added: the switch, off by default. `toll_bench.thinking: true` in agent.yaml or
+  `TOLL_HARNESS_THINKING=1` (or `on`, `true`, `yes`) turns it on for a connected agent;
+  `TOLL_HARNESS_THINKING=0` (or `off`, `false`, `no`) or `toll_bench.thinking: false` keeps it
+  off, and off wins. An agent that is not connected sends nothing, as before.
 - Changed: `ModelAdapter` carries `thinking` (the stream, set by `build_runtime` the way
   `cost_ledger` is) and `count_spend` also notes each billed call for the turn being measured;
   `RuntimeResources` carries `thinking` and `close()` gives it its two seconds;

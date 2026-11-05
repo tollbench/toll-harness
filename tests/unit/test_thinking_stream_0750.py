@@ -459,7 +459,7 @@ def test_the_switch_off_sends_nothing(monkeypatch, word):
 
 
 def test_the_config_switch_reads_true_false_and_refuses_a_typo():
-    assert thinking.configured_switch(None) is True
+    assert thinking.configured_switch(None) is None
     assert thinking.configured_switch(True) is True
     assert thinking.configured_switch(False) is False
     assert thinking.configured_switch("off") is False
@@ -486,9 +486,48 @@ def _fake_model(monkeypatch):
     )
 
 
-def test_build_runtime_hangs_the_stream_on_the_model(tmp_path, monkeypatch):
+@pytest.mark.parametrize("word", [None, "", "maybe"])
+def test_the_switch_is_off_unless_someone_turns_it_on(monkeypatch, word):
+    if word is None:
+        monkeypatch.delenv("TOLL_HARNESS_THINKING", raising=False)
+    else:
+        monkeypatch.setenv("TOLL_HARNESS_THINKING", word)
+    assert thinking.enabled() is False
+    assert thinking.enabled(None) is False
+    assert thinking.enabled(True) is True
+    assert thinking.enabled(False) is False
+
+
+@pytest.mark.parametrize("word", ["1", "on", "true", " YES "])
+def test_the_environment_turns_it_on_and_off_still_wins(monkeypatch, word):
+    monkeypatch.setenv("TOLL_HARNESS_THINKING", word)
+    assert thinking.enabled() is True
+    assert thinking.enabled(False) is False  # the agent.yaml off beats the environment's on
+    monkeypatch.setenv("TOLL_HARNESS_THINKING", "0")
+    assert thinking.enabled(True) is False  # the environment's off beats the agent.yaml on
+
+
+def test_a_connected_agent_sends_nothing_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOLL_HARNESS_THINKING", raising=False)
     _fake_model(monkeypatch)
     resources = config_module.build_runtime(_connected_config(tmp_path))
+    try:
+        assert resources.thinking is None
+        assert getattr(resources.runtime.model, "thinking", None) is None
+    finally:
+        resources.close()
+
+
+@pytest.mark.parametrize("how", ["config", "env"])
+def test_build_runtime_hangs_the_stream_on_the_model(tmp_path, monkeypatch, how):
+    _fake_model(monkeypatch)
+    if how == "env":
+        monkeypatch.setenv("TOLL_HARNESS_THINKING", "1")
+        path = _connected_config(tmp_path)
+    else:
+        monkeypatch.delenv("TOLL_HARNESS_THINKING", raising=False)
+        path = _connected_config(tmp_path, thinking=True)
+    resources = config_module.build_runtime(path)
     try:
         assert isinstance(resources.thinking, ThinkingStream)
         assert resources.runtime.model.thinking is resources.thinking
@@ -502,9 +541,10 @@ def test_build_runtime_with_the_switch_off_has_no_stream(tmp_path, monkeypatch, 
     _fake_model(monkeypatch)
     if how == "env":
         monkeypatch.setenv("TOLL_HARNESS_THINKING", "off")
-        path = _connected_config(tmp_path)
+        path = _connected_config(tmp_path, thinking=True)  # off wins over the yaml's on
     else:
-        path = _connected_config(tmp_path, thinking=False)
+        monkeypatch.setenv("TOLL_HARNESS_THINKING", "on")
+        path = _connected_config(tmp_path, thinking=False)  # and over the environment's on
     resources = config_module.build_runtime(path)
     try:
         assert resources.thinking is None

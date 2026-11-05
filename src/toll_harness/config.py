@@ -414,7 +414,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
             config_path=config_path,
         )
     toll_bench_config = config.get("toll_bench", {})
-    # 0.75.0: `toll_bench.thinking` (default true) and TOLL_HARNESS_THINKING;
+    # 0.75.0: `toll_bench.thinking` (default off) and TOLL_HARNESS_THINKING;
     # off wins. Read here so a typo is a load error, like every other key.
     thinking_on = thinking.configured_switch(toll_bench_config.get("thinking"))
     connected_api = None
@@ -528,7 +528,7 @@ def build_runtime(path: str | Path) -> RuntimeResources:
     # stream rides the model adapter (the three roads all hold it) and masks
     # the agent's own token wherever it would appear.
     thinking_stream = None
-    if connected_api is not None and thinking_on and thinking.enabled():
+    if connected_api is not None and thinking.enabled(thinking_on):
         thinking_stream = thinking.ThinkingStream(
             connected_api.post_thinking, secrets=[token] if token else []
         )

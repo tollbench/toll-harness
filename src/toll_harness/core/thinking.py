@@ -36,10 +36,12 @@ key / secret / token / password are masked before an entry leaves the
 machine (the server masks too). Text, arguments and results are cut at 20,000
 characters, saying how many more there were.
 
-THE SWITCH. On by default. ``TOLL_HARNESS_THINKING=0`` (or ``off``,
-``false``, ``no``) or ``toll_bench.thinking: false`` in agent.yaml turns it
-off; off wins. Read at call time, so the environment can turn a running
-stream off.
+THE SWITCH. Off by default: nothing leaves the machine unless the operator
+asks. ``toll_bench.thinking: true`` in agent.yaml or ``TOLL_HARNESS_THINKING=1``
+(or ``on``, ``true``, ``yes``) turns it on for a connected agent.
+``TOLL_HARNESS_THINKING=0`` or ``toll_bench.thinking: false`` keeps it off, and
+off wins over on. The environment's off is also read at call time, so it can
+stop a running stream.
 """
 
 from __future__ import annotations
@@ -86,13 +88,13 @@ MASK = "[REDACTED]"
 # ---------------------------------------------------------------------------
 # 1. The switch
 # ---------------------------------------------------------------------------
-def configured_switch(value: Any) -> bool:
-    """agent.yaml ``toll_bench.thinking`` as a bool: unset is on.
+def configured_switch(value: Any) -> bool | None:
+    """agent.yaml ``toll_bench.thinking``: True, False, or None when unset.
 
     A typo is a load error rather than a guess, the way every other agent.yaml
     key is read."""
     if value is None or isinstance(value, bool):
-        return value is not False
+        return value
     word = str(value).strip().lower()
     if word in OFF_VALUES:
         return False
@@ -101,14 +103,26 @@ def configured_switch(value: Any) -> bool:
     raise ValueError("toll_bench.thinking must be true or false")
 
 
+def _env_word() -> str:
+    return str(os.environ.get(THINKING_ENV, "")).strip().lower()
+
+
+def switched_off() -> bool:
+    """The environment says off (read at call time; it stops a running stream)."""
+    return _env_word() in OFF_VALUES
+
+
 def enabled(configured: Any = None) -> bool:
-    """On unless the environment or the configuration says off. Off wins."""
-    if str(os.environ.get(THINKING_ENV, "")).strip().lower() in OFF_VALUES:
+    """Off unless the configuration or the environment says on. Off wins."""
+    if switched_off():
         return False
     try:
-        return configured_switch(configured)
+        said = configured_switch(configured)
     except ValueError:
         return False
+    if said is not None:
+        return said
+    return _env_word() in ON_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +816,7 @@ def stream_of(holder: Any) -> ThinkingStream | None:
     """The stream a model adapter carries (``model.thinking``), or None when
     there is none or the switch is off."""
     stream = getattr(holder, "thinking", None)
-    if isinstance(stream, ThinkingStream) and enabled():
+    if isinstance(stream, ThinkingStream) and not switched_off():
         return stream
     return None
 

@@ -262,8 +262,9 @@ end of a run or step; a failed batch is dropped and counted in one local line at
 404 pauses that want for ten minutes. Secrets are masked before anything leaves the machine
 (bearer tokens, `sk-`/`rk-`/`pk-` keys, the agent's own token, anything under a key named like
 key / secret / token / password), and every text, result and argument list is cut at 20,000
-characters. `TOLL_HARNESS_THINKING=0` or `toll_bench.thinking: false` in `agent.yaml` turns it
-off; off wins.
+characters. Off unless you turn it on: `toll_bench.thinking: true` in `agent.yaml` (or
+`TOLL_HARNESS_THINKING=1`); `TOLL_HARNESS_THINKING=0` or `toll_bench.thinking: false` keeps it
+off, and off wins.
 
 ## Update checks
 
@@ -292,7 +293,7 @@ or delays a command: an unreachable network is reported and the command proceeds
 | `TOLL_HARNESS_UPDATE_CHECK=0` (or `off`, `false`) | Turns the check off entirely |
 | `TOLL_HARNESS_UPDATE_CHECK_SECONDS` | Minimum seconds between checks (default `3600`) |
 | `TOLL_HARNESS_CONTEXT_WINDOW_TOKENS` | The model's context window across a fleet; `model.context_window_tokens` wins |
-| `TOLL_HARNESS_THINKING=0` (or `off`, `false`) | Turns the thinking stream off; `toll_bench.thinking: false` does the same per agent, and off wins |
+| `TOLL_HARNESS_THINKING=1` (or `on`, `true`) | Turns the thinking stream on (off by default); `toll_bench.thinking: true` does the same per agent. `0` / `off` / `false` (or `toll_bench.thinking: false`) keeps it off, and off wins |
 
 See [architecture](docs/architecture.md), [principles](docs/principles.md), [capabilities](docs/tools.md),
 [privacy](docs/privacy.md), [providers](docs/providers.md), and [onboarding](docs/onboarding.md).
