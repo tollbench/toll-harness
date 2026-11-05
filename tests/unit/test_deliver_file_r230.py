@@ -344,7 +344,7 @@ def test_a_claim_link_only_rides_a_hosted_file():
     assert refused["error"] == "claim_url_without_file_url"
 
 
-def test_file_outcome_takes_exactly_one_of_text_document_or_file_url():
+def test_file_outcome_takes_exactly_one_of_text_document_url_or_file_url():
     provider = BookOfHousesTollBenchProvider(_OutcomeApi())
 
     refused = provider.file_outcome(
@@ -352,7 +352,30 @@ def test_file_outcome_takes_exactly_one_of_text_document_or_file_url():
     )
 
     assert refused["error"] == "exactly_one_outcome_content_required"
-    assert refused["allowed"] == ["text", "document", "file_url"]
+    assert refused["allowed"] == ["text", "document", "url", "file_url"]
+    both = provider.file_outcome(
+        "t", {"note": "n", "url": "https://x/y", "text": "words"}, "k"
+    )
+    assert both["error"] == "exactly_one_outcome_content_required"
+
+
+def test_a_link_step_files_its_url():
+    # WHAT FORCED IT (2026-11-05): the bench's form for a link step REQUIRES
+    # `url`; this provider refused the field, so Milo looped on a done step.
+    api = _OutcomeApi()
+    provider = BookOfHousesTollBenchProvider(api)
+
+    result = provider.file_outcome(
+        "target-1",
+        {"note": "On your calendar.", "url": "https://calendar.google.com/event?eid=abc",
+         "step_ref": "step-4"},
+        "idem-1",
+    )
+
+    assert result == {"ok": True, "receipt_id": "r-1"}
+    _, payload, _ = api.filed[0]
+    assert payload["url"] == "https://calendar.google.com/event?eid=abc"
+    assert "text" not in payload and "document" not in payload and "file_url" not in payload
 
 
 # --------------------------------------------------------------------------

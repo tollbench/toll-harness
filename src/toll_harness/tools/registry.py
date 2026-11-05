@@ -1988,6 +1988,14 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
                 ["blocks"],
             ),
             "step_ref": {"type": "string"},
+            "url": {
+                "type": "string",
+                "description": (
+                    "The link a step promised (its deliverable channel is `link`): "
+                    "the address of the finished thing, such as the calendar event "
+                    "or the published page. The bench's link gate checks it."
+                ),
+            },
             "file_url": {
                 "type": "string",
                 "description": (
@@ -2087,7 +2095,8 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             "toll_bench.file_outcome",
             (
                 "File the current step's final handover after a 100% pulse. Send exactly one of "
-                "text, document or file_url; APPROVE review steps require a sectioned document. "
+                "text, document, url or file_url; a step that promised a link takes url. "
+                "APPROVE review steps require a sectioned document. "
                 "RULE 230: if this step's signed plan promised a FILE, it does not close on "
                 "words -- deliver the bytes first with toll_bench.deliver_file, or file the "
                 "outcome with file_url through toll_bench.deliver_hosted_file. A text section "

@@ -63,6 +63,12 @@ deprecated.
   `RuntimeResources` carries `thinking` and `close()` gives it its two seconds;
   `BookOfHousesApiClient.post_thinking(target_id, payload)`. With the stream off every model
   call, response and request is byte for byte what it was.
+- Fixed: a step that promised a link can be handed in. `file_outcome` takes `url` as the
+  filing's one content (alongside `text`, `document` and `file_url`), and the
+  `toll_bench.file_outcome` schema carries it. What forced it (2026-11-05): the bench's outcome
+  form REQUIRES `url` on a link step, the provider refused the field before it left the
+  machine, and without it the form's own schema refused the filing, so a staging agent looped on
+  a finished calendar step.
 
 ## 0.74.0 — The thin core, 2026-10-31
 

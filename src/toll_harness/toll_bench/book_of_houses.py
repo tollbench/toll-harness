@@ -2012,8 +2012,14 @@ class BookOfHousesTollBenchProvider:
         # `last_round` (bench contract 4.1.42; 0.66.0): the round that
         # finishes a step done in rounds. Refused here until 0.66.0, which is
         # how Dr. Moose's last painting round could never be handed in.
-        allowed = {"note", "text", "document", "step_ref", "file_url", "claim_url", "filename",
-                   "proof", "last_round", "pack_handoff"}
+        # `url` (0.75.0, 2026-11-05): the link a step promised (deliverable
+        # channel `link`). WHAT FORCED IT: the bench's outcome form REQUIRES
+        # `url` on a link step and this list refused it before it left the
+        # machine, so Milo looped on a done calendar step: with `url` refused
+        # here, without it refused by the form. The bench's link gate judges
+        # the address.
+        allowed = {"note", "text", "document", "step_ref", "url", "file_url", "claim_url",
+                   "filename", "proof", "last_round", "pack_handoff"}
         unexpected = sorted(set(outcome) - allowed)
         if unexpected:
             return {
@@ -2025,13 +2031,13 @@ class BookOfHousesTollBenchProvider:
         if not note or len(note) > 280:
             return {"ok": False, "error": "invalid_delivery_note"}
         content_fields = [
-            name for name in ("text", "document", "file_url") if outcome.get(name)
+            name for name in ("text", "document", "url", "file_url") if outcome.get(name)
         ]
         if len(content_fields) != 1:
             return {
                 "ok": False,
                 "error": "exactly_one_outcome_content_required",
-                "allowed": ["text", "document", "file_url"],
+                "allowed": ["text", "document", "url", "file_url"],
             }
         if outcome.get("claim_url") and not outcome.get("file_url"):
             return {
