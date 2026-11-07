@@ -202,6 +202,41 @@ def with_the_person_said(instruction: str, payload: dict, answer: Any) -> str:
     return instruction + "\n" + PERSON_SAID_INSTRUCTION
 
 
+# THE PITCH THE PERSON PICKED (bench contract 4.1.67, 2026-11-06). Every
+# plan-door answer carries `your_pitch` {pitch_title, headline, pitch_body,
+# note}: the proposal the person picked this agent for, as filed, or null
+# before the pick. WHAT FORCED IT: on want 9b2fc180 Sam pitched "I can't place
+# the call, but I make sure you do", was picked, and 40 s later wrote a plan
+# in which Sam placed the call himself; the form ask carried `your_proposal`
+# (the bid's steps, empty since rule 243) and never the pitch's words. The
+# words ride the tail payload of the form ask and of every fix round, and the
+# bench's own sentence hangs under the instruction. The prefix stays byte for
+# byte the same, so the provider cache still hits. Absent on an older bench,
+# nothing changes.
+YOUR_PITCH_KEY = "your_pitch"
+
+
+def with_your_pitch(instruction: str, payload: dict, answer: Any) -> str:
+    """Put the pitch the person picked into the tail payload and hang the
+    bench's sentence (`note`) under the instruction. The instruction comes
+    back unchanged when the bench sent no pitch."""
+    pitch = answer.get(YOUR_PITCH_KEY) if isinstance(answer, dict) else None
+    if not isinstance(pitch, dict):
+        return instruction
+    words = {
+        key: pitch.get(key)
+        for key in ("pitch_title", "headline", "pitch_body")
+        if pitch.get(key)
+    }
+    if not words:
+        return instruction
+    payload[YOUR_PITCH_KEY] = words
+    note = " ".join(str(pitch.get("note") or "").split())
+    if not note:
+        return instruction
+    return instruction + "\n`your_pitch`: " + note
+
+
 # THE WHO STEP IS THE AGENT'S PICK (rule 238, amended 2026-09-12).
 #
 # WHAT FORCED IT: on production, 2026-09-12, the bench INSERTED its own who
@@ -2510,6 +2545,7 @@ class DraftLoop:
         instruction = with_the_person_said(
             form_instruction(self.own_means), payload, answer
         )
+        instruction = with_your_pitch(instruction, payload, answer)
         if answer.get("change_request"):
             instruction += (
                 "\nThe person requested a revision in change_request. Read the existing "
@@ -3370,6 +3406,7 @@ class DraftLoop:
                     "say": pointed.get("say"),
                 }
             instruction = with_the_person_said(instruction, payload, answer)
+            instruction = with_your_pitch(instruction, payload, answer)
             what = f"fix {len(red)} red row(s)"
             self.log.info(
                 "draft loop %s target=%s round=%d: %d red row(s) on %d step(s), "
