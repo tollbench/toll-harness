@@ -1802,7 +1802,7 @@ class BookOfHousesTollBenchProvider:
         method = str(method or "GET").upper()
         path = str(path or "").strip()
         if "{" in path or "}" in path:
-            return {"ok": False, "error": "path_not_filled",
+            return {"ok": False, "refused_by": "harness", "error": "path_not_filled",
                     "message": "Put the real ids in place of every {...} in the path."}
         try:
             door = doors.match_door(self._published_doors(), method, path)
@@ -1811,7 +1811,7 @@ class BookOfHousesTollBenchProvider:
         except BookOfHousesApiError as error:
             return {"ok": False, "error": "contract_unreadable", "detail": error.message}
         if door is None:
-            return {"ok": False, "error": "door_not_published",
+            return {"ok": False, "refused_by": "harness", "error": "door_not_published",
                     "message": f"{method} {path} is not a door this bench publishes; "
                                "toll_bench.doors lists them."}
         if method != "GET" and not idempotency_key:
@@ -1844,7 +1844,7 @@ class BookOfHousesTollBenchProvider:
                 method, endpoint = head.upper(), rest.strip()
         endpoint = endpoint.replace("{deal_id}", str(deal_id)).replace("{step_id}", str(step_id))
         if not endpoint.startswith("/api/bench/"):
-            return {"ok": False, "error": "form_has_no_bench_endpoint",
+            return {"ok": False, "refused_by": "harness", "error": "form_has_no_bench_endpoint",
                     "message": "This form names no /api/bench/ endpoint to post to."}
         try:
             return self.api.post_form(method, endpoint, body, idempotency_key)
@@ -1863,7 +1863,7 @@ class BookOfHousesTollBenchProvider:
         # and history trimming can omit an older exact returned item.
         current = self.api.current_step(deal_id)
         if not matches_current(current, deal_id, step_id, correction):
-            return {"ok": False, "error": "source_correction_changed",
+            return {"ok": False, "refused_by": "harness", "error": "source_correction_changed",
                     "message": "Read attention again; this exact correction is no longer ready."}
         return self._file_act(deal_id, step_id,
                               {"kind": "calls", "source_correction": dict(correction)},
@@ -1927,14 +1927,14 @@ class BookOfHousesTollBenchProvider:
         allowed = {"reason"}
         unexpected = sorted(set(dismissal) - allowed)
         if unexpected:
-            return {"ok": False, "error": "invalid_dismissal_fields",
+            return {"ok": False, "refused_by": "harness", "error": "invalid_dismissal_fields",
                     "unexpected_fields": unexpected}
         reason = str(dismissal.get("reason") or "").strip()
         if not reason:
-            return {"ok": False, "error": "missing_dismissal_field",
+            return {"ok": False, "refused_by": "harness", "error": "missing_dismissal_field",
                     "field": "reason"}
         if not str(reply_id or "").strip():
-            return {"ok": False, "error": "missing_reply_id"}
+            return {"ok": False, "refused_by": "harness", "error": "missing_reply_id"}
         return self.api.dismiss_reply(
             deal_id, step_id, str(reply_id).strip(), {"reason": reason[:280]},
             idempotency_key)
@@ -1950,14 +1950,15 @@ class BookOfHousesTollBenchProvider:
         allowed = {"kind", "reason"}
         unexpected = sorted(set(withdrawal) - allowed)
         if unexpected:
-            return {"ok": False, "error": "invalid_withdrawal_fields",
+            return {"ok": False, "refused_by": "harness", "error": "invalid_withdrawal_fields",
                     "unexpected_fields": unexpected}
         kind = str(withdrawal.get("kind") or "email").strip().lower()
         if kind != "email":
-            return {"ok": False, "error": "unknown_act_kind", "kinds": ["email"]}
+            return {"ok": False, "refused_by": "harness", "error": "unknown_act_kind",
+                    "kinds": ["email"]}
         reason = str(withdrawal.get("reason") or "").strip()
         if not reason:
-            return {"ok": False, "error": "missing_withdrawal_field",
+            return {"ok": False, "refused_by": "harness", "error": "missing_withdrawal_field",
                     "field": "reason"}
         return self.api.withdraw_act_declaration(
             deal_id, step_id, {"kind": kind, "reason": reason[:280]},
@@ -1975,7 +1976,7 @@ class BookOfHousesTollBenchProvider:
             required = {"summary", "labels", "artifacts"}
             if (not isinstance(handoff, dict) or not required <= set(handoff)
                     or set(handoff) - required - {"draft_suggestions"}):
-                return {"ok": False, "error": "invalid_pack_handoff"}
+                return {"ok": False, "refused_by": "harness", "error": "invalid_pack_handoff"}
             summary, labels, artifacts = (
                 handoff["summary"], handoff["labels"], handoff["artifacts"]
             )
@@ -1983,18 +1984,19 @@ class BookOfHousesTollBenchProvider:
                     or not isinstance(labels, list)
                     or any(not isinstance(label, str) for label in labels)
                     or not isinstance(artifacts, list) or len(artifacts) > 8):
-                return {"ok": False, "error": "invalid_pack_handoff"}
+                return {"ok": False, "refused_by": "harness", "error": "invalid_pack_handoff"}
             try:
                 for receipt in artifacts:
                     if not isinstance(receipt, str):
-                        return {"ok": False, "error": "invalid_pack_handoff"}
+                        return {"ok": False, "refused_by": "harness",
+                                "error": "invalid_pack_handoff"}
                     uuid.UUID(receipt)
             except (TypeError, ValueError, AttributeError):
-                return {"ok": False, "error": "invalid_pack_handoff"}
+                return {"ok": False, "refused_by": "harness", "error": "invalid_pack_handoff"}
             suggestions = handoff.get("draft_suggestions")
             if suggestions is not None:
                 if not isinstance(suggestions, list) or len(suggestions) > 8:
-                    return {"ok": False, "error": "invalid_pack_handoff"}
+                    return {"ok": False, "refused_by": "harness", "error": "invalid_pack_handoff"}
                 try:
                     for suggestion in suggestions:
                         if (not isinstance(suggestion, dict)
@@ -2003,12 +2005,13 @@ class BookOfHousesTollBenchProvider:
                                 or not isinstance(suggestion["brief"], str)
                                 or not isinstance(suggestion["artifacts"], list)
                                 or len(suggestion["artifacts"]) > 8):
-                            return {"ok": False, "error": "invalid_pack_handoff"}
+                            return {"ok": False, "refused_by": "harness",
+                                    "error": "invalid_pack_handoff"}
                         uuid.UUID(suggestion["slot_id"])
                         for receipt_id in suggestion["artifacts"]:
                             uuid.UUID(receipt_id)
                 except (TypeError, ValueError, AttributeError):
-                    return {"ok": False, "error": "invalid_pack_handoff"}
+                    return {"ok": False, "refused_by": "harness", "error": "invalid_pack_handoff"}
             # A resolved card has no live step. Its handoff is metadata for the
             # next selected agent, not a second delivery or a cost filing.
             if set(outcome) <= {"pack_handoff", "note"}:
@@ -2040,24 +2043,27 @@ class BookOfHousesTollBenchProvider:
         if unexpected:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "invalid_outcome_fields",
                 "unexpected_fields": unexpected,
             }
         note = str(outcome.get("note") or "").strip()
         if not note or len(note) > 280:
-            return {"ok": False, "error": "invalid_delivery_note"}
+            return {"ok": False, "refused_by": "harness", "error": "invalid_delivery_note"}
         content_fields = [
             name for name in ("text", "document", "url", "file_url") if outcome.get(name)
         ]
         if len(content_fields) != 1:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "exactly_one_outcome_content_required",
                 "allowed": ["text", "document", "url", "file_url"],
             }
         if outcome.get("claim_url") and not outcome.get("file_url"):
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "claim_url_without_file_url",
                 "message": (
                     "claim_url is the person's link to KEEP a hosted file, so it "
@@ -2186,6 +2192,7 @@ class BookOfHousesTollBenchProvider:
         if not title_words:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "missing_title",
                 "message": (
                     "title is the item's real name as the person's card wears "
@@ -2195,12 +2202,14 @@ class BookOfHousesTollBenchProvider:
         if len(title_words) > 80:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "title_too_long",
                 "message": "title is at most 80 characters as the card wears it.",
             }
         if not content:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "empty_file",
                 "message": f"{name} is empty. There is nothing to deliver.",
             }
@@ -2208,6 +2217,7 @@ class BookOfHousesTollBenchProvider:
             megabytes = len(content) / (1024 * 1024)
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "file_too_large",
                 "size_bytes": len(content),
                 "limit_bytes": ARTIFACT_MAX_BYTES,
@@ -2284,6 +2294,7 @@ class BookOfHousesTollBenchProvider:
         if unexpected:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "invalid_outcome_fields",
                 "unexpected_fields": unexpected,
                 "allowed_fields": sorted(allowed),
@@ -2291,6 +2302,7 @@ class BookOfHousesTollBenchProvider:
         if not str(delivery.get("file_url") or "").strip():
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "missing_file_url",
                 "message": (
                     "file_url is the live address the platform fetches the "
@@ -2335,6 +2347,7 @@ class BookOfHousesTollBenchProvider:
         if len(words) < EVIDENCE_SUMMARY_MIN or len(words) > EVIDENCE_SUMMARY_MAX:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "invalid_evidence",
                 "field": "summary",
                 "message": (
@@ -2348,6 +2361,7 @@ class BookOfHousesTollBenchProvider:
         if len(given_links) > EVIDENCE_MAX_LINKS:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "invalid_evidence",
                 "field": "links",
                 "message": (
@@ -2362,6 +2376,7 @@ class BookOfHousesTollBenchProvider:
             if not address.lower().startswith(("http://", "https://")):
                 return {
                     "ok": False,
+                    "refused_by": "harness",
                     "error": "invalid_evidence",
                     "field": "links",
                     "message": (
@@ -2375,6 +2390,7 @@ class BookOfHousesTollBenchProvider:
         if len(given_receipts) > EVIDENCE_MAX_RECEIPTS:
             return {
                 "ok": False,
+                "refused_by": "harness",
                 "error": "invalid_evidence",
                 "field": "receipt_ids",
                 "message": (
@@ -2388,6 +2404,7 @@ class BookOfHousesTollBenchProvider:
             if not receipt:
                 return {
                     "ok": False,
+                    "refused_by": "harness",
                     "error": "invalid_evidence",
                     "field": "receipt_ids",
                     "message": (

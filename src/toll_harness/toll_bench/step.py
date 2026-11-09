@@ -107,6 +107,22 @@ REFUSED_INSTRUCTION = (
     "`the_bench_refused`. Fix exactly what they name and make the call once more."
 )
 
+# A REFUSAL MADE ON THIS MACHINE SAYS SO (2026-11-08, Sam on want 9b2fc180).
+# The provider marks every refusal it makes before sending with
+# `refused_by: "harness"`; the step labels it `harness_rejected`, not
+# `server_rejected`, and the one more try says the bench never saw it. Sam's
+# outcome named both a link and words, this harness refused it in 0 ms, and
+# the label told him the bench had.
+REFUSED_HERE_INSTRUCTION = (
+    "Your last answer was refused on this machine before it was sent; the bench "
+    "never saw it. The reason is in `the_bench_refused`. Fix exactly what it "
+    "names and make the call once more."
+)
+
+
+def _refused_here(result: dict[str, Any] | None) -> bool:
+    return isinstance(result, dict) and result.get("refused_by") == "harness"
+
 PULSE_DUE_INSTRUCTION = (
     "A progress pulse is due (rule 100): if you are not filing the outcome now, "
     "post one honest pulse."
@@ -656,7 +672,8 @@ class StepAsk:
                 "message": getattr(error, "message", None) or str(error),
             }
         if isinstance(result, dict) and not result.get("ok", True):
-            result = dict(result, failure="server_rejected")
+            result = dict(result, failure=(
+                "harness_rejected" if _refused_here(result) else "server_rejected"))
         return result if isinstance(result, dict) else {"ok": True, "result": result}
 
     def _reply(
@@ -894,7 +911,8 @@ class StepAsk:
             tail = step_tail(payload, pulse_due=pulse_due, refused=last_refusal)
             words = instruction
             if last_refusal:
-                words = (REFUSED_INSTRUCTION + " " + instruction).strip()
+                words = ((REFUSED_HERE_INSTRUCTION if _refused_here(last_refusal)
+                          else REFUSED_INSTRUCTION) + " " + instruction).strip()
             response = self._ask(
                 words, tail, f"step {number}" + (" again" if attempt == 2 else ""), definitions
             )
