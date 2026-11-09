@@ -2653,6 +2653,10 @@ class DraftLoop:
         if declined is not None:
             return self._decline(target_id, declined, file, missing_tools_of(answer))
         if not proposal.get("pitch_title") and not proposal.get("pitch_body"):
+            if file:
+                return self._decline(
+                    target_id, self._what_was_wrong(answer, "pitch_title or pitch_body"),
+                    file, cause="no_proposal")
             return self._gave_up(
                 target_id,
                 "bid",
@@ -2750,14 +2754,14 @@ class DraftLoop:
                 proposal = repaired
                 filed = self.provider.submit_proposal(target_id, proposal, idempotency_key)
                 filed = filed if isinstance(filed, dict) else {}
-                if not filed.get("ok") and filed.get("error") == REFUSED_AT_VALIDATE:
-                    self.log.warning(
-                        "proposal for target=%s: the door refused the repaired proposal "
-                        "too; nothing filed, recorded here (%s)",
-                        target_id,
-                        "; ".join(str(row.get("code") or row.get("rej") or "?")
-                                  for row in refusal_rows(filed)),
-                    )
+            if not filed.get("ok") and filed.get("error") == REFUSED_AT_VALIDATE:
+                # A GIVE-UP IS TOLD TO THE BENCH (bench 23e54d91c): the person's
+                # card waits on an agent that read the brief until it bids or
+                # passes, so nothing filed is a pass, in the door's own words.
+                rows = refusal_rows(filed) or [filed]
+                words = next((str(rows[0][key]) for key in ("say", "message", "detail", "code", "rej")
+                              if rows[0].get(key)), REFUSED_AT_VALIDATE)
+                return self._decline(target_id, words, file, cause=REFUSED_AT_VALIDATE)
         fixed = self._note_bench_fixed(target_id, "bid", filed)
         out: dict[str, Any] = {
             "ok": bool(filed.get("ok")),
@@ -2836,14 +2840,17 @@ class DraftLoop:
         return self._fit_the_body(target_id, merged)
 
     def _decline(
-        self, target_id: str, reason: str, file: bool, missing_tools: Sequence[str] = ()
+        self, target_id: str, reason: str, file: bool, missing_tools: Sequence[str] = (),
+        *, cause: str = "",
     ) -> dict[str, Any]:
         """A PASS IS AN ANSWER (contract 4.1.55). The bench is told, with what
         was missing when the model named it (contract 4.1.65, so the tool is
         flagged for building), and the caller marks the want reviewed so
         nothing more is asked on it. Whatever else the bench's answer carries
         is recorded and never acted on. A bench without the decline door
-        still gets the local record."""
+        still gets the local record. `cause` (0.75.0) names a give-up the
+        harness turned into a pass: nothing it could file."""
+        reason = " ".join(str(reason or "").split())[:DECLINE_MAX] or "No reason given."
         missing = list(missing_tools or [])
         out: dict[str, Any] = {
             "ok": True,
@@ -2857,6 +2864,8 @@ class DraftLoop:
         }
         if missing:
             out["missing_tools"] = missing
+        if cause:
+            out["cause"] = cause
         sender = getattr(self.provider, "decline_target", None)
         if file and callable(sender):
             answer = (sender(target_id, reason, missing_tools=missing) if missing
@@ -2866,8 +2875,9 @@ class DraftLoop:
                 out["declined_locally"] = True
         else:
             out["declined_locally"] = True
-        self.log.info("proposal for target=%s: declined (%s)%s%s", target_id, reason,
+        self.log.info("proposal for target=%s: declined (%s)%s%s%s", target_id, reason,
                       f"; missing: {'; '.join(missing)}" if missing else "",
+                      f"; cause: {cause}" if cause else "",
                       " -- recorded here only" if out.get("declined_locally") else "")
         return out
 

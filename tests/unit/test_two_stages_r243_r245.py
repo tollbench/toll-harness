@@ -151,7 +151,10 @@ def test_a_proposal_with_no_words_files_nothing():
     out = DraftLoop(model, bench).run(
         "t-1", kind="bid", brief={"want": "x"}, idempotency_key="k")
 
-    assert out["ok"] is False and out["error"] == "no_proposal"
+    # 0.75.0: nothing filed is a pass; this bench has no decline door, so it
+    # is recorded here only.
+    assert out["declined"] is True and out["cause"] == "no_proposal"
+    assert out["declined_locally"] is True
     assert bench.filed == []
     # 0.74.0: one more try with the parser's words, never a third.
     assert len(model.invocations) == 2

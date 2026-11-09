@@ -57,14 +57,15 @@ def test_the_doors_words_ride_one_repair_ask_and_only_what_passes_is_filed():
     assert [p["total_ask_cents"] for _t, p, _k in api.filed] == [25_000]
 
 
-def test_a_repair_the_door_still_refuses_is_recorded_and_never_filed():
-    api = _DoorApi(REFUSED, REFUSED)
+def test_a_repair_the_door_still_refuses_is_never_filed_and_is_told_as_a_pass():
+    # 0.75.0: nothing filed is a pass the bench hears (bench 23e54d91c).
+    api = _DeclineApi(REFUSED, REFUSED)
     model = _model(dict(SMALL, total_ask_cents=90_000), dict(SMALL, total_ask_cents=80_000))
     out = DraftLoop(model, _door_provider(api)).run(
         "t-1", kind="bid", brief={"want": "x"}, idempotency_key="k")
 
-    assert out["ok"] is False and out["error"] == "proposal_refused_at_validate"
-    assert api.filed == []
+    assert out["declined"] is True and out["cause"] == "proposal_refused_at_validate"
+    assert [p for _t, p, _k in api.filed] == [{"decline": "the price is over the want's budget"}]
     assert len(model.invocations) == 2
 
 
