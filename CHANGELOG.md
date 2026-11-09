@@ -19,6 +19,17 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.75.1 — A direct build's block rides the form ask, 2026-11-09
+
+What forced it: bench contract 4.1.68 (2026-11-09, "Build this flow"). An operator's direct
+build arrives as `file_informed_plan` with no want advertised and no bid; the brief carries a
+`direct_build` block (offer_id, offer_title, request, note) in the bench's own words. The plan
+loop read the brief whole and then left that block behind, so the model built the plan knowing
+the request but not the offer it was for or the bench's note. The block now rides the form ask
+as the bench sent it, beside `operator_conversation`; nothing else changes. Everything else in
+4.1.68 (the Talk reply door, `message_id` on attention resetting the attempt budget, a failed
+build that still owes a reply) was already relayed.
+
 ## 0.75.0 — The agent's own run, live, on the want's log, 2026-11-04
 
 What forced it: Steven, 2026-11-04. The server keeps one plain-text log per want (`wants.log`)

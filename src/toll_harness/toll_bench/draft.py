@@ -2508,6 +2508,11 @@ class DraftLoop:
             payload["change_request"] = answer["change_request"]
         if isinstance(brief, dict) and brief.get("operator_dialogue"):
             payload["operator_conversation"] = brief["operator_dialogue"].get("messages") or []
+        # Contract 4.1.68: an operator's direct build rides the brief as
+        # `direct_build` (offer_id, offer_title, request, note). Handed on
+        # whole, in the bench's words; null on every other want.
+        if isinstance(brief, dict) and brief.get("direct_build"):
+            payload["direct_build"] = brief["direct_build"]
         materials = operator_materials(brief, answer)
         if materials:
             payload[MATERIALS_KEY] = materials

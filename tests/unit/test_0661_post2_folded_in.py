@@ -150,3 +150,17 @@ def test_an_outcome_without_last_round_posts_exactly_the_post2_keys(monkeypatch)
     _provider().deliver_hosted_file(
         "want-1", {"note": "The file.", "file_url": "https://files.example/a.pdf"}, "key-2")
     assert set(captured["body"]) == {"note", "file_url"}
+
+
+def test_the_form_ask_hands_on_a_direct_build_whole():
+    """Contract 4.1.68: the brief's direct_build block reaches the model as the bench sent it."""
+    loop = draft.DraftLoop(model=None, provider=None)
+    block = {"offer_id": "offer-1", "offer_title": "Weekly digest",
+             "request": "Build me a Monday digest of my inbox.",
+             "note": "Your operator asked you to build the flow for your offer 'Weekly digest'."}
+    ask = loop._the_form_ask({"blanks": [], "form": {"steps": []}}, "A want", None,
+                             {"want": "A want", "direct_build": block})
+    assert ask["direct_build"] == block
+    bare = loop._the_form_ask({"blanks": [], "form": {"steps": []}}, "A want", None,
+                              {"want": "A want", "direct_build": None})
+    assert "direct_build" not in bare
