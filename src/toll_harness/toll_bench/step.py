@@ -85,6 +85,10 @@ LAST_FILING_KEY = "your_last_filing"
 # Where `cli._permitted_step_state` lists the forms the agent's tool list
 # turned off: [{"action": bench action, "tools": [the tool names missing]}].
 FORMS_TURNED_OFF = "forms_turned_off"
+# The bench's answer to a filing on a step that already closed (2026-11-08,
+# bench d6d7bebb2). Nothing the model writes changes it; the next attention
+# cycle reads the current step whole.
+NOT_THE_CURRENT_STEP = "not_the_current_step"
 _REPLY_IN_ENDPOINT = re.compile(r"/replies/([^/]+)/dismiss$")
 # A file deliver_file reads stays under the platform's own per-file cap.
 DELIVER_FILE_MAX_BYTES = 50 * 1024 * 1024
@@ -671,6 +675,8 @@ class StepAsk:
                 "status": getattr(error, "status", None),
                 "message": getattr(error, "message", None) or str(error),
             }
+            if getattr(error, "body", None):
+                result["detail"] = error.body
         if isinstance(result, dict) and not result.get("ok", True):
             result = dict(result, failure=(
                 "harness_rejected" if _refused_here(result) else "server_rejected"))
@@ -941,9 +947,21 @@ class StepAsk:
             self._note(name, result)
             if result.get("ok"):
                 break
+            if result.get("error") == NOT_THE_CURRENT_STEP:
+                detail = result.get("detail") if isinstance(result.get("detail"), dict) else {}
+                current = detail.get("current_step") if isinstance(
+                    detail.get("current_step"), dict) else {}
+                self.log.info(
+                    "step ask step %s: the bench says step %s is %s, not the current step "
+                    "(current: step %s); not asking the model again",
+                    number, detail.get("step_number", number), detail.get("step_state") or "closed",
+                    current.get("number") if current else "none",
+                )
+                break
         ok = bool(result.get("ok"))
+        closed = result.get("error") == NOT_THE_CURRENT_STEP
         outside = any(tool["action"] == OUTSIDE_EVIDENCE_ACTION for tool in tools.values())
-        if not ok and outside and name != REPORT_PARKED:
+        if not ok and outside and name != REPORT_PARKED and not closed:
             # W29: THE ONE STEP THAT MAY NOT END IN SILENCE. An approved
             # outside act whose work never came back: nobody is doing it, and
             # the person is owed that sentence in this same poll.
