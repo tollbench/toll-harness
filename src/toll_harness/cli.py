@@ -984,6 +984,17 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
              "toll_bench.submit_goal_check"}
         ) | _BOOKKEEPING_TOOLS,
     },
+    # Contract 4.1.62: the item itself carries the brief, the form and the door.
+    "funding_research": {
+        "instruction": (
+            "This is your funding pack's research card: do what its your_move says, "
+            "as its research.how says. File once with toll_bench.call at its call, "
+            "in the shape of its research.file_body."
+        ),
+        "tools": frozenset({"web.search", "web.fetch", "browser.open", "browser.observe",
+                              "browser.click", "browser.type", "browser.wait"})
+        | _BENCH_DOORS | _BOOKKEEPING_TOOLS,
+    },
     "deal_step": {
         "instruction": _DEAL_STEP_INSTRUCTION + (
             " When brief.action_pack names a released predecessor receipt, use "
@@ -1282,6 +1293,10 @@ def _obligation_key(obligation: dict[str, Any]) -> tuple[str, ...]:
     """The one piece of work an obligation names, independent of its wording."""
     if obligation.get("kind") == "goal_check":
         return ("goal_check", str(obligation.get("id") or ""))
+    if obligation.get("kind") == "funding_research":
+        # The bench's id is "<pack_id>:<due week>"; one week is one piece of work.
+        week = str(obligation.get("id") or "").partition(":")[2]
+        return ("funding_research", str(obligation.get("pack_id") or ""), week)
     if obligation.get("kind") == "act_correction":
         return ("act_correction", str(obligation.get("deal_id") or ""),
                 str(obligation.get("step_id") or ""), str(obligation.get("act_id") or ""),
@@ -1366,6 +1381,9 @@ def _loop_state(resources: Any, obligation: dict[str, Any], step: Any = None,
             for field in ("work_revision", "rejected_receipt_id",
                           "receipt_status", "handoff_state")
         }
+    if obligation.get("kind") == "funding_research":
+        # A lead the owner sends back is new work inside the same week.
+        basis["sent_back"] = (obligation.get("research") or {}).get("sent_back")
     if isinstance(step, dict):
         basis["step"] = json.loads(_deal_step_fingerprint(step))
     elif obligation.get("kind") == "file_informed_plan":

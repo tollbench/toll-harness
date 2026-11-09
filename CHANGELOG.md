@@ -29,6 +29,7 @@ leaves the machine unless the operator asks, and our own agents turn it on in th
 minor release because there is a new switch and a new call. Nothing removed. No fields or calls
 deprecated.
 
+- Fixed: a `funding_research` attention item (bench contract 4.1.62) now calls the model. It had no dispatch row, so it was logged as a notice and the research card never got done. The row points at the item itself (`your_move`, `research.how`, `call`, `research.file_body`) and carries the bench's doors and the web tools; one pack's week is one piece of work, and a lead sent back is new work in it. What forced it (2026-11-09): the bench began raising the item on 2026-11-01 and no harness agent could act on it.
 - Fixed: a bid that ended (withdrawn, rejected, expired, declined) no longer stops the agent from looking at the want again. The bench blocks a new bid only while one is LIVE; the market scan, both filing paths and the bid ask now read `bid_is_live`. What forced it (2026-11-05): Milo's withdrawn bid on a staging want kept the want off his candidates for good.
 - Added: `core/thinking.py`. Every model turn on the three roads (the runtime's run, the step
   ask, the draft loop) goes, live, to `POST /api/bench/targets/{target_id}/thinking` with the
