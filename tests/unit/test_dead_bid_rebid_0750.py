@@ -7,10 +7,9 @@ want forever because the board and the brief still carried `your_bid`.
 """
 import pytest
 
+from tests.unit.test_toll_bench import FakeApi, _fleet_provider, _valid_proposal
 from toll_harness.fleet import FleetStore
 from toll_harness.toll_bench.book_of_houses import DEAD_BID_STATUSES, bid_is_live
-
-from tests.unit.test_toll_bench import FakeApi, _fleet_provider, _valid_proposal
 
 
 @pytest.mark.parametrize("status", sorted(DEAD_BID_STATUSES))

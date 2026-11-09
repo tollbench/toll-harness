@@ -2759,8 +2759,9 @@ class DraftLoop:
                 # card waits on an agent that read the brief until it bids or
                 # passes, so nothing filed is a pass, in the door's own words.
                 rows = refusal_rows(filed) or [filed]
-                words = next((str(rows[0][key]) for key in ("say", "message", "detail", "code", "rej")
-                              if rows[0].get(key)), REFUSED_AT_VALIDATE)
+                keys = ("say", "message", "detail", "code", "rej")
+                words = next((str(rows[0][key]) for key in keys if rows[0].get(key)),
+                             REFUSED_AT_VALIDATE)
                 return self._decline(target_id, words, file, cause=REFUSED_AT_VALIDATE)
         fixed = self._note_bench_fixed(target_id, "bid", filed)
         out: dict[str, Any] = {
