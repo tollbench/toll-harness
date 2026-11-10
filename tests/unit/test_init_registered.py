@@ -2,7 +2,7 @@
 
 The token comes only from TOLL_HARNESS_AGENT_TOKEN in the process environment,
 goes straight into the secret store, and /me fills the ids. Nobody is ever
-prompted for it, and the model-rail picker offers `external`.
+prompted for it, and the one means question offers the command first (0.76.0).
 """
 
 import pytest
@@ -47,8 +47,22 @@ def _registered_answers(**overrides):
     return InitAnswers(**values)
 
 
-def _fake_api(confirmed=False, operator_name=None):
-    api = FakeBookOfHousesApi()
+class RecordApi(FakeBookOfHousesApi):
+    """The fake bench, with the system record /me carries (base_models)."""
+
+    def __init__(self, base_models=None):
+        super().__init__()
+        self.base_models = base_models
+
+    def me(self):
+        body = super().me()
+        if self.base_models is not None:
+            body["system_record"] = {"base_models": self.base_models}
+        return body
+
+
+def _fake_api(confirmed=False, operator_name=None, base_models=None):
+    api = RecordApi(base_models)
     api.expected_token = TOKEN
     api.confirmed = confirmed
     api.operator_name = operator_name
@@ -136,8 +150,9 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    grok = [{"provider": "xAI", "model": "grok-5", "version": "xAI", "brand": "Grok"}]
     monkeypatch.setattr(
-        onboarding_module, "BookOfHousesApiClient", lambda base_url: _fake_api()
+        onboarding_module, "BookOfHousesApiClient", lambda base_url: _fake_api(base_models=grok)
     )
     finished = {}
 
@@ -149,8 +164,8 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        # 0.74.0: no approach question; the mode is the last prompt before the company.
-        ["F", "my-wrapper --flag 'two words'", "", "", "Grok", "", "Oak Works"],
+        # 0.76.0: the means, the command, the mode, then the company.
+        ["1", "my-wrapper --flag 'two words'", "", "Oak Works"],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]
@@ -159,18 +174,19 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     assert cli.command_init(arguments) == 0
 
     out = capsys.readouterr().out
-    assert cli.NO_PROCESS_LINE in out
-    assert "F. Any other agent or model" in out
+    assert "Your record says the intelligence is Grok." in out
+    assert "1) a command on this machine" in out
     assert TOKEN not in out
     assert not any("token" in prompt.lower() for prompt in asked)
     config_path = finished["config_path"]
     config = load_config(config_path)
     assert config["model"]["adapter"] == "external"
     assert config["model"]["command"] == ["my-wrapper", "--flag", "two words"]
-    # The brand question follows the rail; a registered agent keeps it locally.
-    assert any(prompt.startswith(cli.INTELLIGENCE_BRAND_QUESTION) for prompt in asked)
+    # The brand is the record's, as written; no brand question is asked.
+    assert not any(prompt.startswith(cli.INTELLIGENCE_BRAND_QUESTION) for prompt in asked)
     assert config["agent"]["intelligence_brand"] == "Grok"
-    assert config["agent"]["intelligence_maker"] is None  # 0.74.0: no maker guessed
+    assert config["agent"]["intelligence"] == "Grok"
+    assert config["agent"]["intelligence_maker"] is None  # the record names none
     # /me names no company, so init asked once, with no default.
     assert f"{onboarding_module.COMPANY_QUESTION}:\n> " in asked
     assert config["agent"]["company"] == "Oak Works"
@@ -300,7 +316,7 @@ def test_cli_registered_end_to_end_loads_through_the_identity_loader(
 ):
     """No step of init is replaced: the connectivity check, the canary (which
     builds the runtime through the identity loader) and the update check all
-    run. Only the brain is scripted, and the bench is a fake."""
+    run. Only the model's replies are scripted, and the bench is a fake."""
     from toll_harness import config as config_module
     from toll_harness.config import build_runtime, load_agent_identity
 
@@ -326,7 +342,7 @@ def test_cli_registered_end_to_end_loads_through_the_identity_loader(
     _no_secret_prompt(monkeypatch)
     asked = _scripted_input(
         monkeypatch,
-        ["F", "my-wrapper", "", "", "Grok", "", *answers],
+        ["", "my-wrapper", "", *answers],
     )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--registered", "--no-worker"]

@@ -228,7 +228,8 @@ def _resolve_secret_placeholders(
         name = match.group(1)
         if context.secret_store is None:
             raise ValueError(
-                "Secret placeholders require a configured secret store, and none is available"
+                "{{secret:NAME}} references require a configured secret store, and none is "
+                "available"
             )
         secret = context.secret_store.get(name)
         if secret is None:
@@ -600,7 +601,7 @@ def build_standard_registry() -> ToolRegistry:
             (
                 "Send one HTTP request to a public host with the agent's own "
                 "credentials. Header values, the body, and the url may carry "
-                "{{secret:NAME}} placeholders resolved from the agent's secret "
+                "{{secret:NAME}} references resolved from the agent's secret "
                 "store at execution; resolved values never appear in results or "
                 "logs. Redirects are not followed: call the destination URL "
                 "directly. The Toll Bench itself is off limits; use the "

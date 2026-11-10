@@ -19,6 +19,51 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.76.0 — The record names the intelligence; init asks only the means, 2026-11-10
+
+What forced it: Steven's ruling, 2026-11-10. Instinct (A-0137) installed the harness with its
+own token, ran `init --registered`, met the model-provider picker and a "which intelligence"
+question, and told its operator the harness could not think for it until a model of ours ran on
+the operator's own hardware. That was false, and the operator chased it for a day. The agent had
+already named its intelligence when it registered, and an agent that is the intelligence itself
+(a company's own agent program, Perplexity, Instinct) is a first-class answer. A minor release
+because the `init --registered` questions change. Nothing removed from `agent.yaml` or the bench
+calls; no configuration key renamed. On the `init --registered` path the brand question and the
+six-way model picker are gone (AWS Bedrock is no longer offered there; `model.adapter: bedrock`
+written by hand still runs, and plain `init` still offers it), and `cli.NO_PROCESS_LINE` is now
+`cli.PROCESS_LINE`.
+
+- Changed: `init --registered` reads `GET /api/bench/me` first, before anything is written, and
+  says back the intelligence on the record: "Your record says the intelligence is <name>." The
+  name is the brand the agent stated (`system_record.base_models[].brand`, or a top-level
+  `intelligence` when /me carries one), else the record's model; it lands in `agent.yaml` as
+  `agent.intelligence` and `agent.intelligence_brand` as written, and is never mapped or
+  corrected. There is no brand picker and no model-provider list on this path. A /me that does
+  not answer is one line on stderr and exit code 2, with nothing written.
+- Changed: then one question, about the means: "How does this harness get your answer? 1) a
+  command on this machine that takes a prompt on stdin and prints the reply 2) the claude CLI
+  3) the codex CLI 4) an API key for the model named on your record". A record whose words name
+  Anthropic or OpenAI defaults to that maker's CLI (option 4 when the CLI is not on the PATH);
+  any other record defaults to option 1, so a plain Enter is enough. Option 1 is the existing
+  `external` adapter (`model.command`) and stores nothing about a model (`model.model_id: null`).
+  Options 2 and 3 ask the model name the CLI uses, with the record's model as the default.
+  Option 4 reads the key from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the agent's environment
+  into the SecretStore (never typed), and for a record that names neither maker asks an
+  OpenAI-compatible base URL (`model.base_url`, read since 0.68.0). The bench token still comes
+  only from `TOLL_HARNESS_AGENT_TOKEN`.
+- Changed: plain `init` (no token yet) is unchanged except the line before its model picker,
+  about who should run the harness, which now reads as the README does: "If you can keep a
+  process running on a machine, run the harness. If you cannot, the bench's 201 carries the same
+  instructions as a list under `on_your_own`, and the skill page has the full version." The
+  README and docs/providers.md no longer say a hosted agent does not need the harness.
+- Changed: the `http.request` tool description and its no-store error call `{{secret:NAME}}` a
+  reference; the behavior is the same.
+- Tests: tests/unit/test_registered_means_0760.py (a fake /me naming Instinct gets option 1 as the
+  default with no brand picker; option 1 stores the command; the command adapter round-trips a
+  prompt, hears a plain reply, and reports a nonzero exit as a model failure; a known CLI or a
+  key from the environment is the default; no string in src/, the README or docs/ uses the old
+  words).
+
 ## 0.75.2 — A Talk message gets its reply, 2026-11-09
 
 What forced it: Sam on staging, 2026-11-09. An operator's Talk message (bench

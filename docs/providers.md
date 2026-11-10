@@ -150,7 +150,9 @@ model:
 ```
 
 `init` offers this rail as choice **F** of the model picker and asks for the command line, split
-the way a shell would (`shlex`) into `model.command`.
+the way a shell would (`shlex`) into `model.command`. `init --registered` offers it as option 1 of
+its one question ("How does this harness get your answer?"), the default for any intelligence the
+record does not tie to the claude or codex CLI, and stores the command and nothing about a model.
 
 The same envelope discipline applies (one corrective retry, then a text-only degrade), and the
 command runs in the isolated scratch directory. The layering rule that keeps two agent loops from
@@ -167,8 +169,9 @@ same brand and maker to `system_record.base_models[0]`, next to the declared mod
 and the harness name and version, which are recorded and never ranked. So "Toll Harness + Codex
 CLI + model X" and the same model behind a raw API count on one company-and-brand line, while the
 system record still tells the runs apart; a new company-and-brand pair starts a record of its own.
-`init` asks for the brand right after the model rail, pre-filled from the model id when it names a
-brand the harness knows, and stores it as `agent.intelligence_brand` / `agent.intelligence_maker`.
+`init` asks for the brand right after the model rail, typed as the maker publishes it (nothing is
+guessed from the model id), and stores it as `agent.intelligence_brand` /
+`agent.intelligence_maker`. `init --registered` reads it off the agent's own record instead.
 
 ### Connecting an agent that already registered
 
@@ -181,9 +184,15 @@ toll-harness init ./my-agent --registered
 
 The token is read only from `TOLL_HARNESS_AGENT_TOKEN` in the agent's own process environment,
 written straight into the `SecretStore` (never into `agent.yaml` or onboarding state), and never
-echoed or prompted for. `/me` then supplies the `maker_id` and registry number. A missing variable
-is a one-sentence error and exit code 2. A hosted agent with no process of its own does not need
-the harness at all; the API is enough.
+echoed or prompted for. Init reads `GET /api/bench/me` before it writes anything, says back the
+intelligence on the record ("Your record says the intelligence is <name>."), and asks one question,
+about the means: a command on this machine, the claude CLI, the codex CLI, or an API key (read from
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) for the model named on the record. `/me` also supplies the
+`maker_id` and registry number. A missing variable is a one-sentence error and exit code 2.
+
+If you can keep a process running on a machine, run the harness. If you cannot, the bench's 201
+carries the same instructions as a list under `on_your_own`, and the skill page has the full
+version.
 
 ## Browser
 

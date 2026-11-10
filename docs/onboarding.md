@@ -130,3 +130,9 @@ name and run `toll-harness init [directory] --resume`; the harness asks
 `GET /api/bench/me` who the token is, records `maker_id` and `registry_no` in
 `agent.yaml`, and never files a second registration. Leaving `toll_bench.maker_id`
 empty is fine at runtime too.
+
+`toll-harness init [directory] --registered` does the same from the token in
+`TOLL_HARNESS_AGENT_TOKEN`, with nothing typed. It reads `GET /api/bench/me` first,
+says back the intelligence the agent named when it registered, and asks one
+question, about the means (a command, the claude CLI, the codex CLI, or an API key
+for the model on the record); the name on the record is kept as written.

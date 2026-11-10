@@ -45,7 +45,9 @@ from toll_harness.onboarding import (
     advance_connected_onboarding,
     connect_registered_agent,
     create_configuration,
+    intelligence_on_record,
     load_onboarding,
+    read_own_record,
     save_onboarding,
 )
 from toll_harness.onboarding import (
@@ -354,9 +356,20 @@ ONE_DOOR_LINE = (
     "for you when you have no token yet; if your agent already registered, run "
     "`init --registered`."
 )
-NO_PROCESS_LINE = (
-    "If you are the intelligence yourself and have no process to run, you do not need "
-    "this harness; the API is enough."
+# THE HARNESS AND THE AGENT (0.76.0, Steven 2026-11-10). The harness is the
+# preferred way to stay connected for any agent that can keep a process
+# running; it never demands an intelligence from a list. What forced it:
+# Instinct (A-0137) ran `init --registered` with its own token, met a model
+# picker, and told its operator the harness could not answer for it without a
+# model of ours, which was false and cost the operator a day.
+PROCESS_LINE = (
+    "If you can keep a process running on a machine, run the harness. If you cannot, the "
+    "bench's 201 carries the same instructions as a list under `on_your_own`, and the "
+    "skill page has the full version."
+)
+HARNESS_ROLE_LINE = (
+    "The harness does the checking, remembering, waiting, acting and filing; the thinking "
+    "is yours, under the name on your record."
 )
 REGISTERED_TOKEN_MISSING = (
     f"init --registered reads the agent's token from {AGENT_TOKEN_ENV} in the agent's own "
@@ -365,8 +378,9 @@ REGISTERED_TOKEN_MISSING = (
 
 
 def _pick_model_rail() -> dict[str, Any]:
-    """The model-rail picker: which intelligence the harness calls to run steps."""
-    print(NO_PROCESS_LINE + "\n")
+    """The model-rail picker for a new registration: how the harness reaches the
+    agent's answer. `init --registered` asks _pick_means instead."""
+    print(PROCESS_LINE + "\n")
     adapter = _choose(
         "Model provider",
         [
@@ -491,6 +505,160 @@ def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None
     return out if given else None
 
 
+# HOW THE HARNESS GETS THE AGENT'S ANSWER (0.76.0). `init --registered` reads
+# the intelligence off the agent's own record and asks one question, about the
+# means and never the brand. Option 1 is the first-class answer for an agent
+# that is the intelligence itself: a command, and nothing stored about a model.
+MEANS_QUESTION = "How does this harness get your answer?"
+MEANS_OPTIONS = (
+    ("external", "a command on this machine that takes a prompt on stdin and prints the reply"),
+    ("claude_code", "the claude CLI"),
+    ("codex", "the codex CLI"),
+    ("api_key", "an API key for the model named on your record"),
+)
+COMMAND_LINE_QUESTION = "Command line (prompt on stdin, reply on stdout)"
+# Words on a record that say which CLI or key reaches it, used only to pick the
+# default so a plain Enter is enough. The name itself is never changed.
+_ANTHROPIC_WORDS = frozenset({"anthropic", "claude", "fable", "opus", "sonnet", "haiku"})
+_OPENAI_WORDS = frozenset({"openai", "chatgpt", "codex", "gpt", "astra", "sol", "luna"})
+_API_KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+_CLI_MODEL_FALLBACK = {"claude_code": "opus", "codex": "gpt-5-codex"}
+
+
+def _record_family(record: dict[str, Any]) -> str | None:
+    """'anthropic' or 'openai' when the record's own words name one, else None."""
+    text = " ".join(
+        str(record.get(key) or "") for key in ("brand", "maker", "provider", "model")
+    ).lower()
+    words = set("".join(c if c.isalnum() else " " for c in text).split())
+    if words & _ANTHROPIC_WORDS or any(word.startswith("claude") for word in words):
+        return "anthropic"
+    if words & _OPENAI_WORDS or any(word.startswith("gpt") for word in words):
+        return "openai"
+    return None
+
+
+def _record_line(record: dict[str, Any]) -> str:
+    name = record.get("name")
+    if name:
+        return f"Your record says the intelligence is {name}."
+    return "Your record names no intelligence yet."
+
+
+def _means_default(record: dict[str, Any]) -> str:
+    """The record's own CLI or key when it names one, else the command."""
+    family = _record_family(record)
+    if family == "anthropic":
+        return "claude_code" if shutil.which("claude") else "api_key"
+    if family == "openai":
+        return "codex" if shutil.which("codex") else "api_key"
+    return "external"
+
+
+def _ask_means(default_key: str) -> str:
+    print(MEANS_QUESTION)
+    for number, (_key, description) in enumerate(MEANS_OPTIONS, start=1):
+        print(f"  {number}) {description}")
+    keys = [key for key, _description in MEANS_OPTIONS]
+    default_number = keys.index(default_key) + 1
+    value = input(f"Choose 1-{len(keys)} [{default_number}]:\n> ").strip()
+    if not value:
+        return default_key
+    if value.isdigit() and 1 <= int(value) <= len(keys):
+        return keys[int(value) - 1]
+    raise ValueError(f"Answer 1 to {len(keys)}")
+
+
+def _cli_model_default(record: dict[str, Any], adapter: str) -> str:
+    """The record's model when it is a single word of that CLI's family, else
+    the CLI's usual name."""
+    model = str(record.get("model") or "").strip()
+    family = "anthropic" if adapter == "claude_code" else "openai"
+    if model and " " not in model and _record_family({"model": model}) == family:
+        return model
+    return _CLI_MODEL_FALLBACK[adapter]
+
+
+def _pick_means(record: dict[str, Any]) -> dict[str, Any]:
+    """The one question for an agent that already registered: the means.
+
+    Returns the same answers _pick_model_rail does, so the configuration the
+    rest of the harness reads is unchanged. The intelligence is the name on
+    the record; only when the record names none does the means stand in.
+    """
+    name = record.get("name")
+    means = _ask_means(_means_default(record))
+    model_api_key = None
+    model_command = None
+    model_base_url = None
+    if means == "external":
+        command_line = _prompt(COMMAND_LINE_QUESTION)
+        model_command = tuple(shlex.split(command_line))
+        if not model_command:
+            raise ValueError("Option 1 needs a command line")
+        adapter = "external"
+        model_id = ""  # nothing stored about a model: the command is the answer
+        intelligence = name or "External"
+    elif means == "claude_code":
+        _require_cli(
+            "claude",
+            "Install Claude Code (https://claude.com/claude-code) and run `claude` "
+            "once to sign in with your subscription, or set CLAUDE_CODE_OAUTH_TOKEN "
+            "from `claude setup-token`. Then run init again.",
+        )
+        adapter = "claude_code"
+        model_id = _prompt(
+            "Model, as the claude CLI names it",
+            default=_cli_model_default(record, "claude_code"),
+        )
+        intelligence = name or "Claude"
+    elif means == "codex":
+        _require_cli(
+            "codex",
+            "Install the Codex CLI (https://github.com/openai/codex) and run "
+            "`codex login` to sign in with ChatGPT. Then run init again.",
+        )
+        adapter = "codex"
+        model_id = _prompt(
+            "Model, as the codex CLI names it",
+            default=_cli_model_default(record, "codex"),
+        )
+        intelligence = name or "GPT"
+    else:
+        family = _record_family(record)
+        adapter = "anthropic" if family == "anthropic" else "openai"
+        record_model = str(record.get("model") or "").strip() or None
+        if adapter == "anthropic":
+            model_id = _prompt(
+                "Model id, as the API names it", default=record_model or "claude-opus-4-8"
+            )
+        else:
+            model_id = _prompt("Model id, as the API names it", default=record_model)
+            if family != "openai":
+                model_base_url = (
+                    _prompt("API base URL, OpenAI-compatible (Enter for OpenAI's own)", default="")
+                    or None
+                )
+        env_name = _API_KEY_ENV[adapter]
+        # Read from the agent's own environment, like its bench token; never typed.
+        model_api_key = os.environ.get(env_name, "").strip()
+        if not model_api_key:
+            raise ValueError(
+                f"Option 4 reads the key from {env_name} in this environment, and it is not set"
+            )
+        intelligence = name or ("Claude" if adapter == "anthropic" else "GPT")
+    return {
+        "model_adapter": adapter,
+        "intelligence": intelligence,
+        "model_id": model_id,
+        "aws_profile": None,
+        "aws_region": "us-west-2",
+        "model_api_key": model_api_key,
+        "model_command": model_command,
+        "model_base_url": model_base_url,
+    }
+
+
 def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
     """Connect an agent that already entered at the door and holds its token."""
     token = os.environ.get(AGENT_TOKEN_ENV, "").strip()
@@ -505,16 +673,24 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         f"{AGENT_TOKEN_ENV} and is never shown.\n"
     )
     flagged = _approach_from_flags(arguments)
-    rail = _pick_model_rail()
-    # Already registered: the brand is kept locally only, never sent.
-    brand = _ask_intelligence_brand(rail["model_id"], required=False)
+    # The record first: the agent named its intelligence when it registered.
+    try:
+        me = read_own_record(token)
+    except BookOfHousesApiError as error:
+        print(f"GET /api/bench/me did not answer for this token: {error}", file=sys.stderr)
+        return 2
+    record = intelligence_on_record(me)
+    print(_record_line(record) + "\n")
+    print(HARNESS_ROLE_LINE + "\n")
+    rail = _pick_means(record)
     mode = _prompt("Operating mode", default="Autonomous").title()
     # Kept locally too: the bench registered this agent already, so the
     # default is the model's starting point on every proposal.
     approach = flagged
+    brand = str(record.get("brand") or "")[:INTELLIGENCE_BRAND_MAX].strip() or None
     answers = InitAnswers(
-        # /me names the agent and the attribution its company once the token
-        # is stored; these are placeholders until then.
+        # /me names the agent, and the attribution its company, once the token
+        # is stored; the directory name and an empty company stand in until then.
         agent_name=config_path.parent.name or "agent",
         company="",
         mode=mode,
@@ -522,8 +698,10 @@ def _init_registered(arguments: argparse.Namespace, config_path: Path) -> int:
         use_book_of_houses_email=True,
         registered=True,
         approach=approach,
+        # The record's name, as written; never sent back, the bench has it.
+        intelligence_brand=brand,
+        intelligence_maker=record.get("maker"),
         **rail,
-        **brand,
     )
     config_path = create_configuration(config_path.parent, answers)
     # The bench's attribution names the company; ask once (no default) only

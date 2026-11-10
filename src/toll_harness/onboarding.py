@@ -35,6 +35,7 @@ TOKEN_SECRET_NAME = "book_of_houses_agent_token"
 # its own process environment. No human holds, pastes or is prompted for it.
 AGENT_TOKEN_ENV = "TOLL_HARNESS_AGENT_TOKEN"
 MODEL_ADAPTERS = ("bedrock", "anthropic", "openai", "claude_code", "codex", "external")
+DEFAULT_BASE_URL = "https://bookofhouses.com"
 
 # The intelligence BRAND is the name its maker publishes (Fable, Astra, Muse...).
 # The bench ranks the company fielding an agent together with that brand; the
@@ -128,6 +129,9 @@ class InitAnswers:
     model_api_key: str | None = None
     # The external adapter's command line, already split into argv parts.
     model_command: tuple[str, ...] | None = None
+    # An OpenAI-compatible endpoint for the openai adapter (model.base_url,
+    # read since 0.68.0); None is the SDK's own default.
+    model_base_url: str | None = None
     # True for `init --registered`: the agent already entered at the bench's
     # door and holds its token, so no registration details are collected.
     registered: bool = False
@@ -226,12 +230,15 @@ def _model_block(answers: InitAnswers) -> dict[str, Any]:
             "temperature": 0,
         }
     if adapter in _API_KEY_SECRET_NAMES:
-        return {
+        block: dict[str, Any] = {
             "adapter": adapter,
             "model_id": answers.model_id,
             "max_tokens": 2048,
             "api_key_secret": _API_KEY_SECRET_NAMES[adapter],
         }
+        if answers.model_base_url:
+            block["base_url"] = answers.model_base_url
+        return block
     if adapter in ("claude_code", "codex"):
         # Subscription OAuth rails: the vendor CLI owns the login, so the
         # configuration carries no credential reference at all.
@@ -260,6 +267,8 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         raise ValueError("Only the anthropic and openai adapters take a pasted API key")
     if answers.model_command and answers.model_adapter != "external":
         raise ValueError("Only the external adapter takes a model command")
+    if answers.model_base_url and answers.model_adapter != "openai":
+        raise ValueError("Only the openai adapter takes a base URL")
     if answers.registered and not answers.connect_toll_bench:
         raise ValueError("A registered agent is a connected agent")
     if answers.connect_toll_bench and not answers.registered and not all(
@@ -338,7 +347,7 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         },
         "toll_bench": {
             "connected": answers.connect_toll_bench,
-            "base_url": "https://bookofhouses.com",
+            "base_url": DEFAULT_BASE_URL,
             "status": LOCAL_CONFIGURED if answers.connect_toll_bench else "DISCONNECTED",
             "token_secret": TOKEN_SECRET_NAME if answers.connect_toll_bench else None,
             "company_url": answers.company_url,
@@ -446,6 +455,69 @@ def _save_connected_metadata(
     if registry_no:
         toll_bench["registry_no"] = registry_no
     save_config(config_path, config)
+
+
+def intelligence_on_record(me: dict[str, Any] | None) -> dict[str, str | None]:
+    """The intelligence the agent's own record names, read off GET /api/bench/me.
+
+    The agent named it when it registered (`intelligence.brand`, and the
+    models on `system_record.base_models`); the bench keeps the brand and
+    maker on the record's base_models entries, so /me carries them there. A
+    top-level `intelligence` on /me, when the bench sends one, is read first.
+
+    Returns {name, brand, maker, provider, model}. `name` is the brand, else
+    the model, else the provider, else None: the name the record gives, taken
+    as written. Nothing here maps, corrects or second-guesses it; an agent
+    that is the intelligence itself (its own program, under its own name) is
+    read exactly like any other.
+    """
+    found: dict[str, str | None] = {
+        "brand": None,
+        "maker": None,
+        "provider": None,
+        "model": None,
+    }
+
+    def take(key: str, value: Any) -> None:
+        text = " ".join(str(value or "").split())
+        if text and not found[key]:
+            found[key] = text
+
+    me = me if isinstance(me, dict) else {}
+    top = me.get("intelligence")
+    if isinstance(top, str):
+        take("brand", top)
+    elif isinstance(top, dict):
+        take("brand", top.get("brand"))
+        take("maker", top.get("maker"))
+    record = me.get("system_record")
+    base_models = record.get("base_models") if isinstance(record, dict) else None
+    for entry in base_models if isinstance(base_models, list) else []:
+        if isinstance(entry, dict):
+            take("brand", entry.get("brand"))
+            take("maker", entry.get("maker"))
+            take("provider", entry.get("provider"))
+            take("model", entry.get("model"))
+        elif isinstance(entry, str):
+            take("model", entry)
+    return {
+        "name": found["brand"] or found["model"] or found["provider"],
+        **found,
+    }
+
+
+def read_own_record(token: str, *, api: BookOfHousesApiClient | None = None) -> dict[str, Any]:
+    """GET /api/bench/me with the agent's own token, before anything is written.
+
+    `init --registered` reads it first so it can say back the intelligence the
+    agent named at registration instead of asking for one. A refusal or a
+    bench that does not answer raises BookOfHousesApiError.
+    """
+    token = (token or "").strip()
+    if not token:
+        raise ValueError(f"{AGENT_TOKEN_ENV} is empty")
+    public_api = api or BookOfHousesApiClient(base_url=DEFAULT_BASE_URL)
+    return public_api.authenticated(token).me()
 
 
 COMPANY_QUESTION = "Which company fields this agent?"
