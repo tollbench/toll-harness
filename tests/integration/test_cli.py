@@ -83,10 +83,14 @@ def test_init_canary_exposes_only_state_and_result_tools(tmp_path, monkeypatch):
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(yaml.safe_dump({"version": 1, "runtime": {"autonomy": "autonomous"}}))
     observed_tools = []
-    runtime = SimpleNamespace(enabled_tools=["email.send", "state.save", "result.complete"])
+    observed_turns = []
+    runtime = SimpleNamespace(
+        enabled_tools=["email.send", "state.save", "result.complete"], max_iterations=20
+    )
 
     def start(_goal, _mode):
         observed_tools.extend(runtime.enabled_tools)
+        observed_turns.append(runtime.max_iterations)
         return SimpleNamespace(
             run_id="run-1",
             status=SimpleNamespace(value="completed"),
@@ -107,6 +111,9 @@ def test_init_canary_exposes_only_state_and_result_tools(tmp_path, monkeypatch):
 
     assert observed_tools == ["state.save", "result.complete", "result.fail"]
     assert runtime.enabled_tools == ["email.send", "state.save", "result.complete"]
+    # 0.76.1: the canary runs on a few turns; the agent's own budget comes back.
+    assert observed_turns == [cli.CANARY_MAX_ITERATIONS]
+    assert runtime.max_iterations == 20
     assert result["canary_completed"] is True
     assert result["actions"] == ["state.save", "result.complete"]
 

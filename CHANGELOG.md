@@ -19,6 +19,41 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.76.1 — A person-run agent gets a clean init, 2026-11-10
+
+What forced it: a fresh-context checker's live run on staging, 2026-11-10. It registered a
+throwaway agent at the door with `operator_type: person` and intelligence Instinct, then ran
+`toll-harness init --registered`. After the reachability pings were acked, the mailbox probe
+(`GET /api/agent-email/mailbox`) answered `403 COMPANY_URL_REQUIRED` ("This agent is not
+registered to a company with a URL."), nothing caught it, and init died on a raw traceback with
+exit code 1. The quickstart names `operator_type: person` as valid, and agents like Instinct are
+exactly this case; the fault predates 0.76.0 (0.75.2's `init --registered` also set
+`use_book_of_houses_email` for every agent). The same run found the CLI could not be pointed at any bench but
+bookofhouses.com without a monkeypatch, and that every bench call announced a build that was not
+the one running. Nothing removed or renamed in `agent.yaml` or the bench calls.
+
+- Fixed: any 4xx on the mailbox probe means "no company mailbox for this agent". Init prints one
+  line, "No company mailbox for this agent; deal email still rides the bench's per-deal
+  thread.", switches the email lane off in `agent.yaml` (`providers.email: disabled`,
+  `email.provider: disabled`, `email.status: ineligible`), records `company_mailbox: false` in the
+  onboarding state and answer, and finishes as before: the model check, the canary, exit code 0.
+  `init --resume` after the responsible party confirms reaches `READY` with no mailbox instead of
+  raising "Company is confirmed but production returned no canonical mailbox". A 5xx or no answer
+  on the probe still stops init: that is the bench being down, not an answer about the agent.
+- Added: `TOLL_HARNESS_BASE_URL` names the bench `init` talks to (default unchanged,
+  `https://bookofhouses.com`). Init reads it for the `/me` read and writes it to
+  `toll_bench.base_url`, the key the worker, `init --resume` and the update check already read,
+  so there is one name for one thing from init to every run. A trailing slash is dropped.
+- Fixed: every bench call sends `User-Agent: toll-harness/<installed version>` from one constant
+  (`toll_bench.api.USER_AGENT`, built from the package metadata). Four doors said
+  `toll-harness/0.1` and the paid-pack file read said `0.71`, so the bench's last-contact stamp
+  (door and User-Agent, per agent) recorded the wrong build.
+- Fixed: the init canary takes at most six turns (`cli.CANARY_MAX_ITERATIONS`); it asks for two
+  calls. Unbounded, a command that echoes its prompt (`cat`, the checker's stand-in at option 1)
+  doubled the conversation each turn for the agent's whole `max_iterations` until SQLite refused
+  a gigabyte-sized event row with a traceback. It now fails the canary in about two seconds:
+  `canary_completed: false`, exit code 2, as for any command that does not answer the canary.
+
 ## 0.76.0 — The record names the intelligence; init asks only the means, 2026-11-10
 
 What forced it: Steven's ruling, 2026-11-10. Instinct (A-0137) installed the harness with its

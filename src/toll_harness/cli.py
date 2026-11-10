@@ -39,6 +39,7 @@ from toll_harness.onboarding import (
     AGENT_TOKEN_ENV,
     COMPANY_QUESTION,
     INTELLIGENCE_BRAND_MAX,
+    NO_COMPANY_MAILBOX,
     READY,
     WAITING_FOR_COMPANY_VERIFICATION,
     InitAnswers,
@@ -285,13 +286,23 @@ def _test_model_and_browser(config_path: Path) -> dict[str, Any]:
     }
 
 
+# THE CANARY'S TURNS (0.76.1). The canary asks for two calls, state.save and
+# result.complete; a few turns is room enough. Without a bound it took the
+# agent's whole max_iterations, and a command that echoes its prompt (`cat`,
+# the checker's stand-in) doubled the conversation every turn until SQLite
+# refused a gigabyte-sized event row with a traceback.
+CANARY_MAX_ITERATIONS = 6
+
+
 def _run_init_canary(config_path: Path) -> dict[str, Any]:
     resources = build_runtime(config_path)
     original_tools = resources.runtime.enabled_tools
+    original_iterations = resources.runtime.max_iterations
     try:
         config = load_config(config_path)
         mode = AutonomyMode(config["runtime"]["autonomy"])
         resources.runtime.enabled_tools = ["state.save", "result.complete", "result.fail"]
+        resources.runtime.max_iterations = min(original_iterations, CANARY_MAX_ITERATIONS)
         result = resources.runtime.start(
             "Initialization canary. Call state.save with status='ready', then call "
             "result.complete with a short confirmation.",
@@ -299,6 +310,7 @@ def _run_init_canary(config_path: Path) -> dict[str, Any]:
         )
     finally:
         resources.runtime.enabled_tools = original_tools
+        resources.runtime.max_iterations = original_iterations
         resources.close()
     actions = [
         event.payload.get("name")
@@ -326,6 +338,9 @@ def _finish_init(
     checks: dict[str, Any] | None = None,
     enable_worker: bool,
 ) -> int:
+    if result.get("company_mailbox") is False:
+        # 0.76.1: an agent no company fields has no mailbox; init goes on.
+        print(NO_COMPANY_MAILBOX + "\n")
     checks = checks or _test_model_and_browser(config_path)
     canary = _run_init_canary(config_path)
     config = load_onboarding_config(config_path)

@@ -36,6 +36,18 @@ TOKEN_SECRET_NAME = "book_of_houses_agent_token"
 AGENT_TOKEN_ENV = "TOLL_HARNESS_AGENT_TOKEN"
 MODEL_ADAPTERS = ("bedrock", "anthropic", "openai", "claude_code", "codex", "external")
 DEFAULT_BASE_URL = "https://bookofhouses.com"
+# WHICH BENCH INIT TALKS TO (0.76.1). TOLL_HARNESS_BASE_URL in the process
+# environment, else DEFAULT_BASE_URL. Init reads it once and writes it to
+# `toll_bench.base_url` in agent.yaml, the key the worker, `--resume` and the
+# update check already read, so one name carries it from init to every run.
+# A checker pointing the CLI at staging had to monkeypatch the constant.
+BASE_URL_ENV = "TOLL_HARNESS_BASE_URL"
+
+
+def bench_base_url() -> str:
+    """The bench init talks to: TOLL_HARNESS_BASE_URL, else DEFAULT_BASE_URL."""
+    return (os.environ.get(BASE_URL_ENV) or "").strip().rstrip("/") or DEFAULT_BASE_URL
+
 
 # The intelligence BRAND is the name its maker publishes (Fable, Astra, Muse...).
 # The bench ranks the company fielding an agent together with that brand; the
@@ -347,7 +359,7 @@ def create_configuration(destination: Path, answers: InitAnswers) -> Path:
         },
         "toll_bench": {
             "connected": answers.connect_toll_bench,
-            "base_url": DEFAULT_BASE_URL,
+            "base_url": bench_base_url(),
             "status": LOCAL_CONFIGURED if answers.connect_toll_bench else "DISCONNECTED",
             "token_secret": TOKEN_SECRET_NAME if answers.connect_toll_bench else None,
             "company_url": answers.company_url,
@@ -516,7 +528,7 @@ def read_own_record(token: str, *, api: BookOfHousesApiClient | None = None) -> 
     token = (token or "").strip()
     if not token:
         raise ValueError(f"{AGENT_TOKEN_ENV} is empty")
-    public_api = api or BookOfHousesApiClient(base_url=DEFAULT_BASE_URL)
+    public_api = api or BookOfHousesApiClient(base_url=bench_base_url())
     return public_api.authenticated(token).me()
 
 
@@ -614,6 +626,44 @@ def connect_registered_agent(
         registry_no=registry_no,
     )
     return advance_connected_onboarding(path, approve_registration=False, api=public_api)
+
+
+# NO COMPANY MAILBOX (0.76.1). The bench gives a mailbox only to an agent a
+# company with a URL fields; for any other agent (operator_type person, which
+# the quickstart names as valid) GET /api/agent-email/mailbox answers 403
+# COMPANY_URL_REQUIRED. Init let that escape as a traceback after the pings
+# were already acked (a checker's live `init --registered` for a person-run
+# agent, 2026-11-10). A 4xx on that probe now means "no company mailbox":
+# the email lane is switched off in agent.yaml and init goes on.
+NO_COMPANY_MAILBOX = (
+    "No company mailbox for this agent; deal email still rides the bench's per-deal thread."
+)
+
+
+def _company_mailbox(api: Any) -> dict[str, Any] | None:
+    """The agent's company mailbox, or None when the bench says it has none.
+
+    Any 4xx on the mailbox probe (403 COMPANY_URL_REQUIRED for an agent no
+    company fields) is None. A 5xx or no answer still raises: that is the
+    bench being down, not an answer about the agent.
+    """
+    try:
+        response = api.mailbox()
+    except BookOfHousesApiError as error:
+        if 400 <= int(error.status or 0) < 500:
+            return None
+        raise
+    return (response or {}).get("mailbox") or {}
+
+
+def _record_no_company_mailbox(config: dict[str, Any], state: dict[str, Any]) -> None:
+    """Switch the email lane off: the keys build_runtime reads to open it."""
+    config.setdefault("providers", {})["email"] = "disabled"
+    config.setdefault("email", {}).update(
+        {"provider": "disabled", "status": "ineligible", "address": None, "token_secret": None}
+    )
+    state["mailbox"] = None
+    state["company_mailbox"] = False
 
 
 def advance_connected_onboarding(
@@ -717,10 +767,17 @@ def advance_connected_onboarding(
     reachability = BookOfHousesTollBenchProvider(authenticated).ensure_reachable()
     state["reachability"] = reachability
     me = authenticated.me()
-    mailbox_response = authenticated.mailbox()
-    mailbox = mailbox_response.get("mailbox") or state.get("mailbox") or {}
+    company_mailbox = _company_mailbox(authenticated)
+    no_mailbox = company_mailbox is None
+    if no_mailbox:
+        _record_no_company_mailbox(config, state)
+        mailbox: dict[str, Any] = {}
+    else:
+        mailbox = company_mailbox or state.get("mailbox") or {}
+        state["mailbox"] = mailbox
+    # Said on every answer below when there is none, so init can print it.
+    said = {"company_mailbox": False} if no_mailbox else {}
     contact = me.get("responsible_party_contact") or {}
-    state["mailbox"] = mailbox
     state["confirmation_sent_at"] = contact.get("sent_at")
     if not contact.get("confirmed"):
         state["status"] = WAITING_FOR_COMPANY_VERIFICATION
@@ -743,10 +800,11 @@ def advance_connected_onboarding(
                 "If the address is not a monitored inbox, production support must reissue "
                 "confirmation through the existing operator-recovery process."
             ),
+            **said,
         }
 
     address = str(mailbox.get("address") or "").strip()
-    if not address:
+    if not address and not no_mailbox:
         raise RuntimeError("Company is confirmed but production returned no canonical mailbox")
     email_enabled = config.get("providers", {}).get("email") == "book_of_houses"
     if email_enabled:
@@ -754,13 +812,15 @@ def advance_connected_onboarding(
         config["email"]["address"] = address
     config["toll_bench"]["status"] = READY
     state["status"] = READY
-    state["mailbox"] = mailbox
+    if not no_mailbox:
+        state["mailbox"] = mailbox
     save_config(path, config)
     save_onboarding(path, config, state)
     return {
         "status": READY,
-        "mailbox": address,
+        "mailbox": address or None,
         "outbound_enabled": bool(mailbox.get("outbound_enabled")),
         "maker_id": maker_id,
         "registry_no": state.get("registry_no"),
+        **said,
     }

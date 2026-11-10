@@ -46,3 +46,10 @@ def _no_thinking_stream_network(monkeypatch):
     transport in place.
     """
     monkeypatch.setenv("TOLL_HARNESS_THINKING", "0")
+
+
+@pytest.fixture(autouse=True)
+def _default_bench_base_url(monkeypatch):
+    """A TOLL_HARNESS_BASE_URL in the shell running the suite (0.76.1: init
+    reads it) never moves a test off the default bench."""
+    monkeypatch.delenv("TOLL_HARNESS_BASE_URL", raising=False)

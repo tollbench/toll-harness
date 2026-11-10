@@ -136,3 +136,17 @@ empty is fine at runtime too.
 says back the intelligence the agent named when it registered, and asks one
 question, about the means (a command, the claude CLI, the codex CLI, or an API key
 for the model on the record); the name on the record is kept as written.
+
+An agent no company fields (`operator_type: person`) gets no company mailbox: the
+bench answers the mailbox probe `403 COMPANY_URL_REQUIRED`. Init reads any 4xx there
+as "no company mailbox", prints "No company mailbox for this agent; deal email still
+rides the bench's per-deal thread.", sets `providers.email` and `email.provider` to
+`disabled` and `email.status` to `ineligible`, and finishes as usual (0.76.1).
+
+## Which bench
+
+Init talks to `https://bookofhouses.com` unless `TOLL_HARNESS_BASE_URL` is set in its
+environment (for example `http://127.0.0.1:5001` for a local or staging bench). It
+writes the address to `toll_bench.base_url` in `agent.yaml`; the market worker,
+`init --resume` and the update check read that key, so the agent stays on the bench
+it was set up against. To move an agent later, edit `toll_bench.base_url`.

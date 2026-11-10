@@ -15,6 +15,14 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from toll_harness import __version__
+
+# THE ONE USER AGENT (0.76.1). Every bench call names the build actually
+# installed, from the package metadata, so the bench's last-contact stamp
+# (door + User-Agent) records the real version. It was hard-coded: 0.1 on
+# four doors and 0.71 on a fifth.
+USER_AGENT = f"toll-harness/{__version__}"
+
 GOAL_RUN_ID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
@@ -229,7 +237,7 @@ class BookOfHousesApiClient:
         url = f"{self.base_url}{path}"
         if query:
             url += "?" + urllib.parse.urlencode(query)
-        headers = {"Accept": "application/json", "User-Agent": "toll-harness/0.1"}
+        headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         body = None
         if payload is not None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -315,7 +323,7 @@ class BookOfHousesApiClient:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": "toll-harness/0.1",
+            "User-Agent": USER_AGENT,
             "Authorization": f"Bearer {self._token}",
         }
         if self.maker_id:
@@ -351,7 +359,7 @@ class BookOfHousesApiClient:
     def _request_text(self, path: str) -> str:
         request = urllib.request.Request(
             f"{self.base_url}{path}",
-            headers={"Accept": "text/plain", "User-Agent": "toll-harness/0.1"},
+            headers={"Accept": "text/plain", "User-Agent": USER_AGENT},
             method="GET",
         )
         try:
@@ -503,7 +511,7 @@ class BookOfHousesApiClient:
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             headers={"Accept": "application/octet-stream", "Authorization": f"Bearer {self._token}",
-                     "User-Agent": "toll-harness/0.1"},
+                     "User-Agent": USER_AGENT},
             method="GET",
         )
         try:
@@ -593,7 +601,7 @@ class BookOfHousesApiClient:
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             headers={"Accept": "application/octet-stream", "Authorization": f"Bearer {self._token}",
-                     "User-Agent": "toll-harness/0.71"}, method="GET",
+                     "User-Agent": USER_AGENT}, method="GET",
         )
         try:
             with urllib.request.build_opener(_RefusePackInputRedirects()).open(
