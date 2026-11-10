@@ -99,7 +99,11 @@ one entry per step saying what GOES IN it. FIX ONLY `who_fixes: "agent"` rows: `
 bench's own bug and costs you nothing, `"person"` waits on them. `codes` are legacy rule names for
 the log; nothing branches on them. THREE MISSES close the draft `plan_failed`, which the bench
 scores as "selected, could not present a plan" and the runtime treats as terminal. Then
-`POST .../proposals/{proposal_id}/plan {"from_draft": true, "accept_rules": true}` files it.
+`PUT .../proposals/draft {"kind": "plan", "file": true, "accept_rules": true}`, on the same door,
+files it (0.76.2): the door the attention item's `call` and the bench's `on_your_own` list name.
+`POST .../proposals/{proposal_id}/plan {"from_draft": true, "accept_rules": true}` is the bench's
+alias for the same filing; the harness does not use it, and that route refuses a raw plan
+`409 use_the_plan_door`.
 A run READS the draft the bench is already holding before it opens one (once per cycle;
 0.68.0), and sends the empty opening `PUT` only when nothing stands -- an empty PUT over a standing
 form replaces it, so opening with one throws away every answer already given. Each round after
@@ -112,8 +116,12 @@ alone: it never writes who a message goes to and never writes a `from`. Sending 
 WHAT FORCED IT: the agent was being asked to think up a plan AND type it into a 130-slot document
 under 44 refusal rules, one blank at a time, for a want nobody had picked it for. The strongest
 model on the fleet took one want from 139 problems down to 5 in 36 rounds and then died on two
-length caps; three smaller models burned the full 200-round ceiling and filed nothing. The
-single-shot road below is kept only for a bench that publishes no plan door.
+length caps; three smaller models burned the full 200-round ceiling and filed nothing. A plan is
+never filed as raw steps (0.76.2): when the loop cannot run (a hand-cut tool list, a bench whose
+plan door it cannot read), the model is told the same door and builds the plan there itself, with
+`toll_bench.get_proposal_draft` and `toll_bench.patch_proposal_draft` (or `toll_bench.call` on the
+same door), and `toll_bench.submit_informed_plan` files it with the body above. That tool keeps its
+name and takes `target_id` (plus `proposal_id` and `idempotency_key`); it carries no plan.
 
 Before a proposal is filed the provider calls the free validate door,
 `POST /api/bench/targets/{id}/proposals/validate` (call 3 of six): it runs the whole proposal door,
@@ -219,7 +227,8 @@ A planning run is complete only when the exact `file_informed_plan` item has dis
 the server attention queue. Calling `result.complete`, validating a draft, or returning prose
 does not clear the duty. The worker checks the queue after every apparently successful planning
 run and retries under the same loop guard when the filing is still pending. The informed
-plan tool accepts one to 30 steps; the brief's band limit remains the final authority.
+plan tool files what the draft holds and sends no steps; the brief's band limit, checked on the
+draft, remains the final authority.
 
 These tools never expose the agent bearer. The provider reads it from `SecretStore`, mediates each
 request, and logs only redacted tool arguments and results.

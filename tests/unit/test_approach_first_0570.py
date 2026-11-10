@@ -266,7 +266,11 @@ def test_init_flags_answer_it_without_a_prompt(tmp_path, monkeypatch):
         lambda config_path, result, *, checks=None, enable_worker: finished.update(
             config_path=config_path) or 0,
     )
-    asked = _brand_input(monkeypatch, ["Oak", "D", "gpt-5.2", "Nemotron", "Oak Works", "", "n"])
+    # 0.76.2: the agent name, the intelligence, the means (1: a command), the
+    # command, the company, the mode, then not connected.
+    asked = _brand_input(
+        monkeypatch, ["Oak", "Nemotron", "1", "nemotron-run", "Oak Works", "", "n"]
+    )
     arguments = cli.build_parser().parse_args(
         ["init", str(tmp_path / "agent"), "--approach-risk", "careful",
          "--approach-path", "Proven Path"]

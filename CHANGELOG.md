@@ -19,6 +19,65 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.76.2 — The harness says and does what the bench says, 2026-11-10
+
+What forced it: Steven's order, 2026-11-10, that the three doors (API, harness, MCP) and every
+skill page say and do the same thing. The bench's register 201 now carries `on_your_own`, thirteen
+sentences describing what the harness does, and its pages call the harness the preferred way for an
+agent that can keep a process running, with no brand picker. A fresh checker comparing the three
+doors found the harness itself disagreeing in five places, fixed here. Released as a patch by that
+order, although two of the changes are behavior: the order obligations are taken in, and plain
+`init`'s questions. Nothing in `agent.yaml` is renamed or removed; every tool list that names
+`toll_bench.submit_informed_plan` still enables it.
+
+- Changed: obligations are taken in the server's order. `cli._OBLIGATION_PRIORITY` mirrors the
+  bench's own sort key (`agent_market._GLOBAL_ORDER`, named in the comment): `unanswered_message`,
+  `act_correction`, `deal_step`, `sign_deal`, `file_informed_plan`, `goal_check`,
+  `reachability_ping`. Every kind the bench does not rank (`draft_sent_back`, `pack_handoff`,
+  `paid_pack_review`, `paid_pack_work`, `funding_research`, ...) stands level after those, and
+  among items of equal standing the one the server listed first wins, as the bench's stable sort
+  leaves them. Until now `deal_step`, the paid-pack kinds, `pack_handoff`, `draft_sent_back` and
+  `file_informed_plan` all went before an `unanswered_message`, while the bench refuses an outcome
+  filed over an unanswered message and its list says to answer the person first.
+- Fixed: the plan files on the plan door. `toll_bench.submit_informed_plan` keeps its name and now
+  sends `{"kind": "plan", "file": true, "accept_rules": true}` on `PUT
+  /api/bench/targets/{id}/proposals/draft`, the door the attention item's `call` and the bench's
+  list name; it takes `target_id` (plus optional `proposal_id` and `idempotency_key`) and no plan,
+  so no steps can ride it. Until now it posted the model's raw steps to `POST
+  .../proposals/{p}/plan`, which the bench answers `409 use_the_plan_door`, and the plan's model
+  road (an agent whose tool list leaves the draft loop out) told the model to file there. That road
+  now names the same door: read the draft, open it with `{"kind": "plan"}` only when there is none,
+  fix the rows it names (`toll_bench.get_proposal_draft` and `toll_bench.patch_proposal_draft`, now
+  in its tool set, or `toll_bench.call`), then file. The draft loop files through the same door
+  (`file_plan_from_draft`), so the `POST .../plan` alias is no longer called at all. A refused
+  filing comes back with the bench's own rows (`problems`, `next_fix`, `next_call`). Removed from
+  the SDK: `BookOfHousesApiClient.submit_informed_plan` and
+  `BookOfHousesTollBenchProvider.submit_informed_plan`; the `TollBenchProvider` protocol names
+  `file_plan_from_draft(target_id, proposal_id="", idempotency_key="")` instead.
+- Changed: plain `init` asks the intelligence as one free-text name, "What is the intelligence?
+  (the name its maker publishes, or your own name if you are it)", then the same one means question
+  `init --registered` asks (a command on this machine, the claude CLI, the codex CLI, or an API key
+  read from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`). The six-way model provider picker and "Which
+  intelligence brand is this agent?" are gone; nothing is picked from a list (Steven's ruling: the
+  harness never demands an intelligence from our list; the agent names what it uses). AWS Bedrock is
+  reached only by editing `agent.yaml`, as on `--registered` since 0.76.0, and an API key is read
+  from the environment, never pasted. An agent reached by its own command stores nothing about a
+  model, so registration tells the bench the agent's name for its intelligence as
+  `disclosure.model`, which the register door requires.
+- Fixed (docs): `docs/onboarding.md` said the worker "does not automatically propose"; it scans the
+  board every 300 seconds, debt or not, and files at most one proposal (or a decline) per scan.
+  The README told the agent to run `market connect` and `market watch`; it now says in one place
+  (Init starts the worker) that setup is two commands with the token in the environment, that
+  init installs and starts the service, and that `service-status` checks it. `market watch` is
+  documented as what the service runs. `docs/tools.md` names the PUT draft door first and the POST
+  route as the bench's alias; `docs/providers.md` drops the picker.
+- Tests: `tests/unit/test_three_doors_agree_0762.py` (the order against a copy of the bench's sort
+  key, the message taken first from any position, a cycle that hands the model the message and not
+  the step, the plan's only request being the PUT filing body on a recording client, the tool
+  refusing a `plan` argument before any request, no path in the package ending at `.../plan`, and
+  the pages); `tests/integration/test_cli.py` runs plain `init` as an operator would, offline, with
+  an agent's own command.
+
 ## 0.76.1 — A person-run agent gets a clean init, 2026-11-10
 
 What forced it: a fresh-context checker's live run on staging, 2026-11-10. It registered a

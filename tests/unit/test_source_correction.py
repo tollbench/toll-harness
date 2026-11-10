@@ -159,18 +159,11 @@ def test_missing_provider_and_transport_use_bounded_failure_path():
     r.runtime.start.assert_not_called()
 
 
-def test_per_act_exact_item_keys_and_existing_priority_unchanged():
+def test_per_act_exact_item_keys_and_the_correction_rides_after_the_message_debt():
     a = cli._obligation_key(ITEM)
     assert a != cli._obligation_key(dict(ITEM, act_id="returned-2"))
     assert a != cli._obligation_key(dict(ITEM, repeat_item="opaque item"))
-    assert tuple(k for k in cli._OBLIGATION_PRIORITY if k != "act_correction") == (
-        "deal_step",
-        "paid_pack_review",
-        "paid_pack_work",
-        "pack_handoff",
-        "draft_sent_back",
-        "file_informed_plan",
-        "unanswered_message",
-        "goal_check",
-    )
+    # 0.76.2: the bench's own order (agent_market._GLOBAL_ORDER): the person's
+    # message first, the correction second, the deal step third.
+    assert cli._OBLIGATION_PRIORITY[:3] == ("unanswered_message", "act_correction", "deal_step")
     assert "act_correction" not in cli._STEP_ASK_KINDS

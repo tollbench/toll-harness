@@ -132,7 +132,7 @@ def test_instinct_on_the_record_gets_the_command_as_the_default_and_no_brand_pic
     # The means, the command, the mode. No brand picker, no model provider
     # list, no model question.
     assert asked[1:] == [f"{cli.COMMAND_LINE_QUESTION}:\n> ", "Operating mode [Autonomous]:\n> "]
-    assert cli.INTELLIGENCE_BRAND_QUESTION not in out + "".join(asked)
+    assert cli.INTELLIGENCE_QUESTION not in out + "".join(asked)
     assert "Model provider" not in out
     assert not any("model" in prompt.lower() for prompt in asked)
 

@@ -237,7 +237,7 @@ def test_draft_sent_back_has_its_own_dispatch_not_the_fallback():
         or 'do NOT re-file the same words' in entry['instruction']
     assert 'toll_bench.propose_act' in entry['tools']
     assert 'toll_bench.current_step' in entry['tools']
-    assert 'draft_sent_back' in cli._OBLIGATION_PRIORITY
+    assert 'draft_sent_back' in cli._OBLIGATION_DISPATCH
 
 
 def test_the_deal_step_dispatch_can_call_both_new_doors():

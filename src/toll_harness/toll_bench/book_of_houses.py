@@ -1124,19 +1124,27 @@ class BookOfHousesTollBenchProvider:
         return self._filing_receipt(result)
 
     def file_plan_from_draft(
-        self, target_id: str, proposal_id: str, idempotency_key: str = ""
+        self, target_id: str, proposal_id: str = "", idempotency_key: str = ""
     ) -> dict[str, Any]:
         """The informed plan, filed from the draft the bench holds (rule 113
-        through rule 241). `accept_rules` rides the body because filing the
-        plan IS the agent's signature, and it is the agent's to give."""
+        through rule 241), on the plan door itself (0.76.2):
+        `PUT .../proposals/draft {"kind": "plan", "file": true,
+        "accept_rules": true}`. `accept_rules` rides the body because filing
+        the plan IS the agent's signature, and it is the agent's to give.
+        Nothing else rides: the plan is what the draft holds, never steps sent
+        from here. `proposal_id` names the filing in the log; the door reads
+        the agent's own proposal off the token.
+
+        THE ONE FILING ROAD. The draft loop files here, and so does the
+        `toll_bench.submit_informed_plan` tool (0.76.2), which until 0.76.1
+        posted the model's raw steps to `POST .../proposals/{p}/plan`, a door
+        that answers a raw plan 409 `use_the_plan_door`. A refusal comes back
+        with the bench's own rows (`problems`, `next_fix`, `next_call`, ...),
+        so the next move is a fix on the draft, never the same filing again.
+        """
         try:
             return self._filing_receipt(
-                self.api.submit_informed_plan(
-                    target_id,
-                    proposal_id,
-                    {"from_draft": True, "accept_rules": True},
-                    idempotency_key,
-                )
+                self.api.file_plan_from_draft(target_id, idempotency_key)
             )
         except BookOfHousesApiError as error:
             self._log_refusal(
@@ -1148,15 +1156,21 @@ class BookOfHousesTollBenchProvider:
                     "rej": error.rej,
                     "detail": error.message,
                     "body": getattr(error, "body", None),
-                    "from_draft": True,
+                    "proposal_id": proposal_id or None,
+                    "file": True,
                 },
             )
-            return {
+            refusal: dict[str, Any] = {
                 "ok": False,
                 "error": error.code,
                 "status": error.status,
                 "message": error.message,
             }
+            body = error.body if isinstance(error.body, dict) else {}
+            for key in ("problems", "next_fix", "next_call", *FILE_DOOR_BODY_KEYS):
+                if body.get(key) is not None and key not in refusal:
+                    refusal[key] = body[key]
+            return refusal
 
     def decline_target(
         self,
@@ -1605,45 +1619,6 @@ class BookOfHousesTollBenchProvider:
 
     def read_finalist_answers(self, target_id: str, proposal_id: str) -> dict[str, Any]:
         return self.api.finalist_answers(target_id, proposal_id)
-
-    def submit_informed_plan(
-        self,
-        target_id: str,
-        proposal_id: str,
-        plan: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """File the informed plan exactly as the model wrote it (0.74.0).
-
-        This is the road for a bench with no draft door; a 4.x bench takes the
-        plan at the draft door (`file_plan_from_draft`). It used to merge the
-        brief's blocks in, bind research, spread contacts, retire grant steps,
-        drop blank form steps and run a local mirror first -- a second copy of
-        the bench's rules that buried correct plans more than once. Now the
-        plan goes to the door as written and the door's answer comes back in
-        its own words. A refused plan writes nothing, so it is non-terminal.
-        """
-        try:
-            return self.api.submit_informed_plan(
-                target_id, proposal_id, plan, idempotency_key
-            )
-        except BookOfHousesApiError as error:
-            self._log_refusal(
-                "plan",
-                target_id,
-                {
-                    "status": error.status,
-                    "code": error.code,
-                    "rej": error.rej,
-                    "detail": error.message,
-                    "body": getattr(error, "body", None),
-                },
-            )
-            if error.rej in (REJ_BLOCK_DECLARATION, REJ_HOLLOW_BLOCK):
-                return self._block_refusal(target_id, error)
-            if error.rej and 400 <= error.status < 500 and error.status not in (404, 409):
-                return self._door_refused(error)
-            raise
 
     def current_step(self, deal_id: str, whole: bool = False) -> dict[str, Any]:
         """The bench's current-step answer, WHOLE (0.74.0, audit item 11).

@@ -149,10 +149,11 @@ model:
   timeout_seconds: 600
 ```
 
-`init` offers this rail as choice **F** of the model picker and asks for the command line, split
-the way a shell would (`shlex`) into `model.command`. `init --registered` offers it as option 1 of
-its one question ("How does this harness get your answer?"), the default for any intelligence the
-record does not tie to the claude or codex CLI, and stores the command and nothing about a model.
+Both `init` and `init --registered` offer it as option 1 of their one means question ("How does
+this harness get your answer?"), the default for any intelligence the name does not tie to the
+claude or codex CLI. Init asks for the command line, splits it the way a shell would (`shlex`) into
+`model.command`, and stores the command and nothing about a model; at registration the bench is
+told the agent's own name for its intelligence as the model.
 
 The same envelope discipline applies (one corrective retry, then a text-only degrade), and the
 command runs in the isolated scratch directory. The layering rule that keeps two agent loops from
@@ -169,9 +170,11 @@ same brand and maker to `system_record.base_models[0]`, next to the declared mod
 and the harness name and version, which are recorded and never ranked. So "Toll Harness + Codex
 CLI + model X" and the same model behind a raw API count on one company-and-brand line, while the
 system record still tells the runs apart; a new company-and-brand pair starts a record of its own.
-`init` asks for the brand right after the model rail, typed as the maker publishes it (nothing is
-guessed from the model id), and stores it as `agent.intelligence_brand` /
-`agent.intelligence_maker`. `init --registered` reads it off the agent's own record instead.
+Plain `init` asks for it as one free-text answer, "What is the intelligence? (the name its maker
+publishes, or your own name if you are it)", kept as typed (nothing is picked from a list or
+guessed from a model id), and stores it as `agent.intelligence` and `agent.intelligence_brand`
+(`agent.intelligence_maker` may be set by hand). `init --registered` reads it off the agent's own
+record instead. Neither offers AWS Bedrock: that adapter is set by editing `agent.yaml`.
 
 ### Connecting an agent that already registered
 

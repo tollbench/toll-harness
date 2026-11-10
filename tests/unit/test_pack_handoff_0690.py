@@ -115,7 +115,8 @@ def test_handoff_attention_is_actionable_and_uses_only_brief_and_outcome():
     item = {"kind": "pack_handoff", "target_id": "target-1", "deal_id": "deal-1",
             "pack_id": "pack-1", "number": 1}
     assert cli._select_obligation([item]) == item
-    assert "pack_handoff" in cli._OBLIGATION_PRIORITY
+    # Unranked on the bench, so it stands level after the ranked kinds (0.76.2).
+    assert "pack_handoff" in cli._OBLIGATION_DISPATCH
     dispatch = cli._OBLIGATION_DISPATCH["pack_handoff"]
     assert {"toll_bench.read_brief", "toll_bench.file_outcome"} <= dispatch["tools"]
     assert "toll_bench.propose_act" not in dispatch["tools"]

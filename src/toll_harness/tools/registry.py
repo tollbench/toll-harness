@@ -1530,95 +1530,41 @@ def add_toll_bench_tools(registry: ToolRegistry) -> ToolRegistry:
             arguments["target_id"], arguments["proposal_id"]
         ),
     )
+    # THE PLAN FILES ON THE PLAN DOOR (0.76.2). The tool keeps its name, so
+    # every agent.yaml that lists it still enables it, and it now does what the
+    # bench's attention item, its `on_your_own` list and its skill page all say:
+    # PUT .../proposals/draft {"kind": "plan", "file": true, "accept_rules":
+    # true}. Until 0.76.1 it took the model's whole plan and posted the raw
+    # steps to POST .../proposals/{p}/plan, which this bench answers 409
+    # use_the_plan_door. It carries no plan and no steps: the draft is the plan.
     registry.register(
         ToolDefinition(
             "toll_bench.submit_informed_plan",
             (
-                "File the informed plan after reading the selection answers. Keep sealed money and "
-                "timeline unchanged and include accept_rules=true when first filing. Easy "
-                "targets accept one or two execution steps; other bands may accept up to 30, "
-                "as stated by the brief. Every step's declared_odds is YOUR chance the PERSON "
-                "ends up with the "
-                "thing, judged from that step -- never the chance you clear the step -- "
-                "greater than 0 and less than 1; never use 1. Because nothing is learned "
-                "between steps at filing, the line may not fall: a later step declared lower "
-                "than an earlier one is refused (REJ-29). Never retry an unchanged plan after "
-                "a validation error."
+                "File the informed plan the plan door holds, once nothing on it is left to "
+                "fix. This sends {\"kind\": \"plan\", \"file\": true, \"accept_rules\": "
+                "true} on PUT /api/bench/targets/{target_id}/proposals/draft, the plan door "
+                "itself; filing it is your signature on the rules. It carries no steps: the "
+                "plan is what the draft holds, built on that door with kind plan "
+                "(toll_bench.get_proposal_draft reads it, toll_bench.patch_proposal_draft "
+                "fixes one row). Every step's declared_odds is YOUR chance the PERSON ends up "
+                "with the thing, greater than 0 and less than 1. A refusal comes back with the "
+                "bench's own rows (problems, next_fix): fix those on the draft and file once "
+                "more, never the same draft unchanged."
             ),
             _object_schema(
                 {
                     "target_id": {"type": "string"},
                     "proposal_id": {"type": "string"},
-                    "plan": _object_schema(
-                        {
-                            "steps": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 30,
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "title": {"type": "string", "minLength": 1},
-                                        "ask": {
-                                            "enum": ["APPROVE", "CHOOSE", "PROVIDE", "GRANT"]
-                                        },
-                                        "outcome_promise": {
-                                            "type": "string",
-                                            "minLength": 1,
-                                        },
-                                        "person_minutes": {
-                                            "type": "integer",
-                                            "minimum": 0,
-                                        },
-                                        "agent_court_estimate": {
-                                            "type": "number",
-                                            "minimum": 0,
-                                        },
-                                        "line_item_amount": {
-                                            "type": "integer",
-                                            "minimum": 0,
-                                        },
-                                        "declared_odds": {
-                                            "type": "number",
-                                            "exclusiveMinimum": 0,
-                                            "exclusiveMaximum": 1,
-                                            "description": (
-                                                "Your chance the PERSON ends up with the "
-                                                "thing, judged from this step; not the "
-                                                "chance you clear this step. Filed all at "
-                                                "once, the line may not fall from one step "
-                                                "to the next (REJ-29). Equal is fine."
-                                            ),
-                                        }
-                                    },
-                                    "required": [
-                                        "title",
-                                        "ask",
-                                        "outcome_promise",
-                                        "person_minutes",
-                                        "agent_court_estimate",
-                                        "line_item_amount",
-                                        "declared_odds",
-                                    ],
-                                    "additionalProperties": True,
-                                },
-                            },
-                            "finish_line_cents": {"type": "integer", "minimum": 0},
-                            "finish_line_odds": {"type": "number"},
-                            "accept_rules": {"type": "boolean"},
-                        },
-                        ["steps", "accept_rules"],
-                    ),
                     "idempotency_key": {"type": "string"},
                 },
-                ["target_id", "proposal_id", "plan", "idempotency_key"],
+                ["target_id"],
             ),
         ),
-        lambda context, arguments: require_toll_bench(context).submit_informed_plan(
+        lambda context, arguments: require_toll_bench(context).file_plan_from_draft(
             arguments["target_id"],
-            arguments["proposal_id"],
-            arguments["plan"],
-            arguments["idempotency_key"],
+            str(arguments.get("proposal_id") or ""),
+            str(arguments.get("idempotency_key") or ""),
         ),
     )
     registry.register(

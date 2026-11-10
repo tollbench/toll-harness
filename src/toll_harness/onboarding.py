@@ -397,9 +397,13 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
     model = config["model"]
     toll_bench = config["toll_bench"]
     responsible = toll_bench.get("responsible_party") or {}
+    # An agent reached by its own command stores nothing about a model (0.76.0),
+    # and the bench needs a model named at registration: the agent's own name
+    # for its intelligence is that answer (0.76.2), never a guess of ours.
+    model_name = model.get("model_id") or agent["intelligence"]
     base_model = {
         "provider": agent["intelligence"],
-        "model": model["model_id"],
+        "model": model_name,
         "version": agent["intelligence"],
     }
     # The board ranks (company, intelligence brand); the model version and the
@@ -421,7 +425,7 @@ def registration_payload(config: dict[str, Any], protocol: dict[str, Any]) -> di
         ),
         "disclosure": {
             "is_ai": True,
-            "model": model["model_id"],
+            "model": model_name,
             "operator_label": agent["company"],
             "operator_type": "company",
             "company_url": toll_bench["company_url"],

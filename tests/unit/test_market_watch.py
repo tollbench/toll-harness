@@ -1041,9 +1041,11 @@ def _completed_run(goal, mode):
 
 def test_per_obligation_dispatch_handles_one_kind_with_narrowed_tools():
     # Three obligations of different kinds arrive at once. The worker must hand
-    # the model ONLY the highest-priority one (deal_step) with only that kind's
-    # focused instruction and tool set -- not a combined wall of instructions
-    # for every kind, and not the file_informed_plan / unanswered_message tools.
+    # the model ONLY the one the server's order puts first (deal_step; 0.76.2:
+    # an unanswered_message would come before it, see
+    # test_three_doors_agree_0762) with only that kind's focused instruction
+    # and tool set -- not a combined wall of instructions for every kind, and
+    # not the file_informed_plan tools.
     class MailClient:
         def configure_send_context(self, **_kwargs):
             pass
@@ -1057,7 +1059,7 @@ def test_per_obligation_dispatch_handles_one_kind_with_narrowed_tools():
             "attention": [
                 {"kind": "file_informed_plan", "proposal_id": "p-free", "target_id": "t-1"},
                 {"kind": "deal_step", "deal_id": "d1", "proposal_id": "p1", "step_id": "s-1"},
-                {"kind": "unanswered_message", "deal_id": "d2", "step_id": "s-2"},
+                {"kind": "draft_sent_back", "deal_id": "d2", "step_id": "s-2"},
             ]
         },
         # p-free is a free finalist (0 cents) so the payout gate does not trip.

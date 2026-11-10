@@ -183,7 +183,7 @@ def test_cli_registered_reads_env_picks_external_and_never_prompts_for_a_token(
     assert config["model"]["adapter"] == "external"
     assert config["model"]["command"] == ["my-wrapper", "--flag", "two words"]
     # The brand is the record's, as written; no brand question is asked.
-    assert not any(prompt.startswith(cli.INTELLIGENCE_BRAND_QUESTION) for prompt in asked)
+    assert not any(prompt.startswith(cli.INTELLIGENCE_QUESTION) for prompt in asked)
     assert config["agent"]["intelligence_brand"] == "Grok"
     assert config["agent"]["intelligence"] == "Grok"
     assert config["agent"]["intelligence_maker"] is None  # the record names none

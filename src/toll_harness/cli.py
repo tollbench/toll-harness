@@ -160,35 +160,6 @@ def _yes_no(label: str, *, default: bool) -> bool:
     raise ValueError(f"{label} must be answered yes or no")
 
 
-def _choose(label: str, options: list[tuple[str, str]], *, default_key: str) -> str:
-    """Lettered choices (A, B, C...); a number or the option's key also works."""
-    letters = [chr(ord("A") + index) for index in range(len(options))]
-    print(f"{label}:")
-    for letter, (_key, description) in zip(letters, options, strict=True):
-        print(f"  {letter}. {description}")
-    default_letter = next(
-        letter for letter, (key, _) in zip(letters, options, strict=True) if key == default_key
-    )
-    value = input(f"Choose {letters[0]}-{letters[-1]} [{default_letter}]:\n> ").strip().lower()
-    if not value:
-        return default_key
-    if len(value) == 1 and value.upper() in letters:
-        return options[letters.index(value.upper())][0]
-    if value.isdigit() and 1 <= int(value) <= len(options):
-        return options[int(value) - 1][0]
-    for key, _description in options:
-        if value == key:
-            return key
-    raise ValueError(f"{label} must be a letter {letters[0]}-{letters[-1]}")
-
-
-def _secret_prompt(label: str) -> str:
-    value = getpass.getpass(f"{label} (input hidden):\n> ").strip()
-    if not value:
-        raise ValueError(f"{label} is required")
-    return value
-
-
 def _require_cli(binary: str, hint: str) -> None:
     if shutil.which(binary) is None:
         raise ValueError(f"The '{binary}' CLI is not on PATH. {hint}")
@@ -197,54 +168,6 @@ def _require_cli(binary: str, hint: str) -> None:
 def _configuration_path(value: str) -> Path:
     path = Path(value).resolve()
     return path if path.name.endswith((".yaml", ".yml")) else path / "agent.yaml"
-
-
-def _normalize_model_label(value: str) -> str:
-    return " ".join(
-        "".join(character.lower() if character.isalnum() else " " for character in value).split()
-    )
-
-
-def _resolve_bedrock_model(
-    selection: str,
-    *,
-    intelligence: str,
-    profile: str | None,
-    region: str,
-) -> str:
-    probe = BedrockProbe(region=region, profile_name=profile)
-    models, profiles = probe.discover()
-    known_identifiers = {
-        identifier for model in models for identifier in probe._identifiers(model, profiles)
-    }
-    if selection in known_identifiers:
-        return selection
-    normalized_selection = _normalize_model_label(selection)
-    wanted = set(normalized_selection.split())
-    family = intelligence.lower().strip()
-    ranked: list[tuple[int, tuple[int, str], dict[str, Any]]] = []
-    for model in models:
-        provider = str(model.get("providerName") or "")
-        label = probe._provider_label(provider, str(model.get("modelId") or ""))
-        if family and family not in {label.lower(), provider.lower()}:
-            continue
-        searchable = _normalize_model_label(
-            f"{model.get('modelName', '')} {model.get('modelId', '')}"
-        )
-        words = set(searchable.split())
-        overlap = len(wanted & words)
-        if wanted and overlap != len(wanted):
-            continue
-        exact = int(
-            _normalize_model_label(str(model.get("modelName") or "")) == normalized_selection
-        )
-        ranked.append((exact * 100 + overlap, probe._score(model), model))
-    if not ranked:
-        raise ValueError(
-            f"No Bedrock {intelligence} model matched {selection!r}; run toll-harness bedrock probe"
-        )
-    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return probe._identifiers(ranked[0][2], profiles)[0]
 
 
 def _test_model_and_browser(config_path: Path) -> dict[str, Any]:
@@ -390,114 +313,33 @@ REGISTERED_TOKEN_MISSING = (
     f"init --registered reads the agent's token from {AGENT_TOKEN_ENV} in the agent's own "
     "environment, and it is not set; register at POST /api/bench/agents/register first."
 )
-
-
-def _pick_model_rail() -> dict[str, Any]:
-    """The model-rail picker for a new registration: how the harness reaches the
-    agent's answer. `init --registered` asks _pick_means instead."""
-    print(PROCESS_LINE + "\n")
-    adapter = _choose(
-        "Model provider",
-        [
-            (
-                "claude_code",
-                "Claude subscription (Pro/Max) - sign in once with the Claude Code "
-                "CLI, no API key",
-            ),
-            ("codex", "ChatGPT subscription - sign in once with `codex login`, no API key"),
-            ("anthropic", "Anthropic API key - paste it now"),
-            ("openai", "OpenAI API key - paste it now"),
-            ("bedrock", "AWS Bedrock - IAM credentials via an AWS profile"),
-            (
-                "external",
-                "Any other agent or model - a command that reads the prompt on stdin and "
-                "prints the reply on stdout",
-            ),
-        ],
-        default_key="claude_code",
-    )
-    aws_profile = None
-    aws_region = "us-west-2"
-    model_api_key = None
-    model_command = None
-    if adapter == "bedrock":
-        intelligence = _prompt("Intelligence family", default="Mistral")
-        aws_profile = _prompt("AWS profile", default="default")
-        if aws_profile == "default":
-            aws_profile = None
-        aws_region = _prompt("AWS region", default="us-west-2")
-        model_selection = _prompt("Intelligence/model")
-        model_id = _resolve_bedrock_model(
-            model_selection,
-            intelligence=intelligence,
-            profile=aws_profile,
-            region=aws_region,
-        )
-    elif adapter == "claude_code":
-        _require_cli(
-            "claude",
-            "Install Claude Code (https://claude.com/claude-code) and run `claude` "
-            "once to sign in with your subscription, or set CLAUDE_CODE_OAUTH_TOKEN "
-            "from `claude setup-token`. Then run init again.",
-        )
-        intelligence = "Claude"
-        model_id = _prompt("Model (as your claude CLI names it)", default="opus")
-    elif adapter == "codex":
-        _require_cli(
-            "codex",
-            "Install the Codex CLI (https://github.com/openai/codex) and run "
-            "`codex login` to sign in with ChatGPT. Then run init again.",
-        )
-        intelligence = "GPT"
-        model_id = _prompt("Model (as your codex CLI names it)", default="gpt-5-codex")
-    elif adapter == "anthropic":
-        intelligence = "Claude"
-        model_id = _prompt("Model id", default="claude-opus-4-8")
-        model_api_key = _secret_prompt("Anthropic API key")
-    elif adapter == "openai":
-        intelligence = "GPT"
-        model_id = _prompt("Model id (for example gpt-5.2)")
-        model_api_key = _secret_prompt("OpenAI API key")
-    else:
-        command_line = _prompt("Command line (prompt on stdin, reply on stdout)")
-        model_command = tuple(shlex.split(command_line))
-        if not model_command:
-            raise ValueError("The external adapter needs a command line")
-        intelligence = _prompt("Intelligence family (who thinks)", default="External")
-        model_id = _prompt("Model id (recorded on the bench)", default="external/custom")
-    return {
-        "model_adapter": adapter,
-        "intelligence": intelligence,
-        "model_id": model_id,
-        "aws_profile": aws_profile,
-        "aws_region": aws_region,
-        "model_api_key": model_api_key,
-        "model_command": model_command,
-    }
-
-
-INTELLIGENCE_BRAND_QUESTION = (
-    "Which intelligence brand is this agent? (the name its maker publishes, like Fable, "
-    "Astra, Muse)"
+# THE AGENT NAMES ITS INTELLIGENCE (0.76.2, Steven 2026-11-10: the harness
+# never demands a brain from our list; the agent names what it uses). Plain
+# `init` asks the name as one free-text answer and then the same one means
+# question `init --registered` asks. Until 0.76.1 it showed a six-way model
+# provider picker and asked "Which intelligence brand is this agent?", so the
+# new-registration road still asked an agent to pick itself off our list.
+INTELLIGENCE_QUESTION = (
+    "What is the intelligence? (the name its maker publishes, or your own name if you are it)"
 )
-INTELLIGENCE_BRAND_MISSING = (
-    "The bench needs the intelligence brand to register this agent (the name its maker "
-    "publishes, like Fable, Astra, Muse)."
+INTELLIGENCE_MISSING = (
+    "The bench needs the name of the intelligence to register this agent: the name its "
+    "maker publishes, or your own name if you are it."
 )
 
 
-def _ask_intelligence_brand(model_id: str | None, *, required: bool) -> dict[str, str | None]:
-    """The one question after the model rail, answered as typed (0.74.0: no
-    guess from the model id). The bench ranks the company fielding the agent
-    together with this brand; only a new registration needs it."""
-    brand = _prompt(INTELLIGENCE_BRAND_QUESTION, default="")
-    if not brand:
-        if required:
-            raise ValueError(INTELLIGENCE_BRAND_MISSING)
-        return {"intelligence_brand": None, "intelligence_maker": None}
-    if len(brand) > INTELLIGENCE_BRAND_MAX:
-        raise ValueError(f"The intelligence brand is {INTELLIGENCE_BRAND_MAX} characters or fewer")
-    return {"intelligence_brand": brand, "intelligence_maker": None}
+def _ask_intelligence() -> str:
+    """The one question about the intelligence on a new registration: a name,
+    kept exactly as typed and never mapped onto a list. It is what the bench
+    ranks with the company, so it is required here."""
+    name = _prompt(INTELLIGENCE_QUESTION, default="")
+    if not name:
+        raise ValueError(INTELLIGENCE_MISSING)
+    if len(name) > INTELLIGENCE_BRAND_MAX:
+        raise ValueError(
+            f"The intelligence's name is {INTELLIGENCE_BRAND_MAX} characters or fewer"
+        )
+    return name
 
 
 # THE DEFAULT APPROACH (0.57.0, optional): `--approach-risk/--approach-finish/
@@ -522,8 +364,10 @@ def _approach_from_flags(arguments: argparse.Namespace) -> dict[str, str] | None
 
 # HOW THE HARNESS GETS THE AGENT'S ANSWER (0.76.0). `init --registered` reads
 # the intelligence off the agent's own record and asks one question, about the
-# means and never the brand. Option 1 is the first-class answer for an agent
-# that is the intelligence itself: a command, and nothing stored about a model.
+# means and never the brand; plain `init` asks the same question after the
+# agent names its intelligence (0.76.2). Option 1 is the first-class answer for
+# an agent that is the intelligence itself: a command, and nothing stored
+# about a model.
 MEANS_QUESTION = "How does this harness get your answer?"
 MEANS_OPTIONS = (
     ("external", "a command on this machine that takes a prompt on stdin and prints the reply"),
@@ -597,9 +441,9 @@ def _cli_model_default(record: dict[str, Any], adapter: str) -> str:
 def _pick_means(record: dict[str, Any]) -> dict[str, Any]:
     """The one question for an agent that already registered: the means.
 
-    Returns the same answers _pick_model_rail does, so the configuration the
-    rest of the harness reads is unchanged. The intelligence is the name on
-    the record; only when the record names none does the means stand in.
+    Plain `init` asks it too (0.76.2), with the name the agent just gave as
+    its record. The intelligence is the name on the record; only when the
+    record names none does the means stand in.
     """
     name = record.get("name")
     means = _ask_means(_means_default(record))
@@ -766,9 +610,14 @@ def command_init(arguments: argparse.Namespace) -> int:
     flagged = _approach_from_flags(arguments)
     print("Toll Harness\n")
     print(ONE_DOOR_LINE + "\n")
+    print(PROCESS_LINE + "\n")
     agent_name = _prompt("Agent name")
-    rail = _pick_model_rail()
-    brand = _ask_intelligence_brand(rail["model_id"], required=True)
+    # The agent names its intelligence, then says how the harness reaches it:
+    # the same means question as `init --registered`, with this name as the
+    # record (0.76.2). AWS Bedrock is reached by editing agent.yaml.
+    intelligence = _ask_intelligence()
+    print(HARNESS_ROLE_LINE + "\n")
+    rail = _pick_means({"name": intelligence, "brand": intelligence})
     company = _prompt("Company")
     mode = _prompt("Operating mode", default="Autonomous").title()
     approach = flagged
@@ -791,8 +640,9 @@ def command_init(arguments: argparse.Namespace) -> int:
         responsible_jurisdiction=jurisdiction,
         verification_recipient=verification_recipient,
         approach=approach,
+        intelligence_brand=intelligence,
+        intelligence_maker=None,
         **rail,
-        **brand,
     )
     config_path = create_configuration(config_path.parent, answers)
     _set_worker_preference(config_path, connect and not arguments.no_worker)
@@ -949,21 +799,35 @@ def command_market_connect(arguments: argparse.Namespace) -> int:
 _LOGGER = logging.getLogger("toll_harness.cli")
 
 
-# Attention "kinds" this worker dispatches on, in descending priority. Exactly
-# one obligation is handled per watch cycle: the model is handed a single,
-# focused instruction and only the tools that one obligation needs, instead of a
-# manual covering every task type. The watch loop polls attention again on the
-# next cycle for the remaining obligations.
+# THE SERVER'S ORDER (0.76.2). Exactly one obligation is handled per watch
+# cycle: the model is handed a single, focused instruction and only the tools
+# that one obligation needs, and the watch loop polls attention again on the
+# next cycle for the rest. WHICH one is the bench's to say, not ours. The bench
+# sorts the attention list itself, in agent_market._attention_items on the
+# key agent_market._GLOBAL_ORDER, and this tuple mirrors that key in its order:
+# unanswered_message first (r118: an outcome filed over an unanswered message
+# is refused, so the person's words are answered before anything else), then
+# act_correction, deal_step, sign_deal, file_informed_plan, goal_check and
+# reachability_ping. Every kind the bench does not rank (draft_sent_back,
+# pack_handoff, paid_pack_review, paid_pack_work, funding_research, ...) stands
+# level after those, and among them the list's own order wins, exactly as the
+# bench's stable sort leaves them. sign_deal and reachability_ping are never
+# dispatched here (the first is a notice, the second is acked by
+# ensure_reachable before the list is read); they stay so the tuple reads as
+# the bench's own. What forced it: a checker's three-door comparison
+# (2026-11-10) found this harness took deal_step, the paid-pack kinds,
+# pack_handoff, draft_sent_back and file_informed_plan before an
+# unanswered_message, while the register 201's `on_your_own` list, the skill
+# page and the server all say the person's message comes first. Change it
+# when the bench's _GLOBAL_ORDER changes.
 _OBLIGATION_PRIORITY: tuple[str, ...] = (
-    "deal_step",
-    "paid_pack_review",
-    "paid_pack_work",
-    "pack_handoff",
-    "draft_sent_back",
-    "file_informed_plan",
     "unanswered_message",
     "act_correction",
+    "deal_step",
+    "sign_deal",
+    "file_informed_plan",
     "goal_check",
+    "reachability_ping",
 )
 
 # Shared bookkeeping tools every focused obligation goal needs: load/save a
@@ -1022,14 +886,28 @@ _DEAL_STEP_INSTRUCTION = (
     "and end the run with result.complete. Never request or use a person's password, "
     "OTP, session or cookie."
 )
+# THE PLAN DOOR, AS THE BENCH SAYS IT (0.76.2). This is the model road for a
+# plan: an agent whose tool list leaves the draft loop out, or a bench whose
+# draft door the loop cannot read. It said "file once with
+# toll_bench.submit_informed_plan" while that tool posted raw steps to POST
+# .../proposals/{p}/plan, which the bench answers 409 use_the_plan_door. Now it
+# names the one door the attention item's `call`, the register 201's
+# `on_your_own` list and the skill page all name: build on PUT
+# .../proposals/draft with kind plan, file there with {"kind": "plan",
+# "file": true, "accept_rules": true}.
 _FILE_INFORMED_PLAN_INSTRUCTION = (
     "File the single plan below and nothing else: you are the selected agent on this "
     "want. Read the owned proposal (toll_bench.list_proposals), the selection answers "
     "(toll_bench.read_finalist_answers; read answer_value, not only the prose) and the "
-    "brief (toll_bench.read_brief): plan_template is a blank form, block_templates the "
-    "catalog, and bid_template_notes say what belongs in every blank, in the bench's own "
-    "words. Write every step in your own words and file once with "
-    "toll_bench.submit_informed_plan; a refusal names exactly what to fix. Every "
+    "brief (toll_bench.read_brief). The plan is built and filed on one door, the "
+    "obligation's call: PUT /api/bench/targets/{target_id}/proposals/draft. Read the "
+    "draft first (toll_bench.get_proposal_draft with kind plan, or GET on that door with "
+    "toll_bench.call); only when it answers no_draft, open it with toll_bench.call: PUT "
+    "{\"kind\": \"plan\"} on that door. Fill the form it hands back in your own words "
+    "and fix each row it names for the agent (toll_bench.patch_proposal_draft with kind "
+    "plan, or PATCH with toll_bench.call). When nothing is left to fix, file it once with "
+    "toll_bench.submit_informed_plan, which sends {\"kind\": \"plan\", \"file\": true, "
+    "\"accept_rules\": true} on that door; a refusal names exactly what to fix. Every "
     "declared_odds is your chance the person ends up with the thing, strictly between 0 "
     "and 1. If you cannot produce this plan, say so with toll_bench.withdraw_proposal."
 )
@@ -1238,6 +1116,11 @@ _OBLIGATION_DISPATCH: dict[str, dict[str, Any]] = {
                 "toll_bench.read_brief",
                 "toll_bench.get_pack_input",
                 "toll_bench.list_act_kinds",
+                # 0.76.2: the plan door's read and one-row fix, named for the
+                # bench's MCP twins; toll_bench.call (in _BENCH_DOORS) reaches
+                # the same door for a list that leaves them out.
+                "toll_bench.get_proposal_draft",
+                "toll_bench.patch_proposal_draft",
                 "toll_bench.submit_informed_plan",
                 # The public exit rides the same dispatch: an agent that cannot
                 # produce this plan says so out loud rather than retrying.
@@ -1429,18 +1312,23 @@ def _refusal_body(refusal: Any) -> dict[str, Any]:
 
 
 def _select_obligation(obligations: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Pick the single highest-priority obligation to handle this cycle.
+    """Pick the one obligation to handle this cycle, in the server's order.
 
-    Kinds are ranked by ``_OBLIGATION_PRIORITY``; within a kind the first item
-    the server returned wins (attention arrives server-ordered). Any obligation
-    of an unranked kind is a last-resort fallback so nothing is silently
-    dropped.
+    The key is the bench's own (agent_market._GLOBAL_ORDER, mirrored by
+    ``_OBLIGATION_PRIORITY``): a ranked kind by its rank, every other kind
+    level after the ranked ones, and between items of equal standing the one
+    the server listed first. That is the bench's stable sort read back, so a
+    list that arrives in the server's order is taken from the top, and one
+    that does not (a cut by the loop guard, a payout hold) still is.
     """
-    for kind in _OBLIGATION_PRIORITY:
-        match = next((item for item in obligations if item.get("kind") == kind), None)
-        if match is not None:
-            return match
-    return obligations[0] if obligations else None
+    if not obligations:
+        return None
+    rank = {kind: number for number, kind in enumerate(_OBLIGATION_PRIORITY)}
+    level = len(_OBLIGATION_PRIORITY)
+    return min(
+        enumerate(obligations),
+        key=lambda pair: (rank.get(str(pair[1].get("kind") or ""), level), pair[0]),
+    )[1]
 
 
 # A WANT THE DOOR CLOSED IS DONE FOR THIS ROUND (0.74.0, was a process-local
@@ -2475,17 +2363,18 @@ def _file_the_informed_plan_from_draft(
         return None
     if not _tool_enabled(resources, "toll_bench.submit_informed_plan"):
         # The loop files the plan itself; an agent configured without the
-        # plan tool takes the old road, where the runtime holds the list.
+        # plan tool takes the model road, where the runtime holds the list.
         return None
     # ONE LANGUAGE, AND THIS HARNESS SPEAKS THE NEW ONE (contract 4.0). A
     # bench whose plan door still answers the old way is one this loop cannot
-    # read, so the plan goes the old whole-document way instead of spending a
-    # person's wait on rounds nothing here understands.
+    # read, so the plan goes to the model road instead of spending a person's
+    # wait on rounds nothing here understands. That road files on the same
+    # plan door (0.76.2); nothing here posts a plan's steps anywhere.
     speaks = getattr(resources.toll_bench, "plan_door_speaks_one_language", None)
     if callable(speaks) and not speaks():
         _LOGGER.warning(
-            "This bench's plan door answers below contract 4.0; filing the plan "
-            "for %s the old way",
+            "This bench's plan door answers below contract 4.0; the plan for %s "
+            "goes to the model road on the same door",
             target_id,
         )
         return None
@@ -2517,7 +2406,7 @@ def _file_the_informed_plan_from_draft(
     )
     if _door_is_missing(outcome):
         _LOGGER.warning(
-            "This bench publishes no draft door; filing the plan for %s the old way",
+            "This bench answered no draft door; the plan for %s goes to the model road",
             target_id,
         )
         return None

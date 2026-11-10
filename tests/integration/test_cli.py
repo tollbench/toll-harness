@@ -1,3 +1,5 @@
+import os
+import shlex
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -158,3 +160,78 @@ def test_resume_installs_worker_while_company_confirmation_is_pending(
     assert observed["finish"]["enable_worker"] is True
     assert observed["result"]["status"] == cli.WAITING_FOR_COMPANY_VERIFICATION
     assert observed["result"]["next"].endswith("--resume")
+
+
+# An agent reached by its own command: answers the connectivity check, then the
+# canary's two calls, in the reply envelope the external rail reads.
+_OWN_COMMAND = """\
+import json, pathlib, sys
+sys.stdin.read()
+counter = pathlib.Path(__file__).with_suffix(".count")
+turn = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(turn + 1))
+if turn == 0:
+    reply = {"text": "OK", "tool_calls": []}
+elif turn == 1:
+    reply = {"text": "", "tool_calls": [
+        {"name": "state.save", "arguments": {"checkpoint": {"status": "ready"}}}]}
+else:
+    reply = {"text": "", "tool_calls": [
+        {"name": "result.complete", "arguments": {"summary": "ready"}}]}
+print(json.dumps(reply))
+"""
+
+
+def test_plain_init_names_the_intelligence_then_asks_the_means(tmp_path):
+    """0.76.2 (Steven 2026-11-10: the harness never demands an intelligence from
+    our list; the agent names what it uses). Plain `init`, run the way an
+    operator runs it, asks the intelligence as ONE free-text name and then the
+    same means question `init --registered` asks. No model provider picker, no
+    brand list. A standalone agent reached by its own command, offline."""
+    script = tmp_path / "instinct.py"
+    script.write_text(_OWN_COMMAND)
+    command = shlex.join([sys.executable, str(script)])
+    answers = "\n".join(
+        [
+            "Oak",  # agent name
+            "Instinct",  # the intelligence, as typed
+            "1",  # the means: a command on this machine
+            command,
+            "Oak Works",  # company
+            "",  # operating mode
+            "n",  # connect to Toll Bench: not in this test
+        ]
+    ) + "\n"
+    env = {key: value for key, value in os.environ.items() if not key.startswith("TOLL_HARNESS_")}
+    env["TOLL_HARNESS_UPDATE_CHECK"] = "0"
+    # The canary builds the runtime, and the runtime opens the fleet database
+    # under the home directory: a home of its own keeps this run out of the
+    # machine's real fleet.
+    env["HOME"] = str(tmp_path / "home")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "toll_harness.cli", "init", str(tmp_path / "agent")],
+        input=answers,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    out = completed.stdout
+    assert out.index(cli.INTELLIGENCE_QUESTION) < out.index(cli.MEANS_QUESTION)
+    assert out.count(cli.MEANS_QUESTION) == 1
+    for _key, description in cli.MEANS_OPTIONS:
+        assert description in out
+    assert "Model provider" not in out
+    assert "Which intelligence brand" not in out
+    assert "Bedrock" not in out
+    config = yaml.safe_load((tmp_path / "agent" / "agent.yaml").read_text())
+    assert config["agent"]["intelligence"] == "Instinct"
+    assert config["agent"]["intelligence_brand"] == "Instinct"
+    assert config["model"]["adapter"] == "external"
+    assert config["model"]["command"] == [sys.executable, str(script)]
+    assert config["model"]["model_id"] is None
+    assert config["fleet"]["database"].startswith(str(tmp_path / "home"))

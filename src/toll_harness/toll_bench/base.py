@@ -88,12 +88,16 @@ class TollBenchProvider(Protocol):
 
     def read_finalist_answers(self, target_id: str, proposal_id: str) -> dict[str, Any]: ...
 
-    def submit_informed_plan(
+    # THE ONE PLAN FILING (0.76.2): the plan draft the bench holds, filed on
+    # the plan door, PUT .../proposals/draft {"kind": "plan", "file": true,
+    # "accept_rules": true}. It replaces submit_informed_plan(target_id,
+    # proposal_id, plan, idempotency_key), which posted raw steps to a door
+    # that refuses them; the tool keeps its name, toll_bench.submit_informed_plan.
+    def file_plan_from_draft(
         self,
         target_id: str,
-        proposal_id: str,
-        plan: dict[str, Any],
-        idempotency_key: str,
+        proposal_id: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]: ...
 
     # `whole=True` (0.62.0): every earlier step rendered whole, nothing left

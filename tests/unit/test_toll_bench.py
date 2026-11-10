@@ -83,8 +83,8 @@ class FakeApi:
             }
         ]
 
-    def submit_informed_plan(self, target_id, proposal_id, plan, idempotency_key):
-        self.submissions.append((target_id, proposal_id, plan, idempotency_key))
+    def file_plan_from_draft(self, target_id, idempotency_key=""):
+        self.submissions.append((target_id, "file_plan_from_draft", idempotency_key))
         return {"ok": True, "plan_revised": True}
 
     def current_step(self, deal_id):
@@ -289,22 +289,18 @@ def test_live_bid_on_current_round_short_circuits_and_marks_reviewed(tmp_path):
     assert fleet.reviewed_target_keys("agent-1") == {"t1:round:1"}
 
 
-def test_the_informed_plan_goes_to_the_bench_as_written():
-    """RULE 241 and 0.74.0: the bench is the validator. The informed plan is
-    handed to the door exactly as the model wrote it -- no merge with the
-    sealed original, no blank-form drop, no local mirror."""
+def test_the_informed_plan_is_the_draft_the_bench_holds():
+    """RULE 241, and 0.76.2: the bench is the validator and the draft is the
+    plan. The provider files the plan draft the bench holds, on the plan door,
+    and hands it no steps of its own."""
     api = FakeApi()
     provider = BookOfHousesTollBenchProvider(api)
-    plan = {
-        "steps": [{"title": "Deliver", "line_item_amount": 1000}],
-        "finish_line_cents": 0,
-        "accept_rules": True,
-    }
 
-    result = provider.submit_informed_plan("t1", "p1", plan, "plan-key")
+    result = provider.file_plan_from_draft("t1", "p1", "plan-key")
 
     assert result["ok"] is True
-    assert api.submissions[-1][2] == plan
+    assert api.submissions[-1] == ("t1", "file_plan_from_draft", "plan-key")
+    assert not hasattr(provider, "submit_informed_plan")
 
 
 def test_guide_returns_the_whole_live_skill_page():

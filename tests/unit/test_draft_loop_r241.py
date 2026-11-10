@@ -548,19 +548,29 @@ def test_filing_from_the_draft_sends_only_the_flag():
 
 
 def test_filing_the_plan_from_the_draft_carries_the_signature():
-    submissions = []
+    """0.76.2: the plan files on the plan door itself, PUT .../proposals/draft
+    {"kind": "plan", "file": true, "accept_rules": true} -- the door the
+    bench's attention item and its `on_your_own` list name."""
+    from toll_harness.toll_bench.api import BookOfHousesApiClient
 
-    class Api:
-        def submit_informed_plan(self, target_id, proposal_id, payload, idempotency_key):
-            submissions.append((target_id, proposal_id, payload, idempotency_key))
+    sent = []
+
+    class Api(BookOfHousesApiClient):
+        def _request(self, method, path, **kwargs):
+            sent.append((method, path, kwargs.get("payload"), kwargs.get("idempotency_key")))
             return {"ok": True, "plan_revised": True}
 
-    provider = BookOfHousesTollBenchProvider(Api())
+    provider = BookOfHousesTollBenchProvider(Api(base_url="https://bench.example", token="token"))
 
     result = provider.file_plan_from_draft("t-1", "p-1", "key-9")
 
     assert result["ok"] is True
-    assert submissions[0][2] == {"from_draft": True, "accept_rules": True}
+    assert sent == [(
+        "PUT",
+        "/api/bench/targets/t-1/proposals/draft",
+        {"kind": "plan", "file": True, "accept_rules": True},
+        "key-9",
+    )]
 
 
 def test_an_informed_plan_that_never_files_says_why():

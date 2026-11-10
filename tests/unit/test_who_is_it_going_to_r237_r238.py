@@ -209,8 +209,8 @@ class _Api:
             raise self.refuse
         return {"ok": True, "proposal_id": "p-1"}
 
-    def submit_informed_plan(self, target_id, proposal_id, plan, idempotency_key):
-        self.plans.append((target_id, plan, idempotency_key))
+    def file_plan_from_draft(self, target_id, idempotency_key=""):
+        self.plans.append((target_id, idempotency_key))
         if self.refuse is not None and len(self.plans) == 1:
             raise self.refuse
         return {"ok": True}

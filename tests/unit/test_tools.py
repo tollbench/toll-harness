@@ -121,30 +121,26 @@ def test_numeric_exclusive_bounds_are_validated():
         _validate(1, schema)
 
 
-def test_informed_plan_schema_requires_complete_execution_steps():
+def test_informed_plan_tool_files_the_draft_and_carries_no_steps():
+    """0.76.2: the tool keeps its name and files the plan draft the bench
+    holds on the plan door. It takes no plan, so no steps can ride it."""
     registry = add_toll_bench_tools(build_standard_registry())
     definition = next(
         item
         for item in registry.definitions()
         if item.name == "toll_bench.submit_informed_plan"
     )
-    step_schema = definition.input_schema["properties"]["plan"]["properties"]["steps"][
-        "items"
-    ]
-    steps_schema = definition.input_schema["properties"]["plan"]["properties"]["steps"]
 
-    assert steps_schema["minItems"] == 1
-    assert steps_schema["maxItems"] == 30
-    assert "one or two execution steps" in definition.description
-    assert set(step_schema["required"]) == {
-        "title",
-        "ask",
-        "outcome_promise",
-        "person_minutes",
-        "agent_court_estimate",
-        "line_item_amount",
-        "declared_odds",
+    assert set(definition.input_schema["properties"]) == {
+        "target_id",
+        "proposal_id",
+        "idempotency_key",
     }
+    assert definition.input_schema["required"] == ["target_id"]
+    assert definition.input_schema["additionalProperties"] is False
+    assert "PUT /api/bench/targets/{target_id}/proposals/draft" in definition.description
+    assert '{"kind": "plan", "file": true, "accept_rules": true}' in definition.description
+    assert "/plan " not in definition.description
 
 
 def test_step_reply_tool_requires_thread_and_idempotency_fields():

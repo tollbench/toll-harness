@@ -353,26 +353,19 @@ def test_a_failed_block_hands_the_step_back():
 def test_a_brief_that_has_closed_never_blocks_the_plan_the_person_waits_on():
     """A want whose agent is already selected can stop answering the open
     -target brief. The informed plan is the filing the person is waiting on,
-    so a brief we cannot read costs the local repair and nothing else: the
-    REJ-32 refusal still carries the form."""
+    and it files from the draft the bench holds (0.76.2), so a brief we
+    cannot read is never asked for on the way."""
 
     class _ClosedBrief(_Api):
         def target_brief(self, target_id):
-            raise BookOfHousesApiError(404, "not_found", "Target not found or not open.")
+            raise AssertionError("filing the plan never reads the brief")
 
-        def submit_informed_plan(self, target_id, proposal_id, plan, idempotency_key):
-            self.submissions.append((target_id, plan, idempotency_key))
+        def file_plan_from_draft(self, target_id, idempotency_key=""):
+            self.submissions.append((target_id, idempotency_key))
             return {"ok": True}
 
     api = _ClosedBrief()
     provider = BookOfHousesTollBenchProvider(api)
-    provider.validate_proposal = lambda proposal: {"ok": True, "problems": []}
-    provider.list_proposals = lambda: {
-        "ok": True,
-        "proposals": [{"id": "p-1", "target_goal_id": "t-1", "steps": [WORK_STEP]}],
-    }
-    out = provider.submit_informed_plan(
-        "t-1", "p-1", {"steps": [WORK_STEP], "accept_rules": True}, "k-1"
-    )
+    out = provider.file_plan_from_draft("t-1", "p-1", "k-1")
     assert out["ok"] is True
-    assert len(api.submissions) == 1
+    assert api.submissions == [("t-1", "k-1")]

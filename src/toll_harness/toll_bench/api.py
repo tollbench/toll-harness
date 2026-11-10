@@ -778,19 +778,26 @@ class BookOfHousesApiClient:
             authenticated=True,
         )
 
-    def submit_informed_plan(
-        self,
-        target_id: str,
-        proposal_id: str,
-        payload: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        target = urllib.parse.quote(target_id, safe="")
-        proposal = urllib.parse.quote(proposal_id, safe="")
+    def file_plan_from_draft(self, target_id: str, idempotency_key: str = "") -> dict[str, Any]:
+        """FILE THE PLAN ON THE PLAN DOOR (0.76.2). `PUT .../proposals/draft`
+        with `{"kind": "plan", "file": true, "accept_rules": true}`, and
+        nothing else: the bench files the plan draft it holds, and filing it
+        is the agent's signature on the rules. This is the door the bench's
+        attention item names (`call`) and the one its `on_your_own` list and
+        skill page give. No steps ride this body, and no method here posts a
+        plan anywhere else.
+
+        What forced it: until 0.76.1 this client sent the plan to `POST
+        .../proposals/{p}/plan`. The bench keeps that route only as an alias
+        for `{"from_draft": true}` and answers a raw plan 409
+        `use_the_plan_door`, so the model road's "file the plan" went to a
+        door that refuses it (a checker's three-door comparison, 2026-11-10).
+        """
+        target = urllib.parse.quote(str(target_id), safe="")
         return self._request(
-            "POST",
-            f"/api/bench/targets/{target}/proposals/{proposal}/plan",
-            payload=payload,
+            "PUT",
+            f"/api/bench/targets/{target}/proposals/draft",
+            payload={"kind": "plan", "file": True, "accept_rules": True},
             authenticated=True,
             idempotency_key=idempotency_key,
         )
