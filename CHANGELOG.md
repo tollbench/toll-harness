@@ -19,6 +19,17 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 0.75.2 — A Talk message gets its reply, 2026-11-09
+
+What forced it: Sam on staging, 2026-11-09. An operator's Talk message (bench
+operator-reply) raised `TypeError: DraftLoop._ask() got an unexpected keyword argument
+'budget'` before the model was asked: 0.74.0 took `budget` off `_ask`, and the Talk reply
+still passed `budget=24000`. The loop guard parked the obligation after three tries, so no
+Talk message was ever answered, and one sent before a plan was filed kept that plan from
+being built. The reply call drops the argument; nothing else changes. The test that
+existed stubbed the reply out; tests/unit/test_talk_reply_0752.py runs the real reply
+through the real DraftLoop, before and after a plan is filed.
+
 ## 0.75.1 — A direct build's block rides the form ask, 2026-11-09
 
 What forced it: bench contract 4.1.68 (2026-11-09, "Build this flow"). An operator's direct

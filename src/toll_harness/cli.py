@@ -2234,7 +2234,7 @@ def _operator_dialogue_reply(resources: Any, loop: DraftLoop, target_id: str,
         {"want": brief.get("want"), "conversation": conversation.get("messages") or [],
          "mode": pending.get("mode"), "current_form": draft.form_of(answer) or {},
          "own_means": loop.own_means},
-        "operator dialogue", budget=24000,
+        "operator dialogue",
     )
     reply, revise = decision.get("reply"), decision.get("revise_plan")
     if (not isinstance(reply, str) or not reply.strip() or len(reply) > 2000
