@@ -74,7 +74,8 @@ def test_newer_with_automatic_updates_off_only_says_so(made):
 def test_the_watch_restarts_after_an_update(made):
     agent = made.agent()
     made.bench.add(item("it_never"))
-    exit_code = Watch(agent, wait=0, updater=lambda *a, **k: {"installed_now": True}).run(1)
+    exit_code = Watch(agent, wait=0, spread=0,
+                      updater=lambda *a, **k: {"installed_now": True}).run(1)
     assert exit_code == RESTART_EXIT and made.runs() == []
 
 

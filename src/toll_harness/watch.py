@@ -35,19 +35,28 @@ from toll_harness.updates import RESTART_EXIT, check_and_install, due, is_newer
 
 TOKEN_REFUSED_PAUSE = 300.0
 LONGEST_BACKOFF = 60.0
+# SPREAD OUT (Nov 11): a bench restart drops every held line at once. 200 agents reconnecting
+# inside 3 seconds overloaded the bench's login step (45 of 200 calls failed); spread over 20
+# to 30 seconds they all got through. So the first call after a start, and the first retry
+# after a dropped line or a failed call, wait a random 0 to 30 seconds.
+SPREAD_SECONDS = 30.0
 BUSY_TRIES = 5  # 429s in a row on one answer before it waits in the outbox
 
 
-def backoff_delay(failures: int, rand: Callable[[], float] = random.random) -> float:
-    """1, 2, 4 ... up to 60 seconds, with jitter of half either way."""
-    base = min(LONGEST_BACKOFF, 2.0 ** max(0, failures - 1))
+def backoff_delay(failures: int, rand: Callable[[], float] = random.random,
+                  spread: float = SPREAD_SECONDS) -> float:
+    """First retry: a random 0 to 30 s. Then 2, 4, 8 ... up to 60 s, jittered half either way."""
+    if failures <= 1:
+        return spread * rand()
+    base = min(LONGEST_BACKOFF, 2.0 ** (failures - 1))
     return base * (0.5 + rand())
 
 
 class Watch:
     def __init__(self, agent: Agent, *, bench: Any = None, log: ActivityLog | None = None,
                  wait: int = LONGEST_WAIT, sleep: Callable[[float], None] = time.sleep,
-                 handoff=hand_off, updater=check_and_install):
+                 handoff=hand_off, updater=check_and_install,
+                 spread: float = SPREAD_SECONDS, rand: Callable[[], float] = random.random):
         self.agent = agent
         self.bench = bench or agent.bench()
         self.log = log or ActivityLog(agent.data_dir)
@@ -55,6 +64,8 @@ class Watch:
         self.sleep = sleep
         self.handoff = handoff
         self.updater = updater
+        self.spread = spread
+        self.rand = rand
         state = agent.read_json("cursor.json", {})
         self.after: str | None = state.get("after")
         self.done: list[str] = list(state.get("done") or [])
@@ -77,6 +88,8 @@ class Watch:
     def start(self) -> int | None:
         """Say hello, read who we are, update if needed. RESTART_EXIT after an update."""
         self.log.line(f"toll-harness {__version__} watching for {self.agent.name}")
+        if self.spread > 0:
+            self.sleep(self.spread * self.rand())  # never all at once after a bench restart
         self._apply_me(self._me_with_backoff())
         if self.updater(self.agent, self.bench, self.log).get("installed_now"):
             return RESTART_EXIT
@@ -155,18 +168,21 @@ class Watch:
             self.sleep(TOKEN_REFUSED_PAUSE)
             return
         if error.status == 429:
-            pause = error.retry_after or backoff_delay(self.problems)
+            pause = error.retry_after or self._delay()
             self.log.line(f"the bench asks the harness to wait {pause:.0f} s")
             self.sleep(pause)
             return
         if self.problems in (1, 5) or self.problems % 30 == 0:
             self.log.warn(f"no answer from the bench while {doing} ({error.status or 'down'}); "
                           "trying again with backoff")
-        self.sleep(backoff_delay(self.problems))
+        self.sleep(self._delay())
 
     def _pause(self) -> None:
         self.problems += 1
-        self.sleep(backoff_delay(self.problems))
+        self.sleep(self._delay())
+
+    def _delay(self) -> float:
+        return backoff_delay(self.problems, self.rand, self.spread)
 
     # -- one item --------------------------------------------------------------------
     def handle(self, item: dict[str, Any]) -> str:

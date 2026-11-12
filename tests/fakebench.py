@@ -23,6 +23,7 @@ class FakeBench:
         self.refuse: dict[str, dict] = {}  # item id -> {ok: false, problems}
         self.down_items = 0  # answer the next N items calls with 503
         self.down_answers = 0
+        self.drop_items = 0  # cut the next N items calls without any answer (a restart)
         self.busy_answers = 0  # answer the next N answers with 429 and Retry-After
         self.version_door = "harness"  # or "connector": the older name only
         # The bench's own protection (Steven, Nov 11): it counts {"failed": ...} answers per
@@ -123,6 +124,11 @@ class FakeBench:
                 if parsed.path == "/api/bench/me":
                     return self._send(200, bench.me())
                 if parsed.path == "/api/bench/me/items":
+                    if bench.drop_items > 0:
+                        bench.drop_items -= 1
+                        self.close_connection = True
+                        self.connection.shutdown(2)
+                        return None
                     if bench.down_items > 0:
                         bench.down_items -= 1
                         return self._send(503, {"error": "down", "message": "down"})

@@ -26,12 +26,14 @@ def watch(agent, **kwargs):
     kwargs.setdefault("updater", no_update)
     kwargs.setdefault("sleep", lambda seconds: None)
     kwargs.setdefault("wait", 0)
+    kwargs.setdefault("spread", 0)  # the 0-30 s spread has its own tests below
     return Watch(agent, **kwargs)
 
 
 def test_live_wait_hands_a_new_item_over_within_two_seconds(made):
     agent = made.agent()
-    runner = threading.Thread(target=lambda: Watch(agent, wait=5, updater=no_update).run(2))
+    runner = threading.Thread(
+        target=lambda: Watch(agent, wait=5, updater=no_update, spread=0).run(2))
     runner.start()
     time.sleep(0.7)  # the watch is now holding GET /me/items open
     pushed = time.monotonic()
@@ -159,11 +161,36 @@ def test_reconnects_with_backoff_when_the_bench_is_down(made):
     made.bench.down_items = 3
     made.bench.add(item("it_after_outage"))
     pauses = []
-    watch(agent, sleep=pauses.append).run(4)
-    assert len(pauses) == 3 and pauses[0] < pauses[2]
+    watch(agent, sleep=pauses.append, spread=30, rand=lambda: 0.5).run(4)
+    # start spread, then the first retry (random 0-30 s), then backoff 2 s, 4 s
+    assert pauses == [15.0, 15.0, 2.0, 4.0]
     assert made.bench.answers == [("it_after_outage", {"reply": "on it"})]
-    assert all(0.5 <= backoff_delay(1) <= 1.5 for _ in range(20))
     assert backoff_delay(99, rand=lambda: 1.0) == 90.0  # 60 s at most, jitter on top
+
+
+def test_starts_and_first_retries_spread_over_thirty_seconds():
+    import random as chance
+
+    draws = chance.Random(7)
+    firsts = [backoff_delay(1, rand=draws.random) for _ in range(200)]
+    assert all(0 <= value <= 30 for value in firsts)
+    # 200 agents land across the whole window, never inside a 3-second burst
+    assert max(firsts) - min(firsts) > 25
+    assert max(sum(1 for value in firsts if start <= value < start + 3)
+               for start in range(0, 28)) < 40
+
+
+def test_a_dropped_line_waits_a_random_spread_before_reconnecting(made):
+    agent = made.agent()
+    made.bench.drop_items = 1  # the bench restarts: the held call is cut with no answer
+    made.bench.add(item("it_after_drop"))
+    pauses = []
+    watched = watch(agent, sleep=pauses.append, spread=30, rand=lambda: 0.25)
+    watched.run(2)
+    assert pauses == [7.5, 7.5]  # the start, then the reconnect after the drop
+    assert made.bench.answers == [("it_after_drop", {"reply": "on it"})]
+    log = (agent.data_dir / "harness.log").read_text()
+    assert "no answer from the bench while waiting for items" in log
 
 
 def test_the_cursor_survives_a_restart(made):
