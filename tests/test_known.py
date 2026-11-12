@@ -198,6 +198,7 @@ def test_a_sample_wake_with_no_json_in_the_reply_says_so(tmp_path, bench, progra
     ('{"reply": "hi"}', {"reply": "hi"}),
     ('```json\n{"reply": "hi"}\n```', {"reply": "hi"}),
     ('Here it is: {"reply": "hi"} - thanks', {"reply": "hi"}),
+    ('A {stray} brace, then {"reply": "hi"} and {"other": 1}', {"reply": "hi"}),
     ('{"text": "", "tool_calls": [{"name": "result.complete", "arguments": '
      '{"result": {"reply": "hi"}}}]}', {"reply": "hi"}),  # a 0.x envelope
     ('{"text": "{\\"reply\\": \\"hi\\"}"}', {"reply": "hi"}),
@@ -232,11 +233,42 @@ def test_a_0x_external_command_gets_the_item_as_a_prompt(tmp_path, programs):
     assert "Reply to the owner's line in one sentence." in run["prompt"]
 
 
-def test_codex_answers_through_its_last_message_file(tmp_path, programs):
+def test_codex_answers_through_its_last_message_file_in_a_scratch_folder(tmp_path, programs):
     result = hand_off(known.wake_argv({"agent": "codex", "model": "gpt-5"}), item("it_3"),
-                      time_limit=30)
+                      time_limit=30, cwd=str(tmp_path))
     assert result.answer == {"ok": True, "reply": "woke"}
-    assert "--model" in program_runs(tmp_path)[0]["argv"]
+    argv = program_runs(tmp_path)[0]["argv"]
+    assert "--model" in argv and "toll-wake-" in argv[argv.index("--cd") + 1]
+
+
+ACCOUNTS = textwrap.dedent("""\
+    #!{python}
+    import json, os, sys
+    sys.stdin.read()
+    with open(os.environ["PROGRAM_RECORD"], "a") as handle:
+        handle.write(json.dumps({{"account": os.environ.get("CLAUDE_CONFIG_DIR"),
+                                  "cwd": os.getcwd()}}) + "\\n")
+    if os.environ.get("CLAUDE_CONFIG_DIR") in os.environ.get("SPENT", "").split(","):
+        print("You have hit your usage limit", file=sys.stderr)
+        sys.exit(1)
+    print('{{"reply": "from ' + os.environ.get("CLAUDE_CONFIG_DIR", "") + '"}}')
+""")
+
+
+def test_claude_accounts_are_tried_in_order_when_one_is_spent(tmp_path, programs,
+                                                             monkeypatch):
+    claude = programs / "claude"
+    claude.write_text(ACCOUNTS.format(python=sys.executable))
+    command = known.wake_argv({"agent": "claude", "config_dirs": ["/acct/a", "/acct/b"]})
+    monkeypatch.setenv("SPENT", "/acct/a")
+    result = hand_off(command, item("it_5"), time_limit=30, cwd=str(tmp_path))
+    assert result.answer == {"reply": "from /acct/b"}
+    runs = program_runs(tmp_path)
+    assert [run["account"] for run in runs] == ["/acct/a", "/acct/b"]
+    assert all("toll-wake-" in run["cwd"] for run in runs)  # never the agent's folder
+    monkeypatch.setenv("SPENT", "/acct/a,/acct/b")
+    result = hand_off(command, item("it_6"), time_limit=30)
+    assert result.status == FAILED and result.said == "claude exited with 1 on account 2 of 2"
 
 
 def test_a_missing_program_is_said_plainly(tmp_path, programs):
@@ -248,7 +280,7 @@ def test_a_missing_program_is_said_plainly(tmp_path, programs):
 # -- the move from 0.x: the old file decides, nobody is asked ------------------------------
 @pytest.mark.parametrize("model, wake_config", [
     ({"adapter": "claude_code", "model_id": "opus", "claude_config_dirs": ["/a", "/b"]},
-     {"agent": "claude", "model": "opus", "config_dir": "/a"}),
+     {"agent": "claude", "model": "opus", "config_dirs": ["/a", "/b"]}),
     ({"adapter": "codex", "model_id": "gpt-5-codex", "extra_args": ["--x"]},
      {"agent": "codex", "model": "gpt-5-codex", "extra_args": ["--x"]}),
     ({"adapter": "external", "command": ["/opt/agent", "run"]},

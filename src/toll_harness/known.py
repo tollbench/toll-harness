@@ -86,14 +86,23 @@ def checked(wake: Any) -> dict[str, Any]:
     return wake
 
 
+def config_dirs(wake: dict[str, Any]) -> list[str]:
+    """Claude Code's signed-in accounts, in the order they are tried (0.x claude_config_dirs)."""
+    many = wake.get("config_dirs")
+    if isinstance(many, list):
+        return [str(folder) for folder in many if folder]
+    return [str(wake["config_dir"])] if wake.get("config_dir") else []
+
+
 def wake_argv(wake: dict[str, Any], python: str | None = None) -> list[str]:
     """The command the harness runs for an agent woken by name (never through a shell)."""
     wake = checked(wake)
     argv = [python or sys.executable, "-m", "toll_harness.wake", "--agent", str(wake["agent"])]
-    for key, flag in (("model", "--model"), ("program", "--program"),
-                      ("config_dir", "--config-dir")):
+    for key, flag in (("model", "--model"), ("program", "--program")):
         if wake.get(key):
             argv += [flag, str(wake[key])]
+    for folder in config_dirs(wake):
+        argv += ["--config-dir", folder]
     tail = list(wake.get("command") or []) + list(wake.get("extra_args") or [])
     return argv + (["--", *tail] if tail else [])
 
@@ -118,7 +127,7 @@ def wake_from_old(config: dict[str, Any]) -> dict[str, Any] | None:
         wake["program"] = str(model["binary"])
     dirs = model.get("claude_config_dirs")
     if known.name == "claude" and isinstance(dirs, list) and dirs:
-        wake["config_dir"] = str(dirs[0])  # 0.x switched accounts; 1.0 wakes the first
+        wake["config_dirs"] = [str(folder) for folder in dirs]  # tried in order, as in 0.x
     if extra:
         wake["extra_args"] = extra
     return wake
