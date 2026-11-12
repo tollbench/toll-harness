@@ -1,14 +1,20 @@
 """`init`, `connect` and `doctor`.
 
-init asks three things: the company, the model's name (a label) and the command that wakes
-the agent; a brand-new registration also asks a contact email and a location. Running it is
-the approval: it registers (or connects an agent that already registered, `--registered`),
-keeps the token in the secret store, installs and starts the always-on service, and prints
-what the agent now has from Toll Bench.
+init asks only what nobody has said yet. The company. Which agent answers: the harness looks
+for the agents it knows by name (known.KNOWN: claude, codex, gemini) on this computer; one
+found is said and used, several are picked from by name, and a command line is asked only for
+"something else". A brand-new registration also asks a contact email and a location. Then it
+WAKES the agent once with a sample item and says "your agent woke and answered", or stops
+before anything is registered or changed. Running it is the approval: it registers (or
+connects an agent that already registered, `--registered`, or moves a 0.x agent in its folder
+with no question when the old file names an agent it knows), keeps the token in the secret
+store, installs and starts the always-on service, and prints what the agent now has from Toll
+Bench.
 """
 
 from __future__ import annotations
 
+import math
 import shlex
 import shutil
 import uuid
@@ -17,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from toll_harness import __version__
+from toll_harness import known as known_agents
 from toll_harness.agent import (
     BASE_URL_ENV,
     CONFIG_VERSION,
@@ -37,15 +44,19 @@ from toll_harness.secrets import FileSecretStore
 
 COMPANY = "Company"
 MODEL = "Model's name (a label, for example Claude, Grok, Qwen)"
-COMMAND = "Command that wakes your agent (it gets each item as JSON on stdin)"
+AGENT = "Which agent answers for you?"
+SOMETHING_ELSE = "something else"
+COMMAND = ("The command that wakes your agent (for an agent the harness does not know; it "
+           "gets each item as JSON on stdin and prints its answer as JSON)")
 CONTACT_EMAIL = "Contact email (Toll Bench sends one confirmation message to it)"
 LOCATION = "Location (country, and state if in the US)"
 BRAND_MAX = 40
+SAMPLE_SECONDS = 300  # the sample wake at setup waits this long at most
 
 DOCTOR_ITEM = {
     "id": "it_doctor", "kind": "doctor", "created_at": None, "due_at": None, "about": {},
-    "do": "This is `toll-harness doctor` checking that your command runs. Print {\"ok\": true}"
-          " (or nothing). Nothing is sent to Toll Bench.",
+    "do": "This is toll-harness checking that your agent wakes. Reply {\"ok\": true}."
+          " Nothing is sent to Toll Bench.",
     "context": {}, "refs": [],
     "answer": {"needed": False, "shape": {"ok": "boolean"}, "example": {"ok": True}},
 }
@@ -114,19 +125,26 @@ def _known(path: Path) -> dict[str, Any]:
     config = read_yaml(path)
     if is_old_config(config):
         agent = config.get("agent") or {}
-        model = config.get("model") or {}
+        model = config.get("model") if isinstance(config.get("model"), dict) else {}
+        seconds = model.get("timeout_seconds")
+        minutes = DEFAULT_TIME_LIMIT_MINUTES
+        if isinstance(seconds, (int, float)) and seconds > minutes * 60:
+            minutes = math.ceil(seconds / 60)
         return {
             "old": True, "name": agent.get("name"), "company": agent.get("company"),
             "model": agent.get("intelligence_brand") or agent.get("intelligence"),
-            "command": model.get("command") if model.get("adapter") == "external" else None,
+            "wake": known_agents.wake_from_old(config),
+            "adapter": str(model.get("adapter") or "bedrock"),
+            "time_limit_minutes": minutes,
             "url": (config.get("toll_bench") or {}).get("base_url"),
             "token": _old_token(path, config),
         }
     old = Agent(path, config)
     section = config.get("agent") or {}
     return {"name": section.get("name"), "company": section.get("company"),
-            "model": section.get("model"), "command": section.get("command"),
-            "url": old.bench_url, "token": old.token(), "config": config}
+            "model": section.get("model"), "wake": section.get("wake"),
+            "command": section.get("command"), "url": old.bench_url, "token": old.token(),
+            "config": config}
 
 
 def registration(name: str, company: str, model: str, protocol: dict[str, Any], *,
@@ -186,23 +204,108 @@ def _register(bench: Bench, payload: dict[str, Any], connect_code: str | None) -
     return str(token)
 
 
+def _pick(label: str, present: list[known_agents.Known],
+          ask: Callable[[str, str | None], str]) -> known_agents.Known | None:
+    """The owner picks a known agent by name or number; None is "something else"."""
+    options = [f"{number}) {k.label} ({k.program})" for number, k in enumerate(present, 1)]
+    options.append(f"{len(present) + 1}) {SOMETHING_ELSE}")
+    reply = str(ask(f"{label} " + ", ".join(options), "1") or "1").strip().lower()
+    if reply.isdigit() and 1 <= int(reply) <= len(present) + 1:
+        return present[int(reply) - 1] if int(reply) <= len(present) else None
+    if reply in (SOMETHING_ELSE, "other", "else"):
+        return None
+    chosen = known_agents.by_name(reply)
+    if chosen is None or chosen not in present:
+        raise InitError(f"{label} Answer a number from 1 to {len(present) + 1} or one of: "
+                        + ", ".join(k.name for k in present) + f", {SOMETHING_ELSE}.")
+    return chosen
+
+
+def choose_wake(answers: dict[str, Any], facts: dict[str, Any], *,
+                ask: Callable[[str, str | None], str], say: Callable[[str], None],
+                which: Callable[[str], str | None] = shutil.which) -> dict[str, Any]:
+    """How the agent is woken: {"wake": {...}} for an agent known by name (no command line
+    for anyone to type), or {"command": [...]} for an agent the harness does not know.
+
+    The order: a flag; what this folder's agent.yaml already says (a 0.x agent wakes the
+    same agent as before, with no question); the known agents found on this computer (one:
+    said and used; several: the owner picks by name); a command line only for "something
+    else"."""
+    if answers.get("command"):
+        return {"command": checked_command(shlex.split(str(answers["command"])))}
+    if answers.get("agent"):
+        chosen = known_agents.by_name(answers["agent"])
+        if chosen is None:
+            raise InitError(f"The harness does not know an agent named {answers['agent']!r}; "
+                            f"it knows {known_agents.names()}. For another agent give "
+                            "--command.")
+        return {"wake": {"agent": chosen.name}}
+    if facts.get("wake"):
+        wake = known_agents.checked(dict(facts["wake"]))
+        if facts.get("old"):
+            say(f"It wakes as it did under 0.x: {known_agents.describe(wake)}.")
+        return {"wake": wake}
+    if facts.get("command") and not facts.get("old"):
+        return {"command": checked_command(facts["command"])}
+    present = known_agents.found(which)
+    if facts.get("old"):
+        # An API key reached the model under 0.x: there is no program to wake, so nothing
+        # is picked for the owner here, even when one agent program is on this computer.
+        say(f"Under toll-harness 0.x this agent reached its model with an API key "
+            f"({facts.get('adapter')}). The harness has no model of its own, so it needs to "
+            "know which agent answers now.")
+    elif len(present) == 1:
+        say(f"Found {present[0].label} ({present[0].program}) on this computer: your agent "
+            "wakes through it.")
+        return {"wake": {"agent": present[0].name}}
+    if not present:
+        say(f"No agent program the harness knows ({known_agents.names()}) is on this "
+            "computer.")
+        chosen = None
+    else:
+        chosen = _pick(AGENT, present, ask)
+    if chosen is not None:
+        return {"wake": {"agent": chosen.name}}
+    line = str(ask(COMMAND, None) or "").strip()
+    if not line:
+        raise InitError(f"{COMMAND}: an answer is needed.")
+    return {"command": checked_command(shlex.split(line))}
+
+
+def sample_wake(command: list[str], path: Path, time_limit: float):
+    """Wake the agent once with the sample item, as `doctor` does. Nothing reaches the bench."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return hand_off(command, dict(DOCTOR_ITEM), time_limit=min(time_limit, SAMPLE_SECONDS),
+                    config_path=str(path), cwd=str(path.parent))
+
+
+def woke_line(result) -> str:
+    if result.status == ANSWERED:
+        return f"Your agent woke and answered a sample item in {result.seconds:.1f} s."
+    return (f"Your agent woke in {result.seconds:.1f} s; it printed nothing, so it answers "
+            "items later with `toll-harness answer`.")
+
+
 def init(directory: str | Path, *, registered: bool = False,
          ask: Callable[[str, str | None], str] | None = None,
          say: Callable[[str], None] = print, environ: dict[str, str] | None = None,
          answers: dict[str, str | None] | None = None,
          bench_factory: Callable[[str], Bench] = Bench,
-         install_service: Callable[[Agent], dict[str, Any]] | None = None) -> Agent:
+         install_service: Callable[[Agent], dict[str, Any]] | None = None,
+         which: Callable[[str], str | None] = shutil.which,
+         wake_check: Callable[..., Any] = sample_wake) -> Agent:
     import os
 
     environ = dict(os.environ if environ is None else environ)
     answers = dict(answers or {})
+    ask = ask or _ask
     path = Path(directory).expanduser().resolve()
     path = path if path.suffix in (".yaml", ".yml") else path / "agent.yaml"
-    known = _known(path)
-    url = str(environ.get(BASE_URL_ENV) or known.get("url") or DEFAULT_BENCH_URL)
+    facts = _known(path)
+    url = str(environ.get(BASE_URL_ENV) or facts.get("url") or DEFAULT_BENCH_URL)
     url = url.strip().rstrip("/")
     bench = bench_factory(url)
-    token = known.get("token")
+    token = facts.get("token")
     if registered:
         token = (environ.get(TOKEN_ENV) or "").strip() or None
         if not token:
@@ -218,27 +321,38 @@ def init(directory: str | Path, *, registered: bool = False,
     owner = me.get("owner") if isinstance(me.get("owner"), dict) else {}
 
     def question(key: str, label: str, default: Any) -> str:
+        """Asked only when nobody has said it yet: a flag, this folder's agent.yaml, the
+        agent's record on Toll Bench or the agent picked by name."""
         value = answers.get(key)
         if value is None:
-            value = (ask or _ask)(label, str(default) if default else None)
-        value = str(value or default or "").strip()
+            value = default if default else ask(label, None)
+        value = str(value or "").strip()
         if not value:
             raise InitError(f"{label}: an answer is needed.")
         return value
 
-    if known.get("old"):
+    if facts.get("old"):
         say(f"Moving {path.parent.name} from toll-harness 0.x: it keeps its identity and token.")
-    company = question("company", COMPANY, known.get("company") or owner.get("name"))
-    model = question("model", MODEL, known.get("model"))
-    default_command = known.get("command")
-    if isinstance(default_command, list):
-        default_command = shlex.join(default_command)
-    command = checked_command(shlex.split(question("command", COMMAND, default_command)))
-    if shutil.which(command[0]) is None and not Path(command[0]).exists():
-        say(f"Note: `{command[0]}` is not on this PATH; the service uses the PATH it is "
-            "installed with.")
-    name = str(answers.get("name") or on_record.get("handle") or known.get("name")
+    company = question("company", COMPANY, facts.get("company") or owner.get("name"))
+    how = choose_wake(answers, facts, ask=ask, say=say, which=which)
+    picked = known_agents.by_name((how.get("wake") or {}).get("agent"))
+    model = question("model", MODEL, facts.get("model") or (picked.model if picked else None))
+    name = str(answers.get("name") or on_record.get("handle") or facts.get("name")
                or path.parent.name or "agent")
+    previous = facts.get("config") or {}
+    minutes = (previous.get("agent") or {}).get(
+        "time_limit_minutes", facts.get("time_limit_minutes", DEFAULT_TIME_LIMIT_MINUTES))
+    command = (known_agents.wake_argv(how["wake"]) if how.get("wake")
+               else how["command"])
+
+    # Wake it once BEFORE anything is registered or changed: setup never ends as "done" on
+    # an agent that did not wake (Steven: "why doesnt it run the command when its installed").
+    woke = wake_check(command, path, max(1.0, float(minutes) * 60))
+    if woke.status not in (ANSWERED, LATER):
+        said = f" ({woke.said})" if getattr(woke, "said", "") else ""
+        raise InitError(f"Your agent did not wake: {woke.why}{said}. Nothing was registered "
+                        "or changed. Fix that and run `toll-harness init` again.")
+    say(woke_line(woke))
 
     if not token:
         # Only a brand-new agent: one that registered, or moves from 0.x, has these already.
@@ -250,21 +364,18 @@ def init(directory: str | Path, *, registered: bool = False,
         ), answers.get("connect_code"))
         me = bench.with_token(token).me()
 
-    if known.get("old"):
+    if facts.get("old"):
         backup = path.with_name("agent.0x.yaml")
         write_atomic(backup, path.read_text(encoding="utf-8"))
         say(f"The 0.x agent.yaml is kept as {backup.name}.")
-    previous = known.get("config") or {}
-    config = {
-        "version": CONFIG_VERSION,
-        "agent": {
-            "name": name, "company": company, "model": model, "command": command,
-            "time_limit_minutes": (previous.get("agent") or {}).get(
-                "time_limit_minutes", DEFAULT_TIME_LIMIT_MINUTES),
-        },
-        "bench": {"url": url},
-        "storage": previous.get("storage") or ".toll-harness",
-    }
+    section: dict[str, Any] = {"name": name, "company": company, "model": model}
+    if how.get("wake"):
+        section["wake"] = how["wake"]
+    else:
+        section["command"] = how["command"]
+    section["time_limit_minutes"] = minutes
+    config = {"version": CONFIG_VERSION, "agent": section, "bench": {"url": url},
+              "storage": previous.get("storage") or ".toll-harness"}
     if previous.get("update"):
         config["update"] = previous["update"]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -336,7 +447,8 @@ def doctor(agent: Agent, *, say: Callable[[str], None] = print,
         report(result.status in (ANSWERED, LATER),
                f"the agent's command {'answered' if result.status == ANSWERED else 'ran'} "
                f"a sample item in {result.seconds:.1f} s" if result.status != "failed"
-               else f"the agent's command: {result.why}")
+               else f"the agent's command: {result.why}"
+               + (f" ({result.said})" if result.said else ""))
     except ConfigError as error:
         report(False, str(error))
     if service_status is None:

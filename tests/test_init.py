@@ -1,5 +1,6 @@
-"""init (three questions, register or connect, token in the store, the service, /me printed),
-the 0.x move, connect and doctor."""
+"""init (only what nobody said yet, register or connect, token in the store, the service, /me
+printed), the 0.x move, connect and doctor. The agent picked by name and the sample wake have
+their own tests in test_known.py; here no known agent is on the computer and the wake passes."""
 
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ import yaml
 
 from tests.fakebench import TOKEN, FakeBench
 from toll_harness.agent import TOKEN_SECRET, ConfigError, load
+from toll_harness.handoff import ANSWERED, HandOff
+from toll_harness.known import wake_argv
 from toll_harness.onboarding import InitError, connect, doctor, init
 from toll_harness.secrets import FileSecretStore
 
@@ -24,6 +27,8 @@ def run_init(folder, bench: FakeBench, *, said=None, installed=None, **kwargs):
     installed = [] if installed is None else installed
     kwargs.setdefault("answers", answers())
     kwargs.setdefault("environ", {"TOLL_HARNESS_BASE_URL": bench.url})
+    kwargs.setdefault("which", lambda program: None)  # no known agent on this computer
+    kwargs.setdefault("wake_check", lambda command, path, limit: HandOff(ANSWERED, {"ok": True}))
     return init(folder, say=said.append,
                 install_service=lambda agent: installed.append(agent) or
                 {"service": "toll-harness-testecho.service", "running": True},
@@ -34,7 +39,7 @@ def test_a_new_agent_is_asked_five_things_registers_and_installs_the_service(tmp
     asked, said, installed = [], [], []
 
     replies = {"Company": "Test Owner Co", "Model's": "Echo",
-               "Command": "my-agent --flag 'two words'", "Contact": "owner@example.com",
+               "The": "my-agent --flag 'two words'", "Contact": "owner@example.com",
                "Location": "US-OR"}
 
     def ask(label, default):
@@ -44,7 +49,7 @@ def test_a_new_agent_is_asked_five_things_registers_and_installs_the_service(tmp
     agent = run_init(tmp_path / "TestEcho", bench, said=said, installed=installed,
                      answers={}, ask=ask)
     assert [label.split(" ")[0] for label in asked] == [
-        "Company", "Model's", "Command", "Contact", "Location"]
+        "Company", "The", "Model's", "Contact", "Location"]
     assert asked[-1] == "Location (country, and state if in the US)"
     assert not any("urisdiction" in label for label in asked)
     config = yaml.safe_load(agent.path.read_text())
@@ -76,8 +81,8 @@ def test_a_new_agent_is_asked_five_things_registers_and_installs_the_service(tmp
 
 
 def test_init_registered_reads_the_token_from_the_environment(tmp_path, bench):
-    def ask(label, default):  # only the three questions; never contact email or location
-        assert label.split(" ")[0] in ("Company", "Model's", "Command"), label
+    def ask(label, default):  # never contact email or location; company is on the record
+        assert label.split(" ")[0] in ("Model's", "The"), label
         return default or "x"
 
     agent = run_init(tmp_path / "x", bench, registered=True, ask=ask, answers={},
@@ -112,13 +117,15 @@ def test_init_moves_a_0x_agent_keeping_its_token(tmp_path, bench):
     with pytest.raises(ConfigError, match="0.x"):
         load(folder)
     said = []
-    agent = run_init(folder, bench, said=said, environ={}, ask=lambda label, default: default,
-                     answers={"command": "claude -p --output-format json"})
+    agent = run_init(folder, bench, said=said, environ={}, answers={},
+                     ask=lambda label, default: pytest.fail(f"asked {label}"))
     assert bench.registered == []
     assert agent.token() == TOKEN
     assert agent.section["company"] == "Old Co" and agent.section["model"] == "Claude"
+    assert agent.section["wake"] == {"agent": "claude"} and "command" not in agent.section
     assert (folder / "agent.0x.yaml").exists()
-    assert load(folder).command == ["claude", "-p", "--output-format", "json"]
+    assert load(folder).command == wake_argv({"agent": "claude"})
+    assert any("as it did under 0.x: Claude Code (claude)" in line for line in said)
 
 
 def test_connect_acknowledges_the_ping_until_reachable(made):

@@ -70,7 +70,19 @@ class Agent:
         return str(self.section.get("name") or self.path.parent.name or "agent")
 
     @property
+    def wake(self) -> dict[str, Any] | None:
+        """The agent known by name that the harness wakes (agent.wake), else None."""
+        value = self.section.get("wake")
+        return value if isinstance(value, dict) else None
+
+    @property
     def command(self) -> list[str]:
+        """What the harness runs for each item: the bridge for an agent known by name
+        (agent.wake), else the owner's own command (agent.command)."""
+        if self.section.get("wake") is not None:
+            from toll_harness.known import wake_argv
+
+            return wake_argv(self.section["wake"])
         return checked_command(self.section.get("command"))
 
     @property
@@ -150,8 +162,8 @@ def load(value: str | Path | None = None) -> Agent:
     config = read_yaml(path)
     if is_old_config(config):
         raise ConfigError(
-            f"{path} was written by toll-harness 0.x; run `toll-harness init {path.parent}` "
-            "once: it keeps the agent's identity and token and asks for its command"
+            f"{path} was written by toll-harness 0.x; `toll-harness watch` moves it by itself "
+            f"(or run `toll-harness init {path.parent}`): the agent keeps its identity and token"
         )
     agent = Agent(path, config)
     agent.command  # noqa: B018 - refuse a bad command at load, not at the first item

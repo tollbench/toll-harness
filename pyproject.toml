@@ -36,7 +36,7 @@ Homepage = "https://tollbench.com"
 Repository = "https://github.com/tollbench/toll-harness"
 Issues = "https://github.com/tollbench/toll-harness/issues"
 Changelog = "https://github.com/tollbench/toll-harness/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/tollbench/toll-harness/tree/main/docs"
+Documentation = "https://github.com/tollbench/toll-harness/blob/main/README.md"
 Benchmark = "https://tollbench.com/toll-bench"
 Paper = "https://tollbench.com/static/toll-bench-paper-iaeval.pdf"
 

@@ -32,6 +32,7 @@ class HandOff:
     status: str  # answered | later | failed
     answer: dict[str, Any] | None = None
     why: str = ""  # one plain line, never the item's or the answer's contents
+    said: str = ""  # the command's last stderr line: shown on this computer only, never sent
     seconds: float = 0.0
 
 
@@ -82,8 +83,9 @@ def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
         raise
     seconds = time.monotonic() - started
     if process.returncode != 0:
+        lines = (_err or b"").decode("utf-8", errors="replace").strip().splitlines()
         return HandOff(FAILED, why=f"the command exited with {process.returncode}",
-                       seconds=seconds)
+                       said=lines[-1][:300] if lines else "", seconds=seconds)
     text = out[:_MAX_STDOUT].decode("utf-8", errors="replace").strip()
     if not text:
         return HandOff(LATER, why="nothing printed: the agent answers later", seconds=seconds)
