@@ -26,9 +26,10 @@
 #   5. waits for the agent to answer after the restart. From 1.0: the harness's own line
 #      "live line open" in <agent-dir>/.toll-harness/harness.log (its first GET /me/items came
 #      back). Below 1.0: the first "attention -> 200" in the agent's market.log, as before.
-#      A 0.x agent folder must be moved first (`toll-harness init <agent-dir>` from the 1.0
-#      venv): 1.0 refuses a 0.x agent.yaml, so this script stops before touching it.
-#   6. prints the one-line rollback.
+#      A 0.x agent folder is moved by the 1.0 watch itself on that first start (Steven, Nov 11:
+#      "we upgrade them all"): it keeps the token, wakes the same agent, and keeps the old file
+#      as agent.0x.yaml. Back up the folder first; this script does not.
+#   6. prints the one-line rollback (for a moved agent it also puts agent.0x.yaml back).
 #
 # --dry-run runs the check and reads the unit, prints what it would do, and changes nothing.
 # SYSTEMCTL (default systemctl) and SYSTEMD_USER_DIR (default ~/.config/systemd/user) can point
@@ -90,9 +91,9 @@ fi
 harness_one="$(python3 -c 'import re, sys
 m = re.match(r"^(\d+)", sys.argv[1])
 print(1 if m and int(m[1]) >= 1 else 0)' "$version")"
+moving=0
 if [[ "$harness_one" == 1 ]]; then
-  grep -qE '^version: *2 *$' "$agent_dir/agent.yaml" 2>/dev/null \
-    || die "toll-harness $version needs a 1.0 agent.yaml; run \`toll-harness init $agent_dir\` from a 1.0 install first (it keeps the agent's identity and token). Nothing was changed."
+  grep -qE '^version: *2 *$' "$agent_dir/agent.yaml" 2>/dev/null || moving=1
   ready_pattern='live line open'
   [[ -n "$log" ]] || log="$agent_dir/.toll-harness/harness.log"
 else
@@ -176,6 +177,9 @@ if [[ -d "$dropin_dir" ]]; then
 fi
 dropin="$dropin_dir/$dropin_name"
 rollback="rm '$dropin' && systemctl --user daemon-reload && systemctl --user restart '$unit'"
+if [[ "$moving" == 1 ]]; then
+  rollback="rm '$dropin' && cp -p '$agent_dir/agent.0x.yaml' '$agent_dir/agent.yaml' && systemctl --user daemon-reload && systemctl --user restart '$unit'"
+fi
 dropin_text="# toll-harness $version ($source_note), written $(date -u +%Y-%m-%dT%H:%MZ) by scripts/install_on_agent.sh
 # after the freshness check passed. It sorts after every other drop-in here, so its ExecStart wins.
 # Roll back: $rollback
@@ -196,6 +200,7 @@ $dropin_text
 -----
   then:     systemctl --user daemon-reload, check the unit runs $new_exe, systemctl --user restart $unit
   wait:     the first "$ready_pattern" in $log after the restart (up to ${timeout}s)
+  move:     $([[ "$moving" == 1 ]] && echo "agent.yaml is 0.x: the 1.0 watch moves it on its first start" || echo "none")
   rollback: $rollback
 EOF
   exit 0
