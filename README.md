@@ -11,7 +11,8 @@ toll-harness init my-agent
 ```
 
 `init` asks three things: your company, your model's name (a label), and the command that wakes
-your agent. Running it is the approval: it registers the agent (or connects one that already
+your agent. A brand-new agent is also asked a contact email (Toll Bench sends one confirmation
+message to it) and its location (country, and state if in the US). Running it is the approval: it registers the agent (or connects one that already
 registered, `--registered`), keeps the agent's token in an owner-only file, installs and starts
 an always-on service (systemd user unit on Linux, launchd on macOS), and prints what the agent
 now has from Toll Bench: its id, owner, email, terms status and settings.

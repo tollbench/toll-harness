@@ -30,11 +30,12 @@ def run_init(folder, bench: FakeBench, *, said=None, installed=None, **kwargs):
                 **kwargs)
 
 
-def test_init_asks_three_things_registers_and_installs_the_service(tmp_path, bench):
+def test_a_new_agent_is_asked_five_things_registers_and_installs_the_service(tmp_path, bench):
     asked, said, installed = [], [], []
 
     replies = {"Company": "Test Owner Co", "Model's": "Echo",
-               "Command": "my-agent --flag 'two words'"}
+               "Command": "my-agent --flag 'two words'", "Contact": "owner@example.com",
+               "Location": "US-OR"}
 
     def ask(label, default):
         asked.append(label)
@@ -42,8 +43,10 @@ def test_init_asks_three_things_registers_and_installs_the_service(tmp_path, ben
 
     agent = run_init(tmp_path / "TestEcho", bench, said=said, installed=installed,
                      answers={}, ask=ask)
-    assert len(asked) == 3
-    assert [label.split(" ")[0] for label in asked] == ["Company", "Model's", "Command"]
+    assert [label.split(" ")[0] for label in asked] == [
+        "Company", "Model's", "Command", "Contact", "Location"]
+    assert asked[-1] == "Location (country, and state if in the US)"
+    assert not any("urisdiction" in label for label in asked)
     config = yaml.safe_load(agent.path.read_text())
     assert config["agent"]["command"] == ["my-agent", "--flag", "two words"]
     assert config["agent"]["company"] == "Test Owner Co" and config["agent"]["model"] == "Echo"
@@ -56,16 +59,28 @@ def test_init_asks_three_things_registers_and_installs_the_service(tmp_path, ben
     assert registered["handle"] == "TestEcho"
     assert registered["disclosure"]["operator_label"] == "Test Owner Co"
     assert registered["rules"] == {"accepted": True, "version_hash": "rules-abc"}
+    # `jurisdiction` is what the bench requires today; `location` rides beside it.
+    assert registered["responsible_party"] == {
+        "legal_name": "Test Owner Co", "contact_ref": "owner@example.com",
+        "jurisdiction": "US-OR", "location": "US-OR"}
     assert [entry.path for entry in installed] == [agent.path]
     text = "\n".join(said)
     for fact in ("A-0999", "Test Owner Co", "testecho@agents.example", "accepted",
                  "looking_for all"):
         assert fact in text
     assert TOKEN not in text
+    assert "owner@example.com" not in text  # the contact email is never said back
+    assert "owner@example.com" not in agent.path.read_text()
+    log = agent.data_dir / "harness.log"
+    assert not log.exists() or "owner@example.com" not in log.read_text()
 
 
 def test_init_registered_reads_the_token_from_the_environment(tmp_path, bench):
-    agent = run_init(tmp_path / "x", bench, registered=True,
+    def ask(label, default):  # only the three questions; never contact email or location
+        assert label.split(" ")[0] in ("Company", "Model's", "Command"), label
+        return default or "x"
+
+    agent = run_init(tmp_path / "x", bench, registered=True, ask=ask, answers={},
                      environ={"TOLL_HARNESS_BASE_URL": bench.url,
                               "TOLL_HARNESS_AGENT_TOKEN": TOKEN})
     assert bench.registered == []
@@ -143,6 +158,42 @@ def test_cli_init_reports_a_bench_refusal_plainly(tmp_path, monkeypatch, capsys)
     monkeypatch.setenv("TOLL_HARNESS_BASE_URL", "http://127.0.0.1:9")  # nothing listens
     with pytest.raises(SystemExit) as stopped:
         cli.main(["init", str(tmp_path / "a"), "--company", "C", "--model", "M",
-                  "--command", f"{sys.executable} -c pass"])
+                  "--command", f"{sys.executable} -c pass", "--contact-email", "o@example.com",
+                  "--location", "US-OR"])
     assert stopped.value.code == 2
     assert "Toll Bench" in capsys.readouterr().err
+
+
+def test_location_flag_and_the_old_jurisdiction_name_reach_the_registration(tmp_path, bench,
+                                                                            monkeypatch, capsys):
+    from toll_harness import cli, onboarding
+
+    seen = []
+    monkeypatch.setattr(onboarding, "init", lambda directory, **kw: seen.append(kw["answers"]))
+    for flag in ("--location", "--jurisdiction"):
+        with pytest.raises(SystemExit):
+            cli.main(["init", str(tmp_path), "--company", "C", "--model", "M", "--command",
+                      "a", "--contact-email", "o@example.com", flag, "US-WA"])
+    assert [answers["location"] for answers in seen] == ["US-WA", "US-WA"]
+    with pytest.raises(SystemExit):
+        cli.main(["init", "--help"])
+    shown = capsys.readouterr().out
+    assert "--location" in shown and "urisdiction" not in shown
+
+
+def test_flags_answer_a_new_registration_without_questions(tmp_path, bench):
+    agent = run_init(tmp_path / "Flagged", bench, ask=lambda *a: pytest.fail("asked"),
+                     answers=answers(contact_email="o@example.com", location="CA"))
+    assert agent.token() == TOKEN
+    party = bench.registered[0]["responsible_party"]
+    assert (party["jurisdiction"], party["location"]) == ("CA", "CA")
+
+
+def test_the_version_is_written_the_same_in_both_places():
+    import re
+    from pathlib import Path
+
+    from toll_harness import __version__
+
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == __version__

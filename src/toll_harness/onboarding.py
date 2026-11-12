@@ -1,9 +1,10 @@
 """`init`, `connect` and `doctor`.
 
-init asks three things only: the company, the model's name (a label) and the command that
-wakes the agent. Running it is the approval: it registers (or connects an agent that already
-registered, `--registered`), keeps the token in the secret store, installs and starts the
-always-on service, and prints what the agent now has from Toll Bench.
+init asks three things: the company, the model's name (a label) and the command that wakes
+the agent; a brand-new registration also asks a contact email and a location. Running it is
+the approval: it registers (or connects an agent that already registered, `--registered`),
+keeps the token in the secret store, installs and starts the always-on service, and prints
+what the agent now has from Toll Bench.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ from toll_harness.secrets import FileSecretStore
 COMPANY = "Company"
 MODEL = "Model's name (a label, for example Claude, Grok, Qwen)"
 COMMAND = "Command that wakes your agent (it gets each item as JSON on stdin)"
+CONTACT_EMAIL = "Contact email (Toll Bench sends one confirmation message to it)"
+LOCATION = "Location (country, and state if in the US)"
 BRAND_MAX = 40
 
 DOCTOR_ITEM = {
@@ -126,7 +129,7 @@ def _known(path: Path) -> dict[str, Any]:
 
 
 def registration(name: str, company: str, model: str, protocol: dict[str, Any], *,
-                 contact_email: str | None = None, jurisdiction: str | None = None,
+                 contact_email: str | None = None, location: str | None = None,
                  company_url: str | None = None) -> dict[str, Any]:
     brand = model[:BRAND_MAX].strip()
     disclosure: dict[str, Any] = {"is_ai": True, "model": model, "operator_label": company,
@@ -134,8 +137,11 @@ def registration(name: str, company: str, model: str, protocol: dict[str, Any], 
     if company_url:
         disclosure["company_url"] = company_url
     responsible = {"legal_name": company}
-    if jurisdiction:
-        responsible["jurisdiction"] = jurisdiction
+    if location:
+        # The bench requires `jurisdiction` today; `location` is the name Steven wants
+        # ("too law wordy"). Both carry the same value until the bench takes the new one.
+        responsible["jurisdiction"] = location
+        responsible["location"] = location
     if contact_email:
         responsible["contact_ref"] = contact_email
     return {
@@ -234,9 +240,12 @@ def init(directory: str | Path, *, registered: bool = False,
                or path.parent.name or "agent")
 
     if not token:
+        # Only a brand-new agent: one that registered, or moves from 0.x, has these already.
+        contact_email = question("contact_email", CONTACT_EMAIL, None)
+        location = question("location", LOCATION, None)
         token = _register(bench, registration(
-            name, company, model, bench.protocol(), contact_email=answers.get("contact_email"),
-            jurisdiction=answers.get("jurisdiction"), company_url=answers.get("company_url"),
+            name, company, model, bench.protocol(), contact_email=contact_email,
+            location=location, company_url=answers.get("company_url"),
         ), answers.get("connect_code"))
         me = bench.with_token(token).me()
 

@@ -59,6 +59,7 @@ class Watch:
         self.after: str | None = state.get("after")
         self.done: list[str] = list(state.get("done") or [])
         self.problems = 0  # calls in a row the bench did not answer
+        self.line_open = False
 
     @property
     def outbox_dir(self) -> Path:
@@ -105,7 +106,11 @@ class Watch:
         except BenchError as error:
             self._trouble(error, "waiting for items")
             return None
-        if self.problems:
+        if not self.line_open:
+            # scripts/install_on_agent.sh waits for this line after a restart.
+            self.line_open = True
+            self.log.line(f"live line open (toll-harness {__version__})")
+        elif self.problems:
             self.log.line("the bench answers again")
         self.problems = 0
         me = response.get("me")

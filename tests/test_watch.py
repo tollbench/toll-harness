@@ -240,3 +240,20 @@ def test_a_notice_is_handed_over_but_never_answered(made):
     made.bench.add(item("it_note", kind="notice", answer={"needed": False}))
     watch(agent).run(1)
     assert len(made.runs()) == 1 and made.bench.answers == []
+
+
+def test_the_live_line_open_line_is_written_once(made):
+    agent = made.agent()
+    watch(agent).run(3)
+    text = (agent.data_dir / "harness.log").read_text()
+    assert text.count("live line open (toll-harness 1.0.0)") == 1
+
+
+def test_the_install_script_waits_for_the_line_the_watch_writes():
+    import subprocess
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "install_on_agent.sh"
+    subprocess.run(["bash", "-n", str(script)], check=True)
+    text = script.read_text()
+    assert "ready_pattern='live line open'" in text and "ready_pattern='attention -> 200'" in text

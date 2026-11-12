@@ -23,7 +23,11 @@
 #      unit's current winning ExecStart but points it at the new venv's python. Its name sorts
 #      after every other drop-in there.
 #   4. daemon-reload, a check that the unit now runs the new python, then a restart.
-#   5. waits for the first "attention -> 200" in the agent's market.log written after the restart.
+#   5. waits for the agent to answer after the restart. From 1.0: the harness's own line
+#      "live line open" in <agent-dir>/.toll-harness/harness.log (its first GET /me/items came
+#      back). Below 1.0: the first "attention -> 200" in the agent's market.log, as before.
+#      A 0.x agent folder must be moved first (`toll-harness init <agent-dir>` from the 1.0
+#      venv): 1.0 refuses a 0.x agent.yaml, so this script stops before touching it.
 #   6. prints the one-line rollback.
 #
 # --dry-run runs the check and reads the unit, prints what it would do, and changes nothing.
@@ -82,6 +86,19 @@ else
   source_note="PyPI"
 fi
 
+# 1.0 and later: the harness of protocol v1 (no extras, its own log line, a 1.0 agent.yaml).
+harness_one="$(python3 -c 'import re, sys
+m = re.match(r"^(\d+)", sys.argv[1])
+print(1 if m and int(m[1]) >= 1 else 0)' "$version")"
+if [[ "$harness_one" == 1 ]]; then
+  grep -qE '^version: *2 *$' "$agent_dir/agent.yaml" 2>/dev/null \
+    || die "toll-harness $version needs a 1.0 agent.yaml; run \`toll-harness init $agent_dir\` from a 1.0 install first (it keeps the agent's identity and token). Nothing was changed."
+  ready_pattern='live line open'
+  [[ -n "$log" ]] || log="$agent_dir/.toll-harness/harness.log"
+else
+  ready_pattern='attention -> 200'
+fi
+
 # The unit's winning ExecStart (the last non-empty one systemd applies) and its log file.
 unit_text="$(user_systemctl cat "$unit" 2>&1)" || die "systemctl --user cat $unit failed: $unit_text"
 parsed_text="$(printf '%s\n' "$unit_text" | python3 -c '
@@ -127,6 +144,7 @@ fi
 extras="$("$current_python" -c 'import importlib.util as u
 pairs = (("aws", "boto3"), ("browser", "playwright"), ("anthropic", "anthropic"), ("openai", "openai"))
 print(",".join(extra for extra, module in pairs if u.find_spec(module)))' 2>/dev/null || true)"
+[[ "$harness_one" == 1 ]] && extras=""  # 1.0 has no extras: the agent brings its own brain
 extras_spec="${extras:+[$extras]}"
 
 venv="$agent_dir/venv-$version"
@@ -177,7 +195,7 @@ DRY RUN: the freshness check passed; nothing below was done.
 $dropin_text
 -----
   then:     systemctl --user daemon-reload, check the unit runs $new_exe, systemctl --user restart $unit
-  wait:     the first "attention -> 200" in $log after the restart (up to ${timeout}s)
+  wait:     the first "$ready_pattern" in $log after the restart (up to ${timeout}s)
   rollback: $rollback
 EOF
   exit 0
@@ -205,23 +223,24 @@ offset=0
 [[ -f "$log" ]] && offset="$(stat -c %s "$log")"
 user_systemctl restart "$unit"
 
-# 5. The first clean attention after the restart.
+# 5. The agent answers after the restart: its first "live line open" (1.0) or clean
+#    "attention -> 200" (below 1.0), written after the offset taken before the restart.
 deadline=$(( $(date +%s) + timeout ))
 while :; do
   if [[ -f "$log" ]]; then
     size="$(stat -c %s "$log")"
     (( size < offset )) && offset=0
-    hit="$(tail -c +"$((offset + 1))" "$log" | grep -m 1 -E 'attention -> 200' || true)"
+    hit="$(tail -c +"$((offset + 1))" "$log" | grep -m 1 -F -- "$ready_pattern" || true)"
     if [[ -n "$hit" ]]; then
       echo "$unit runs toll-harness $version from $venv."
-      echo "  first clean attention: $hit"
+      echo "  first answer after the restart: $hit"
       echo "Roll back: $rollback"
       exit 0
     fi
   fi
   state="$(user_systemctl is-active "$unit" || true)"
   if [[ "$state" == "failed" ]] || (( $(date +%s) >= deadline )); then
-    echo "install_on_agent: $unit did not answer attention -> 200 (state: $state, waited up to ${timeout}s)." >&2
+    echo "install_on_agent: $unit did not write \"$ready_pattern\" (state: $state, waited up to ${timeout}s)." >&2
     [[ -f "$log" ]] && tail -c +"$((offset + 1))" "$log" | tail -n 20 >&2
     echo "Roll back: $rollback" >&2
     exit 1

@@ -16,7 +16,7 @@ def _init(arguments: argparse.Namespace) -> int:
     from toll_harness.onboarding import InitError, init
 
     answers = {key: getattr(arguments, key) for key in (
-        "company", "model", "command", "name", "contact_email", "jurisdiction", "company_url",
+        "company", "model", "command", "name", "contact_email", "location", "company_url",
         "connect_code")}
     try:
         init(arguments.directory, registered=arguments.registered, answers=answers)
@@ -119,11 +119,12 @@ def parser() -> argparse.ArgumentParser:
     for flag, text in (("--company", "the company"), ("--model", "the model's name"),
                        ("--command", "the command that wakes the agent"),
                        ("--name", "the agent's handle (default: the folder's name)"),
-                       ("--contact-email", "responsible party email, for a new registration"),
-                       ("--jurisdiction", "responsible party jurisdiction, e.g. US-OR"),
+                       ("--contact-email", "contact email, for a new registration"),
+                       ("--location", "location: country, and state if in the US (e.g. US-OR)"),
                        ("--company-url", "the company's public URL"),
                        ("--connect-code", "a connect code from your Toll Bench account")):
         init.add_argument(flag, help=text)
+    init.add_argument("--jurisdiction", dest="location", help=argparse.SUPPRESS)  # old name
     init.set_defaults(run=_init)
 
     watch = commands.add_parser("watch", help="the always-on loop (what the service runs)")

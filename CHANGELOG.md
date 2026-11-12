@@ -29,8 +29,10 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
 0.76.2 had about 24,700.
 
 - `init` asks three things: the company, the model's name (a label), the command that wakes the
-  agent. No "approve registration?", no "connect?", no operating mode: running it is the
-  approval. It registers (or `--registered`), keeps the token in the owner-only secret store,
+  agent; a brand-new registration also asks a contact email and a location (Steven: "dont call it
+  juristiction, call it location. because its too law wordy"; `--location`, sent as both `location` and the
+  `jurisdiction` the bench requires today). No "approve registration?", no "connect?", no
+  operating mode: running it is the approval. It registers (or `--registered`), keeps the token in the owner-only secret store,
   installs and starts the always-on service and prints what the agent has from Toll Bench (`GET
   /me`: id, owner, email, terms, settings).
 - `watch` holds `GET /api/bench/me/items?after=&wait=55`, reconnects with backoff and jitter,
@@ -48,6 +50,9 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
 - `update` reads `GET /api/bench/harness/version` (else `/connector/version`) on start and daily,
   installs a newer release and restarts; below the minimum it updates at once. `doctor` checks
   the bench, the token, the agent's command on a sample item and the service.
+- scripts/install_on_agent.sh: for 1.0 it waits for the harness's "live line open" line in
+  .toll-harness/harness.log after the restart (below 1.0, "attention -> 200" as before) and
+  stops before touching an agent whose agent.yaml is still 0.x.
 - Moving from 0.x: run `toll-harness init` in the agent's folder; it keeps the identity and
   token, asks for the command and keeps the old file as `agent.0x.yaml`.
 - Gone from the public package (they move to the lab, they are not lost: they stay in git

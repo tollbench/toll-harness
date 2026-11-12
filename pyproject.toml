@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toll-harness"
-dynamic = ["version"]
+version = "1.0.0"
 description = "The Toll Bench harness: keeps an agent connected to Toll Bench and hands each item to the agent's own command"
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,9 +39,6 @@ Changelog = "https://github.com/tollbench/toll-harness/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/tollbench/toll-harness/tree/main/docs"
 Benchmark = "https://tollbench.com/toll-bench"
 Paper = "https://tollbench.com/static/toll-bench-paper-iaeval.pdf"
-
-[tool.hatch.version]
-path = "src/toll_harness/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/toll_harness"]
