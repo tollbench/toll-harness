@@ -1,55 +1,86 @@
+from __future__ import annotations
+
+import sys
+import textwrap
+from pathlib import Path
+
 import pytest
+import yaml
+
+from tests.fakebench import TOKEN, FakeBench
+from toll_harness.agent import TOKEN_SECRET, load
+
+# The agent's command in these tests: a small script that writes down exactly what it was
+# given (its argv, its environment's item id and kind, the item on stdin) and then does what
+# its MODE says: answer, say nothing, fail, or sleep past the time limit.
+AGENT_SCRIPT = textwrap.dedent("""
+    import json, os, sys, time
+    record = os.environ["RECORD"]
+    item = json.loads(sys.stdin.read())
+    with open(record, "a") as handle:
+        handle.write(json.dumps({"argv": sys.argv, "id": os.environ.get("TOLL_ITEM_ID"),
+                                 "kind": os.environ.get("TOLL_ITEM_KIND"),
+                                 "config": os.environ.get("TOLL_AGENT_CONFIG"),
+                                 "token_env": "TOLL_HARNESS_AGENT_TOKEN" in os.environ,
+                                 "item": item, "at": time.monotonic()}) + "\\n")
+    mode = os.environ.get("MODE", "answer")
+    if mode == "answer":
+        print(json.dumps({"reply": "on it"}))
+    elif mode == "fail":
+        sys.exit(3)
+    elif mode == "sleep":
+        time.sleep(30)
+    elif mode == "text":
+        print("not json at all")
+""")
 
 
-@pytest.fixture(autouse=True)
-def _no_update_check_network(monkeypatch):
-    """The suite never reaches PyPI or a bench: the update check is off by default.
-
-    tests/unit/test_update_check.py turns it back on with fakes in place.
-    """
-    monkeypatch.setenv("TOLL_HARNESS_UPDATE_CHECK", "0")
+@pytest.fixture
+def bench():
+    fake = FakeBench().start()
+    yield fake
+    fake.stop()
 
 
-@pytest.fixture(autouse=True)
-def _no_service_manager_in_update_check(monkeypatch):
-    """The update check never asks a real systemctl or launchctl about the service.
+class Made:
+    def __init__(self, root: Path, bench: FakeBench, monkeypatch):
+        self.root = root
+        self.bench = bench
+        self.record = root / "record.jsonl"
+        self.script = root / "agent_script.py"
+        self.script.write_text(AGENT_SCRIPT)
+        monkeypatch.setenv("RECORD", str(self.record))
+        self.monkeypatch = monkeypatch
 
-    tests/unit/test_install_service.py puts a fake state back where it needs one.
-    """
-    from toll_harness import updates
+    def mode(self, value: str) -> None:
+        self.monkeypatch.setenv("MODE", value)
 
-    monkeypatch.setattr(updates, "_service_check", lambda path, config: None)
+    def runs(self) -> list[dict]:
+        import json
 
+        if not self.record.exists():
+            return []
+        return [json.loads(line) for line in self.record.read_text().splitlines()]
 
-@pytest.fixture(autouse=True)
-def _package_logger_restored():
-    """`cli.main()` configures the `toll_harness` logger once per process
-    (a handler, a level, propagate off). A test that runs main() would leave
-    every later test's caplog blind to this package's lines, so the logger is
-    put back the way it was after each test."""
-    import logging
-
-    logger = logging.getLogger("toll_harness")
-    saved = (list(logger.handlers), logger.level, logger.propagate)
-    yield
-    logger.handlers[:] = saved[0]
-    logger.setLevel(saved[1])
-    logger.propagate = saved[2]
-
-
-@pytest.fixture(autouse=True)
-def _no_thinking_stream_network(monkeypatch):
-    """The suite never streams a run to a bench: the thinking stream is off by
-    default, the way the update check is (0.75.0).
-
-    tests/unit/test_thinking_stream_0750.py turns it back on with a fake
-    transport in place.
-    """
-    monkeypatch.setenv("TOLL_HARNESS_THINKING", "0")
+    def agent(self, **section):
+        folder = self.root / "agent"
+        folder.mkdir(exist_ok=True)
+        config = {
+            "version": 2,
+            "agent": {"name": "TestEcho", "company": "Test Owner Co", "model": "Echo",
+                      "command": [sys.executable, str(self.script), "--fixed-arg"],
+                      "time_limit_minutes": 15, **section},
+            "bench": {"url": self.bench.url},
+            "update": {"auto": False},
+        }
+        (folder / "agent.yaml").write_text(yaml.safe_dump(config))
+        agent = load(folder)
+        agent.secrets.set(TOKEN_SECRET, TOKEN)
+        return agent
 
 
-@pytest.fixture(autouse=True)
-def _default_bench_base_url(monkeypatch):
-    """A TOLL_HARNESS_BASE_URL in the shell running the suite (0.76.1: init
-    reads it) never moves a test off the default bench."""
+@pytest.fixture
+def made(tmp_path, bench, monkeypatch):
+    monkeypatch.delenv("TOLL_AGENT_CONFIG", raising=False)
     monkeypatch.delenv("TOLL_HARNESS_BASE_URL", raising=False)
+    return Made(tmp_path, bench, monkeypatch)

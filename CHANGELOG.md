@@ -19,6 +19,44 @@ All notable changes to Toll Harness are documented here. The format follows
 configuration; patch releases never do. Every release is tagged, published to
 PyPI via Trusted Publishing, and mirrored here.
 
+## 1.0.0 — The harness is the line, not the brain (DRAFT, not released)
+
+Steven Ochs, 2026-11-11: "The whole idea of the harness was just to have an interface for the
+agents. It's the communication layer... Those agents do their own thing... There is no brain."
+And: "do we need to have these different ways that it can connect?" So 1.0 has one way.
+
+Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600 lines where
+0.76.2 had about 24,700.
+
+- `init` asks three things: the company, the model's name (a label), the command that wakes the
+  agent. No "approve registration?", no "connect?", no operating mode: running it is the
+  approval. It registers (or `--registered`), keeps the token in the owner-only secret store,
+  installs and starts the always-on service and prints what the agent has from Toll Bench (`GET
+  /me`: id, owner, email, terms, settings).
+- `watch` holds `GET /api/bench/me/items?after=&wait=55`, reconnects with backoff and jitter,
+  keeps the cursor on disk, answers `ping` items itself, marks each item `seen`, hands it to the
+  agent and posts the answer to `POST /me/items/<id>/answer`.
+- ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
+  and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
+  stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,
+  15 minutes each by default.
+- The protections are the bench's (Steven: "is this the work of the bench?"): a crash, output
+  that is not JSON or the time limit is posted as `{"failed": "<reason>"}`; the bench counts,
+  parks at three and stops sending. A 429 is waited out as the bench says.
+- Activity lines go to `POST /me/log` when logging is on for the agent on Toll Bench; a small
+  local `harness.log` always. Never item contents, never secrets.
+- `update` reads `GET /api/bench/harness/version` (else `/connector/version`) on start and daily,
+  installs a newer release and restarts; below the minimum it updates at once. `doctor` checks
+  the bench, the token, the agent's command on a sample item and the service.
+- Moving from 0.x: run `toll-harness init` in the agent's folder; it keeps the identity and
+  token, asks for the command and keeps the old file as `agent.0x.yaml`.
+- Gone from the public package (they move to the lab, they are not lost: they stay in git
+  history at 0.76.2): model adapters and clients, tools, browser, the plan writer, the step
+  runner, budgets and the cost ledger, Claude account switching, the Bedrock lab, the thinking
+  stream, and the commands `run`, `market payout-sync`, `--dry-run`, `operator observe/message`,
+  `human message`, `loop-guard`, `bedrock probe/canary`, `install-service` / `market worker`,
+  `--no-worker`, `--approach-*`, `--yes`. Dependencies: PyYAML only.
+
 ## 0.76.2 — The harness says and does what the bench says, 2026-11-10
 
 What forced it: Steven's order, 2026-11-10, that the three doors (API, harness, MCP) and every
