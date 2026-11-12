@@ -45,7 +45,7 @@ def test_live_wait_hands_a_new_item_over_within_two_seconds(made):
     assert made.bench.answers == [("it_live", {"reply": "on it"})]
     waits = [query.get("wait") for _, method, path, query in made.bench.requests
              if path == "/api/bench/me/items"]
-    assert waits and all(value == "5" for value in waits)
+    assert waits[0] == "0" and waits[1:] and all(value == "5" for value in waits[1:])
 
 
 def test_ping_is_answered_by_the_connector_not_the_agent(made):
@@ -284,3 +284,11 @@ def test_the_install_script_waits_for_the_line_the_watch_writes():
     subprocess.run(["bash", "-n", str(script)], check=True)
     text = script.read_text()
     assert "ready_pattern='live line open'" in text and "ready_pattern='attention -> 200'" in text
+
+
+def test_live_line_open_is_said_when_the_bench_first_answers_not_when_an_item_comes(made):
+    agent = made.agent()
+    started = time.monotonic()
+    Watch(agent, wait=3, updater=no_update, spread=0).run(1)  # one call, nothing waiting
+    assert time.monotonic() - started < 2.5  # the first call did not hold the line
+    assert "live line open" in (agent.data_dir / "harness.log").read_text()

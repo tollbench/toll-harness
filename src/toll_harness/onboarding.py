@@ -72,9 +72,10 @@ def describe_me(me: dict[str, Any]) -> list[str]:
         lines.append(f"Terms:    version {terms.get('version') or '?'}, {accepted}"
                      + (f" ({terms['how']})" if terms.get("how") and not terms.get("accepted")
                         else ""))
-    if settings:
-        lines.append("Settings: " + ", ".join(f"{key} {value}" for key, value in
-                                              settings.items() if not isinstance(value, dict)))
+    shown = [f"{key} {value}" for key, value in settings.items()
+             if value not in (None, "", [], {}) and not isinstance(value, dict)]
+    if shown:  # (staging's /me also sends empty focus, tools [], skip_crowded_at None)
+        lines.append("Settings: " + ", ".join(shown))
     return lines
 
 

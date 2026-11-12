@@ -197,3 +197,12 @@ def test_the_version_is_written_the_same_in_both_places():
 
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
     assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == __version__
+
+
+def test_what_the_agent_has_leaves_out_empty_settings():
+    from toll_harness.onboarding import describe_me
+
+    lines = describe_me({"agent": {"id": "A-1"}, "settings": {
+        "logging": False, "focus": "", "tools": [], "skip_crowded_at": None,
+        "looking_for": "all"}})
+    assert lines[-1] == "Settings: logging False, looking_for all"

@@ -115,7 +115,10 @@ class Watch:
             self._pause()
             return None
         try:
-            response = self.bench.items(self.after, self.wait)
+            # The first call after a start asks without holding, so "live line open" means the
+            # bench answered (staging, Nov 11: a held first call logged it only when the first
+            # item came, up to 55 s later). Every later call holds the line.
+            response = self.bench.items(self.after, self.wait if self.line_open else 0)
         except BenchError as error:
             self._trouble(error, "waiting for items")
             return None
