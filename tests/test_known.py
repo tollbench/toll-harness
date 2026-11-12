@@ -32,14 +32,15 @@ from toll_harness.watch import Watch
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 # A stand-in agent program. It writes down its argv and the prompt it was given, then replies
-# the way REPLY says (default: prose around one JSON object, as a chatty CLI would).
+# the way REPLY says (default: one ```json block and a Sources line, as claude -p does).
 PROGRAM = textwrap.dedent("""\
     #!{python}
     import json, os, sys
     prompt = sys.stdin.read()
     with open(os.environ["PROGRAM_RECORD"], "a") as handle:
         handle.write(json.dumps({{"argv": sys.argv, "prompt": prompt}}) + "\\n")
-    reply = os.environ.get("REPLY", 'Sure. {{"ok": true, "reply": "woke"}} Done.')
+    fenced = '```json' + chr(10) + '{{"ok": true, "reply": "woke"}}' + chr(10) + '```'
+    reply = os.environ.get("REPLY", fenced + chr(10) + 'Sources: none')
     if reply == "EXIT1":
         sys.exit(1)
     if "--output-last-message" in sys.argv:
@@ -186,8 +187,8 @@ def test_a_sample_wake_that_fails_stops_setup_before_anything_is_registered(
 
 def test_a_sample_wake_with_no_json_in_the_reply_says_so(tmp_path, bench, programs,
                                                         monkeypatch):
-    monkeypatch.setenv("REPLY", "I am not sure what you want.")
-    with pytest.raises(InitError, match="held no JSON object"):
+    monkeypatch.setenv("REPLY", 'I am not sure. {"maybe": true}')
+    with pytest.raises(InitError, match="was not one JSON object"):
         fresh(tmp_path, bench, ask=lambda label, default: "Test Owner Co",
               which=only("claude"))
     assert bench.registered == []
@@ -197,8 +198,9 @@ def test_a_sample_wake_with_no_json_in_the_reply_says_so(tmp_path, bench, progra
 @pytest.mark.parametrize("reply, answer", [
     ('{"reply": "hi"}', {"reply": "hi"}),
     ('```json\n{"reply": "hi"}\n```', {"reply": "hi"}),
-    ('Here it is: {"reply": "hi"} - thanks', {"reply": "hi"}),
-    ('A {stray} brace, then {"reply": "hi"} and {"other": 1}', {"reply": "hi"}),
+    ('```\n{"reply": "hi"}\n```', {"reply": "hi"}),
+    ('```json\n{"reply": "hi"}\n```\n\nSources:\n- https://example.com', {"reply": "hi"}),
+    ('Here is my answer:\n```json\n{"reply": "hi"}\n```', {"reply": "hi"}),
     ('{"text": "", "tool_calls": [{"name": "result.complete", "arguments": '
      '{"result": {"reply": "hi"}}}]}', {"reply": "hi"}),  # a 0.x envelope
     ('{"text": "{\\"reply\\": \\"hi\\"}"}', {"reply": "hi"}),
@@ -209,10 +211,27 @@ def test_the_answer_is_the_one_json_object_in_the_reply(reply, answer):
     assert wake.answer_from(reply) == answer
 
 
-@pytest.mark.parametrize("reply", ["", "no json here", "[1, 2]", '{"text": ""}'])
-def test_a_reply_with_no_answer_is_refused_in_plain_words(reply):
+@pytest.mark.parametrize("reply", [
+    "", "no json here", "[1, 2]", '{"text": ""}',
+    'Here it is: {"reply": "hi"} - thanks',  # JSON in prose is never an answer
+    'I would send this if you say yes: {"version": "2026-11-12", "how": "owner said yes"}',
+    '```json\n{"a": 1}\n```\nor\n```json\n{"b": 2}\n```',  # two blocks
+    '```json\n{"a": 1}\n```\nOr maybe {"b": 2}',  # JSON outside the one block
+    '```json\nnot json\n```',
+])
+def test_a_reply_that_is_not_one_object_or_one_block_is_refused_in_plain_words(reply):
     with pytest.raises(wake.NoAnswer):
         wake.answer_from(reply)
+
+
+def test_a_fresh_claude_wake_gets_the_web_and_no_shell_or_files(tmp_path, programs):
+    hand_off(known.wake_argv({"agent": "claude"}), item("it_7"), time_limit=30)
+    argv = program_runs(tmp_path)[0]["argv"]
+    assert argv[argv.index("--tools") + 1] == "WebSearch,WebFetch"
+    assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
+    hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--own"]}), item("it_8"),
+             time_limit=30)
+    assert program_runs(tmp_path)[1]["argv"][-1:] == ["--own"]  # its own settings win
 
 
 def test_the_prompt_carries_what_to_do_the_context_and_the_shape():
@@ -342,7 +361,8 @@ def test_the_watch_moves_a_0x_claude_agent_with_its_model(tmp_path, bench, progr
                      {"adapter": "claude_code", "model_id": "opus"})
     assert cli.move_in_place(str(path), say=lambda line: None, sleep=pytest.fail) is None
     assert load(path).section["wake"] == {"agent": "claude", "model": "opus"}
-    assert program_runs(tmp_path)[0]["argv"][-2:] == ["--model", "opus"]
+    argv = program_runs(tmp_path)[0]["argv"]
+    assert argv[argv.index("--model") + 1] == "opus"
 
 
 def test_a_0x_api_key_agent_stops_with_the_one_thing_to_do(tmp_path, bench, programs):

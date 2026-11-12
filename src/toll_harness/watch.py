@@ -255,6 +255,20 @@ class Watch:
         return True
 
 
+def where_lines(problems: Any, most: int = 3) -> str:
+    """The bench's {where, rule, fix} rows, short, for the log: where each problem is."""
+    if not isinstance(problems, list):
+        return ""
+    parts = []
+    for row in problems[:most]:
+        if isinstance(row, dict):
+            where = str(row.get("where") or row.get("path") or "?")[:60]
+            rule = str(row.get("rule") or row.get("code") or row.get("detail") or "")[:120]
+            parts.append(f"{where}: {rule}" if rule else where)
+    more = len(problems) - most
+    return ("; ".join(parts) + (f"; and {more} more" if more > 0 else "")) if parts else ""
+
+
 def send_answer(bench: Any, item_id: str, answer: dict[str, Any], log: ActivityLog,
                 kind: str = "", sleep: Callable[[float], None] = time.sleep) -> str:
     """POST the answer: 'accepted', 'refused', or 'kept' (the bench did not take it yet)."""
@@ -275,13 +289,17 @@ def send_answer(bench: Any, item_id: str, answer: dict[str, Any], log: ActivityL
                 return "kept"
             problems = error.body.get("problems")
             count = len(problems) if isinstance(problems, list) else 0
+            where = where_lines(problems)
             log.warn(f"{what} for {label} refused ({error.status} {error.code}"
-                     f"{f', {count} problems' if count else ''}); the bench sends what to fix")
+                     f"{f', {count} problems' if count else ''}); the bench sends what to fix"
+                     f"{f' -- {where}' if where else ''}")
             return "refused"
     if reply.get("ok") is False:
         problems = reply.get("problems")
         count = len(problems) if isinstance(problems, list) else 0
-        log.warn(f"{what} for {label} refused ({count} problems); the bench sends what to fix")
+        where = where_lines(problems)
+        log.warn(f"{what} for {label} refused ({count} problems); the bench sends what to fix"
+                 f"{f' -- {where}' if where else ''}")
         return "refused"
     log.line(f"{'reported failure on' if what != 'answer' else 'answered'} {label}: accepted")
     return "accepted"

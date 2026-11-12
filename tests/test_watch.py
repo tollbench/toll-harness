@@ -30,6 +30,15 @@ def watch(agent, **kwargs):
     return Watch(agent, **kwargs)
 
 
+def test_a_refusal_logs_where_each_problem_is():
+    from toll_harness.watch import where_lines
+
+    rows = [{"where": "step 2: verb", "rule": "unknown verb", "fix": "pick one"},
+            {"where": "plan", "rule": "odds missing"}, {"where": "a"}, {"where": "b"}]
+    assert where_lines(rows) == "step 2: verb: unknown verb; plan: odds missing; a; and 1 more"
+    assert where_lines(None) == ""
+
+
 def test_live_wait_hands_a_new_item_over_within_two_seconds(made):
     agent = made.agent()
     runner = threading.Thread(

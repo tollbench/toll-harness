@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -54,8 +55,9 @@ def prompt_for(item: dict[str, Any]) -> str:
                   'To read one, reply {"need": ["<name>"]} instead of an answer; the item comes '
                   "back with it.", json.dumps(item["refs"], ensure_ascii=False)]
     parts += ["", "# How to answer",
-              "Reply with EXACTLY one JSON object and nothing else: no prose before or after, "
-              "no markdown fence. Use your own tools as you need to first."]
+              "Reply with EXACTLY one JSON object and nothing else: no code fence, no "
+              "Sources line, no words before or after it. Use your own tools as you need to "
+              "first."]
     if answer.get("needed") is False:
         parts.append('No answer is needed for this item: read it, then reply {"ok": true}.')
     if answer.get("shape"):
@@ -66,39 +68,44 @@ def prompt_for(item: dict[str, Any]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else ""
-        if text.rstrip().endswith("```"):
-            text = text.rstrip()[:-3]
-    return text.strip()
+_FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\n(.*?)\n?[ \t]*```", re.S)
+NOT_ONE = "the agent's reply was not one JSON object (or exactly one ```json block)"
 
 
-def _first_object(text: str) -> Any:
-    """The first complete JSON object in prose (a stray brace before it is skipped)."""
+def _holds_json(text: str) -> bool:
+    """Whether any complete JSON object or list starts somewhere in this text."""
     decoder = json.JSONDecoder()
-    start = text.find("{")
-    while start >= 0:
-        try:
-            value, _end = decoder.raw_decode(text, start)
-            if isinstance(value, dict):
-                return value
-        except ValueError:
-            pass
-        start = text.find("{", start + 1)
-    raise NoAnswer("the agent's reply held no JSON object")
+    for index, char in enumerate(text):
+        if char in "{[":
+            try:
+                decoder.raw_decode(text, index)
+                return True
+            except ValueError:
+                continue
+    return False
 
 
 def answer_from(reply: str) -> dict[str, Any]:
-    """The one JSON object in the agent's reply (a 0.x envelope is unwrapped)."""
-    text = _strip_fences(reply or "")
+    """The answer in the agent's reply: the whole reply as one JSON object, or EXACTLY one
+    fenced code block holding one (`claude -p` fences its JSON and may add a "Sources:" line
+    after it). JSON is never pulled out of prose: "I would send this if you say yes" with an
+    example inside is not an answer (another worker's walk on staging, Nov 11). A 0.x envelope
+    is unwrapped."""
+    text = (reply or "").strip()
     if not text:
         raise NoAnswer("the agent replied with nothing")
     try:
         value = json.loads(text)
     except ValueError:
-        value = _first_object(text)
+        blocks = _FENCE.findall(text)
+        if len(blocks) != 1:
+            raise NoAnswer(NOT_ONE) from None
+        if _holds_json(_FENCE.sub(" ", text)):
+            raise NoAnswer("the agent's reply held JSON outside its one code block") from None
+        try:
+            value = json.loads(blocks[0])
+        except ValueError:
+            raise NoAnswer("the agent's code block was not JSON") from None
     if not isinstance(value, dict):
         raise NoAnswer("the agent's reply was JSON but not an object")
     if set(value) and set(value) <= {"text", "tool_calls"}:  # the 0.x envelope
@@ -122,6 +129,15 @@ def answer_from(reply: str) -> dict[str, Any]:
     return value
 
 
+# Claude Code woken with no settings of its own (a fresh setup) gets the web and nothing else:
+# it is woken with nobody at the keyboard to approve a shell command or a file write, so its
+# shell, file and MCP tools stay off, and no session is saved between items. A 0.x agent that
+# brings its own settings (extra_args) keeps them. (Another worker's walk, Nov 11: the README's
+# wake command "left Claude's shell and file tools on".)
+CLAUDE_DEFAULT = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
+                  "--strict-mcp-config", "--no-session-persistence"]
+
+
 def argv_for(agent: str, *, model: str | None, program: str | None,
              extra: list[str], last_message: str | None = None,
              scratch: str | None = None) -> list[str]:
@@ -135,7 +151,8 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
     binary = program or known.program
     with_model = ["--model", model] if model else []
     if known.name == "claude":
-        return [binary, "-p", "--output-format", "text", *with_model, *extra]
+        return [binary, "-p", "--output-format", "text", *with_model,
+                *(extra or CLAUDE_DEFAULT)]
     if known.name == "codex":
         where = ["--cd", scratch] if scratch else []
         return [binary, "exec", "--skip-git-repo-check", *where, "--output-last-message",
