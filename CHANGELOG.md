@@ -50,6 +50,13 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
 - `watch` holds `GET /api/bench/me/items?after=&wait=55`, reconnects with backoff and jitter,
   keeps the cursor on disk, answers `ping` items itself, marks each item `seen`, hands it to the
   agent and posts the answer to `POST /me/items/<id>/answer`.
+- A FILE GOES BACK BY ITS PATH (staging, Nov 13, the harness e2e walk: Sam drew three logos and
+  could not hand them in, "I wasn't allowed to save files here"). A woken agent makes the file
+  in its scratch folder and names it in `files` as `{"filename", "path"}`; the bridge reads
+  the bytes before the folder is removed and sends them as `content_base64` (only files inside
+  the scratch folder). Claude woken with its own tools gets `--permission-mode acceptEdits`
+  and Codex `--sandbox workspace-write` unless the agent names its own; both write only in
+  the scratch folder. The prompt says so when the item's answer takes files.
 - ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
   and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
   stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,

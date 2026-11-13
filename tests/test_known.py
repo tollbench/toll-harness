@@ -37,6 +37,8 @@ PROGRAM = textwrap.dedent("""\
     #!{python}
     import json, os, sys
     prompt = sys.stdin.read()
+    if os.environ.get("MAKE_FILE"):
+        open(os.environ["MAKE_FILE"], "wb").write(b"%PDF-1.4 made by the agent")
     with open(os.environ["PROGRAM_RECORD"], "a") as handle:
         handle.write(json.dumps({{"argv": sys.argv, "prompt": prompt}}) + "\\n")
     fenced = '```json' + chr(10) + '{{"ok": true, "reply": "woke"}}' + chr(10) + '```'
@@ -65,6 +67,7 @@ def programs(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", SRC)  # the bridge runs as python -m toll_harness.wake
     monkeypatch.setenv("PROGRAM_RECORD", str(tmp_path / "program.jsonl"))
     monkeypatch.delenv("REPLY", raising=False)
+    monkeypatch.delenv("MAKE_FILE", raising=False)
     monkeypatch.delenv("TOLL_AGENT_CONFIG", raising=False)
     monkeypatch.delenv("TOLL_HARNESS_BASE_URL", raising=False)
     return folder
@@ -385,3 +388,53 @@ def test_a_0x_move_whose_wake_fails_changes_nothing_and_tries_again_later(
     before, slept = path.read_text(), []
     assert cli.move_in_place(str(path), say=lambda line: None, sleep=slept.append) == 1
     assert path.read_text() == before and slept == [cli.MOVE_RETRY_SECONDS]
+
+
+# -- a file goes back by its path (staging, Nov 13, the harness e2e walk) ------------------
+def _made(monkeypatch, name, reply):
+    monkeypatch.setenv("MAKE_FILE", name)
+    monkeypatch.setenv("REPLY", json.dumps(reply))
+
+
+def test_a_file_the_agent_made_goes_back_as_its_bytes(tmp_path, programs, monkeypatch):
+    import base64
+    _made(monkeypatch, "flyer.pdf", {"status": "done", "result": "the flyer",
+                                     "files": [{"filename": "flyer.pdf", "path": "flyer.pdf"},
+                                               {"receipt_id": "r-1"}]})
+    result = hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--tools", "default"]}),
+                      item("it_f1"), time_limit=30)
+    assert result.status == ANSWERED, result.why
+    first, second = result.answer["files"]
+    assert "path" not in first and first["filename"] == "flyer.pdf"
+    assert base64.b64decode(first["content_base64"]) == b"%PDF-1.4 made by the agent"
+    assert second == {"receipt_id": "r-1"}
+
+
+@pytest.mark.parametrize("path", ["../outside.pdf", "/etc/hostname", "never-made.pdf"])
+def test_a_file_outside_the_scratch_folder_or_never_made_is_a_failure(tmp_path, programs,
+                                                                      monkeypatch, path):
+    _made(monkeypatch, "flyer.pdf", {"status": "done", "files": [{"path": path}]})
+    result = hand_off(known.wake_argv({"agent": "codex"}), item("it_f2"), time_limit=30)
+    assert result.status == FAILED
+
+
+def test_an_agent_with_its_own_tools_may_write_in_its_scratch_folder(tmp_path, programs):
+    hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--tools", "default"]}),
+             item("it_p1"), time_limit=30)
+    hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--permission-mode", "plan"]}),
+             item("it_p2"), time_limit=30)
+    hand_off(known.wake_argv({"agent": "codex"}), item("it_p3"), time_limit=30)
+    hand_off(known.wake_argv({"agent": "codex", "extra_args": ["-s", "read-only"]}),
+             item("it_p4"), time_limit=30)
+    runs = [r["argv"] for r in program_runs(tmp_path)]
+    assert runs[0][runs[0].index("--permission-mode") + 1] == "acceptEdits"
+    assert runs[1].count("--permission-mode") == 1 and "acceptEdits" not in runs[1]
+    assert runs[2][runs[2].index("--sandbox") + 1] == "workspace-write"
+    assert "--sandbox" not in runs[3] and "read-only" in runs[3]
+
+
+def test_the_prompt_says_how_a_file_goes_back_when_the_answer_takes_files():
+    plain = wake.prompt_for(item("it_n1"))
+    with_files = wake.prompt_for(dict(item("it_n2"), answer={"needed": True, "shape": {
+        "status": "x", "files": "list"}}))
+    assert wake.FILES_NOTE not in plain and wake.FILES_NOTE in with_files

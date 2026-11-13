@@ -20,6 +20,7 @@ when one fails (a usage limit, a signed-out account), the next one is woken.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -62,6 +63,8 @@ def prompt_for(item: dict[str, Any]) -> str:
         parts.append('No answer is needed for this item: read it, then reply {"ok": true}.')
     if answer.get("shape"):
         parts.append("Its shape: " + json.dumps(answer["shape"], ensure_ascii=False))
+        if isinstance(answer["shape"], dict) and "files" in answer["shape"]:
+            parts.append(FILES_NOTE)
     if answer.get("example"):
         parts.append("For example: " + json.dumps(answer["example"], ensure_ascii=False))
     parts.append('If you cannot do it, reply {"failed": "<short reason>"}.')
@@ -129,6 +132,44 @@ def answer_from(reply: str) -> dict[str, Any]:
     return value
 
 
+# A FILE GOES BACK BY ITS PATH (staging, Nov 13, the harness e2e walk: Sam drew three logos
+# and could not hand them in, "I wasn't allowed to save files here"; Bree's party flyer went
+# back only as base64 she wrote out by hand). The agent makes the file in its scratch folder
+# and names it in "files" with a "path"; the bridge reads the bytes before the folder is
+# removed and sends them as content_base64. Only files inside the scratch folder are read.
+FILES_NOTE = ('To hand back a file, make it in the folder you were started in and name it in '
+              '"files" as {"filename": "flyer.pdf", "path": "flyer.pdf"}: the harness reads its '
+              'bytes and sends them. Never write base64 yourself.')
+MAX_FILE_BYTES = 200 * 1024 * 1024  # the bench's own limit for one hand-back file
+
+
+def attach_files(answer: dict[str, Any], work: Path) -> dict[str, Any]:
+    """The answer with every "files" entry that names a "path" in the scratch folder turned
+    into {"filename", "content_base64"}. Entries that already carry bytes or a receipt_id are
+    left as they are."""
+    files = answer.get("files")
+    if not isinstance(files, list):
+        return answer
+    root = Path(work).resolve()
+    out: list[Any] = []
+    for entry in files:
+        if (isinstance(entry, dict) and entry.get("path") and not entry.get("content_base64")
+                and not entry.get("receipt_id")):
+            named = str(entry["path"])
+            target = (root / named).resolve()
+            if root not in target.parents:
+                raise NoAnswer("a file named in files is outside the agent's working folder")
+            if not target.is_file():
+                raise NoAnswer(f"the agent named a file it did not make: {Path(named).name}")
+            if target.stat().st_size > MAX_FILE_BYTES:
+                raise NoAnswer(f"the file {target.name} is larger than the bench takes")
+            entry = {k: v for k, v in entry.items() if k != "path"}
+            entry.setdefault("filename", target.name)
+            entry["content_base64"] = base64.b64encode(target.read_bytes()).decode("ascii")
+        out.append(entry)
+    return dict(answer, files=out)
+
+
 # Claude Code woken with no settings of its own (a fresh setup) gets the web and nothing else:
 # it is woken with nobody at the keyboard to approve a shell command or a file write, so its
 # shell, file and MCP tools stay off, and no session is saved between items. A 0.x agent that
@@ -151,19 +192,27 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
     binary = program or known.program
     with_model = ["--model", model] if model else []
     if known.name == "claude":
-        return [binary, "-p", "--output-format", "text", *with_model,
+        # an agent that brings its own tools may write files, in its scratch folder only
+        edits = (["--permission-mode", "acceptEdits"]
+                 if extra and "--permission-mode" not in extra else [])
+        return [binary, "-p", "--output-format", "text", *with_model, *edits,
                 *(extra or CLAUDE_DEFAULT)]
     if known.name == "codex":
         where = ["--cd", scratch] if scratch else []
-        return [binary, "exec", "--skip-git-repo-check", *where, "--output-last-message",
-                str(last_message), *with_model, *extra, "-"]
+        own_sandbox = any(a in ("-s", "--sandbox") or str(a).startswith("--sandbox=")
+                          or "sandbox_mode" in str(a) for a in extra)
+        sandbox = [] if own_sandbox else ["--sandbox", "workspace-write"]
+        return [binary, "exec", "--skip-git-repo-check", *where, *sandbox,
+                "--output-last-message", str(last_message), *with_model, *extra, "-"]
     return [binary, *with_model, *extra]  # gemini: the prompt on stdin, the reply on stdout
 
 
 def run(agent: str, prompt: str, *, model: str | None = None, program: str | None = None,
-        config_dirs: list[str] | None = None, extra: list[str] | None = None) -> str:
-    """Run the agent's program once with the prompt on stdin; its reply. With several Claude
-    accounts, a failed run wakes the next account."""
+        config_dirs: list[str] | None = None, extra: list[str] | None = None,
+        finish=None):
+    """Run the agent's program once with the prompt on stdin; its reply (or what
+    `finish(reply, scratch_folder)` makes of it, while the folder is still there). With several
+    Claude accounts, a failed run wakes the next account."""
     extra = list(extra or [])
     accounts = list(config_dirs or []) or [None]
     with tempfile.TemporaryDirectory(prefix="toll-wake-") as scratch:
@@ -186,12 +235,13 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
             except PermissionError:
                 raise NoAnswer(f"`{argv[0]}` cannot be run (permission denied)") from None
             if done.returncode == 0:
+                reply = done.stdout
                 if by_name(agent) is not None and by_name(agent).name == "codex":
                     try:
-                        return Path(last).read_text(encoding="utf-8")
+                        reply = Path(last).read_text(encoding="utf-8")
                     except OSError:
-                        return done.stdout
-                return done.stdout
+                        pass
+                return finish(reply, work) if finish else reply
             problem = f"{name} exited with {done.returncode}"
             if len(accounts) > 1:
                 problem += f" on account {number} of {len(accounts)}"
@@ -215,10 +265,10 @@ def main(argv: list[str] | None = None) -> int:
         print("the item on stdin was not a JSON object", file=sys.stderr)
         return FAILED_EXIT
     try:
-        reply = run(arguments.agent, prompt_for(item), model=arguments.model,
-                    program=arguments.program, config_dirs=arguments.config_dir,
-                    extra=extra)
-        answer = answer_from(reply)
+        answer = run(arguments.agent, prompt_for(item), model=arguments.model,
+                     program=arguments.program, config_dirs=arguments.config_dir,
+                     extra=extra,
+                     finish=lambda reply, work: attach_files(answer_from(reply), work))
     except NoAnswer as error:
         print(str(error), file=sys.stderr)
         return FAILED_EXIT
