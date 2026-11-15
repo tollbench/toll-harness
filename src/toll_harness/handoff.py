@@ -2,7 +2,8 @@
 
 The command is an argv list run without a shell. Item text is data: it goes only to stdin,
 never onto a command line and never into an environment value (only the item's id and kind,
-checked to be plain words, ride the environment).
+checked to be plain words, ride the environment, and for an agent woken by name the path of
+the folder the harness made for the files the item lists).
 
 What the command prints decides what happens:
   - JSON object on stdout  -> that is the answer; the harness posts it.
@@ -19,6 +20,8 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from typing import Any
+
+from toll_harness.incoming import FILES_ENV
 
 ANSWERED = "answered"
 LATER = "later"
@@ -52,7 +55,8 @@ def _stop(process: subprocess.Popen) -> None:
 
 
 def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
-             config_path: str | None = None, cwd: str | None = None) -> HandOff:
+             config_path: str | None = None, cwd: str | None = None,
+             files_dir: str | None = None) -> HandOff:
     import time
 
     environment = dict(os.environ)
@@ -61,6 +65,9 @@ def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
     if config_path:
         environment["TOLL_AGENT_CONFIG"] = str(config_path)
     environment.pop("TOLL_HARNESS_AGENT_TOKEN", None)  # the token stays with the harness
+    environment.pop(FILES_ENV, None)
+    if files_dir:
+        environment[FILES_ENV] = str(files_dir)  # a folder the watch made, never item text
     data = json.dumps(item, ensure_ascii=False).encode("utf-8")
     started = time.monotonic()
     try:

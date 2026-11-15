@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from toll_harness import __version__
@@ -19,6 +21,19 @@ from toll_harness import __version__
 USER_AGENT = f"toll-harness/{__version__}"
 LONGEST_WAIT = 55  # seconds a GET /me/items may hold (protocol v1)
 _ITEM_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# A path on the bench: /api/bench/ and then parts of plain characters only. No scheme, no host,
+# no `//`, no query, no percent sign, no backslash, so joined to the bench's own address it can
+# only ever name the bench.
+_BENCH_PATH = re.compile(r"^/api/bench(/[A-Za-z0-9._~-]+)+$")
+
+
+def bench_path(value: Any) -> str | None:
+    """`value` when it is a path on the bench, else None: the agent's key goes with nothing else."""
+    if not isinstance(value, str) or len(value) > 512 or not _BENCH_PATH.fullmatch(value):
+        return None
+    if any(part in (".", "..") for part in value.split("/")):
+        return None
+    return value
 
 
 class BenchError(RuntimeError):
@@ -132,6 +147,46 @@ class Bench:
 
     def log(self, lines: list[dict[str, Any]]) -> dict[str, Any]:
         return self.call("POST", "/api/bench/me/log", payload={"lines": lines}, timeout=10)
+
+    def download(self, path: str, write: Callable[[bytes], Any], *, most: int, seconds: float,
+                 timeout: float = 30, chunk: int = 64 * 1024) -> int:
+        """Stream the bytes at a bench path to `write`; the count. The key goes only with a path
+        on this bench (bench_path), and a redirect is never followed. Bytes are counted as they
+        arrive: past `most` it stops with code "too_large" (body {"length": n} when the bench
+        said a Content-Length over it), past `seconds` with "too_slow"."""
+        clean = bench_path(path)
+        url = self.url + clean if clean else ""
+        if (not clean or urllib.parse.urlsplit(url).netloc
+                != urllib.parse.urlsplit(self.url).netloc):
+            raise BenchError(0, "not_a_bench_path", "only a path on the bench is fetched")
+        if not self._token:
+            raise BenchError(401, "missing_agent_token", "this agent has no token yet")
+        headers = {"Accept": "*/*", "User-Agent": USER_AGENT,
+                   "Authorization": f"Bearer {self._token}"}
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        deadline = time.monotonic() + seconds
+        count = 0
+        try:
+            with _OPENER.open(request, timeout=max(0.1, min(timeout, seconds))) as response:
+                length = str(response.headers.get("Content-Length") or "").strip()
+                if length.isdigit() and int(length) > most:
+                    raise BenchError(0, "too_large", "over the limit", {"length": int(length)})
+                while True:
+                    if time.monotonic() > deadline:
+                        raise BenchError(0, "too_slow", "past the time for one file")
+                    block = response.read1(chunk)
+                    if not block:
+                        return count
+                    count += len(block)
+                    if count > most:
+                        raise BenchError(0, "too_large", "over the limit")
+                    write(block)
+        except urllib.error.HTTPError as error:  # a refusal, or a redirect that was not followed
+            error.close()
+            raise BenchError(error.code, "http_error", str(error.reason)) from None
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            reason = getattr(error, "reason", None) or type(error).__name__
+            raise BenchError(0, "connection_error", str(reason)) from None
 
     def version(self) -> dict[str, Any]:
         """The harness versions: /harness/version, else the older name /connector/version."""

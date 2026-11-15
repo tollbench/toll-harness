@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +32,7 @@ from toll_harness import __version__
 from toll_harness.agent import Agent
 from toll_harness.bench import LONGEST_WAIT, BenchError, item_path
 from toll_harness.handoff import ANSWERED, FAILED, LATER, hand_off
+from toll_harness.incoming import bring_in, files_in
 from toll_harness.logs import ActivityLog
 from toll_harness.updates import RESTART_EXIT, check_and_install, due, is_newer
 
@@ -206,10 +209,16 @@ class Watch:
             self.log.line(f"seen not recorded for {item_id} ({error.status or 'no answer'})")
         shape = item.get("answer") if isinstance(item.get("answer"), dict) else {}
         wants_answer = kind != "notice" and shape.get("needed", True) is not False
-        result = self.handoff(self.agent.command, item,
-                              time_limit=self.agent.time_limit_seconds,
-                              config_path=str(self.agent.path),
-                              cwd=str(self.agent.path.parent))
+        files = self._bring_files(item_id, item)
+        try:
+            result = self.handoff(self.agent.command, item,
+                                  time_limit=self.agent.time_limit_seconds,
+                                  config_path=str(self.agent.path),
+                                  cwd=str(self.agent.path.parent),
+                                  **({"files_dir": str(files)} if files else {}))
+        finally:
+            if files:
+                shutil.rmtree(files, ignore_errors=True)  # nothing is kept after the item
         self.log.line(f"handed off {item_id}: {result.status} after {result.seconds:.1f} s")
         if result.status == ANSWERED:
             if not wants_answer:
@@ -227,6 +236,20 @@ class Watch:
             self._finish(item_id)
             return "failed"
         return self._answer(item_id, kind, {"failed": result.why})
+
+    def _bring_files(self, item_id: str, item: dict[str, Any]) -> Path | None:
+        """For an agent woken by name, the files the item lists, fetched here (the key stays
+        in this process) into a folder made for this item; see incoming.py. None when the item
+        lists none or the agent runs its own command."""
+        if self.agent.wake is None or not files_in(item):
+            return None
+        folder = None
+        try:
+            folder = Path(tempfile.mkdtemp(prefix="toll-files-"))
+            bring_in(self.bench, item, folder, self.log, label=item_id)
+        except Exception as error:  # noqa: BLE001 - a file never fails the item
+            self.log.warn(f"{item_id}: files not brought in ({type(error).__name__})")
+        return folder
 
     # -- sending answers -----------------------------------------------------------------
     def _answer(self, item_id: str, kind: str, answer: dict[str, Any]) -> str:

@@ -57,6 +57,19 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
   the scratch folder). Claude woken with its own tools gets `--permission-mode acceptEdits`
   and Codex `--sandbox workspace-write` unless the agent names its own; both write only in
   the scratch folder. The prompt says so when the item's answer takes files.
+- A FILE COMES IN BY ITS PATH (staging, Nov 15: Sam asked Steven on step 2 to "Upload her
+  full-body photo"; the bench released it to Sam alone, but Sam was woken with it as a bare id
+  and wrote "photo arrived only as an upload ID, not viewed"). Before an agent known by name is
+  woken, the watch (the one process with the key) fetches each file the item lists in
+  `context.inputs.files` (else `context.released_materials`) into a folder made for the item;
+  the bridge moves it into the scratch folder (`from_person/`, `from_earlier_steps/`, or
+  `from_bench/` for a kind it does not know) and the prompt names each file by its path, whose
+  it is, and any file it could not bring in and why (a null `download_url` means the bench keeps
+  no copy: nothing is asked for). The key goes only to a bench path
+  (`/api/bench/...`) joined to the bench's own address, never with a redirect, and never to the
+  model. Safe names that never overwrite; 50 MB a file, 100 MB an item, 30 files, counted as the
+  bytes arrive; the sha256 checked when given; 120 s a file and 300 s an item, before the
+  agent's own time limit starts. A file that cannot be fetched never fails the item.
 - ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
   and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
   stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,

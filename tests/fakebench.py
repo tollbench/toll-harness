@@ -37,6 +37,11 @@ class FakeBench:
         self.reachable = True
         self.acks = 0
         self.registered: list[dict] = []
+        # The materials door: path -> {"body": bytes, "status": 200, "headers": {}, "length":
+        # True (send Content-Length), "claims": n (a Content-Length that says n), "trickle": s
+        # (16 bytes every s seconds)}. Every GET's Authorization header is written down.
+        self.files: dict[str, dict] = {}
+        self.auth: list[tuple[str, str | None]] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -109,10 +114,30 @@ class FakeBench:
                 length = int(self.headers.get("Content-Length") or 0)
                 return json.loads(self.rfile.read(length) or b"{}")
 
+            def _file(self, spec: dict) -> None:
+                body = spec.get("body", b"")
+                self.send_response(spec.get("status", 200))
+                for key, value in (spec.get("headers") or {}).items():
+                    self.send_header(key, value)
+                if spec.get("length", True):
+                    self.send_header("Content-Length", str(spec.get("claims", len(body))))
+                self.end_headers()
+                try:
+                    if spec.get("trickle"):
+                        for start in range(0, len(body), 16):
+                            self.wfile.write(body[start:start + 16])
+                            self.wfile.flush()
+                            time.sleep(spec["trickle"])
+                    else:
+                        self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the harness gave up on it, as it should
+
             def do_GET(self):  # noqa: N802
                 parsed = urlparse(self.path)
                 query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 bench.requests.append((time.monotonic(), "GET", parsed.path, query))
+                bench.auth.append((self.path, self.headers.get("Authorization")))
                 if parsed.path == f"/api/bench/{bench.version_door}/version":
                     return self._send(200, bench.version)
                 if parsed.path.endswith("/version"):
@@ -121,6 +146,8 @@ class FakeBench:
                     return self._send(200, {"rules_version_hash": "rules-abc"})
                 if not self._authed():
                     return None
+                if parsed.path in bench.files:
+                    return self._file(bench.files[parsed.path])
                 if parsed.path == "/api/bench/me":
                     return self._send(200, bench.me())
                 if parsed.path == "/api/bench/me/items":

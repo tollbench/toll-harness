@@ -15,6 +15,10 @@ a scratch folder made for this one item, never in the agent's folder (where its 
 0.x ran it in its own scratch folder. Claude Code with several signed-in accounts
 (`--config-dir` given more than once, from 0.x's `claude_config_dirs`) tries them in order:
 when one fails (a usage limit, a signed-out account), the next one is woken.
+
+Files go both ways by their path: a file the item lists comes in, fetched by the watch and
+moved here into the scratch folder (incoming.py), and a file the agent makes goes back
+(attach_files).
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from toll_harness import incoming
 from toll_harness.known import PROMPT, by_name
 
 FAILED_EXIT = 3
@@ -39,7 +44,9 @@ class NoAnswer(Exception):
     """The agent's reply held no answer; the message is one plain line."""
 
 
-def prompt_for(item: dict[str, Any]) -> str:
+def prompt_for(item: dict[str, Any], brought: dict[str, Any] | None = None) -> str:
+    """The item as a prompt. `brought` is what the watch fetched for it (incoming.py): with
+    files, a few lines name each one by its path; without, the prompt is as it always was."""
     answer = item.get("answer") if isinstance(item.get("answer"), dict) else {}
     parts = [
         "You are an agent on Toll Bench. toll-harness woke you for ONE item. The item stands "
@@ -55,6 +62,9 @@ def prompt_for(item: dict[str, Any]) -> str:
         parts += ["", "# Earlier results you can ask for",
                   'To read one, reply {"need": ["<name>"]} instead of an answer; the item comes '
                   "back with it.", json.dumps(item["refs"], ensure_ascii=False)]
+    files_note = incoming.note_for(brought)
+    if files_note:
+        parts += ["", "# Files you were given", files_note]
     parts += ["", "# How to answer",
               "Reply with EXACTLY one JSON object and nothing else: no code fence, no "
               "Sources line, no words before or after it. Use your own tools as you need to "
@@ -209,16 +219,18 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
 
 def run(agent: str, prompt: str, *, model: str | None = None, program: str | None = None,
         config_dirs: list[str] | None = None, extra: list[str] | None = None,
-        finish=None):
+        finish=None, bring: str | None = None):
     """Run the agent's program once with the prompt on stdin; its reply (or what
     `finish(reply, scratch_folder)` makes of it, while the folder is still there). With several
-    Claude accounts, a failed run wakes the next account."""
+    Claude accounts, a failed run wakes the next account. `bring` is the folder of files the
+    watch fetched for the item: they are moved into the scratch folder first."""
     extra = list(extra or [])
     accounts = list(config_dirs or []) or [None]
     with tempfile.TemporaryDirectory(prefix="toll-wake-") as scratch:
         last = str(Path(scratch) / ".last-message.txt")
         work = Path(scratch) / "work"
         work.mkdir()
+        incoming.move_into(bring, work)
         argv = argv_for(agent, model=model, program=program, extra=extra, last_message=last,
                         scratch=str(work))
         name = Path(argv[0]).name
@@ -257,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("extra", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     extra = arguments.extra[1:] if arguments.extra[:1] == ["--"] else arguments.extra
+    files_dir = os.environ.pop(incoming.FILES_ENV, None)  # the agent's program never sees it
     try:
         item = json.loads(sys.stdin.read() or "{}")
         if not isinstance(item, dict):
@@ -264,10 +277,11 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError:
         print("the item on stdin was not a JSON object", file=sys.stderr)
         return FAILED_EXIT
+    brought = incoming.read_brought(files_dir)
     try:
-        answer = run(arguments.agent, prompt_for(item), model=arguments.model,
+        answer = run(arguments.agent, prompt_for(item, brought), model=arguments.model,
                      program=arguments.program, config_dirs=arguments.config_dir,
-                     extra=extra,
+                     extra=extra, bring=files_dir if brought else None,
                      finish=lambda reply, work: attach_files(answer_from(reply), work))
     except NoAnswer as error:
         print(str(error), file=sys.stderr)
