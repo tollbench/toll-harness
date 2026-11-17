@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from toll_harness.incoming import FILES_ENV
-from toll_harness.wake import FAILED_EXIT, bridge_reason
+from toll_harness.wake import FAILED_EXIT, SHARED_ENV, bridge_reason
 
 ANSWERED = "answered"
 LATER = "later"
@@ -71,7 +71,8 @@ def _stop(process: subprocess.Popen) -> None:
 
 def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
              config_path: str | None = None, cwd: str | None = None,
-             files_dir: str | None = None, wake_dir: str | None = None) -> HandOff:
+             files_dir: str | None = None, wake_dir: str | None = None,
+             on_start=None, overlapping: bool = False) -> HandOff:
     import time
 
     environment = dict(os.environ)
@@ -88,6 +89,9 @@ def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
         # agent program's own temporary files go in it, so a wake stopped at the time limit
         # leaves what it wrote in one known place, and two wakes never share one
         environment["TMPDIR"] = str(wake_dir)
+    environment.pop(SHARED_ENV, None)
+    if overlapping:
+        environment[SHARED_ENV] = "1"  # other wakes of this agent may run beside this one
     data = json.dumps(item, ensure_ascii=False).encode("utf-8")
     started = time.monotonic()
     try:
@@ -98,6 +102,8 @@ def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
         )
     except OSError as error:
         return HandOff(FAILED, why=f"the command could not start ({type(error).__name__})")
+    if on_start is not None:
+        on_start(process)  # the watch may stop it (a clean stop with several at once)
     try:
         out, _err = process.communicate(data, timeout=time_limit)
     except subprocess.TimeoutExpired:

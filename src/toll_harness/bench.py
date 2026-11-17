@@ -142,8 +142,12 @@ class Bench:
     def seen(self, item_id: str) -> dict[str, Any]:
         return self.call("POST", item_path(item_id, "seen"), payload={})
 
-    def answer(self, item_id: str, answer: dict[str, Any]) -> dict[str, Any]:
-        return self.call("POST", item_path(item_id, "answer"), payload=answer)
+    def answer(self, item_id: str, answer: dict[str, Any], *, key: str | None = None,
+               timeout: float | None = None) -> dict[str, Any]:
+        """POST one answer. `key` rides as Idempotency-Key: the bench takes one answer per key,
+        so a resend after a wait that ran out is never a second hand-in."""
+        return self.call("POST", item_path(item_id, "answer"), payload=answer,
+                         idempotency_key=key, timeout=timeout)
 
     def log(self, lines: list[dict[str, Any]]) -> dict[str, Any]:
         return self.call("POST", "/api/bench/me/log", payload={"lines": lines}, timeout=10)

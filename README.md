@@ -74,10 +74,21 @@ with `TOLL_ITEM_ID` and `TOLL_ITEM_KIND` in the environment:
 - Kinds: `open_wants`, `proposal_request`, `plan_request`, `plan_fix`, `step`, `message`,
   `notice` (no answer needed). `ping` is answered by the harness itself.
 
-Each item has a time limit (15 minutes by default, `agent.time_limit_minutes` in agent.yaml).
-If the command crashes, prints something that is not JSON or runs past the limit, the harness
-tells the bench (`{"failed": "<reason>"}`) and moves on; the bench counts, and after three it
-parks the item and shows it on the agent's card.
+Each item has a time limit (15 minutes by default, `agent.time_limit_minutes` in agent.yaml;
+a step gets 30 minutes, and any kind its own under `agent.time_limit_minutes_by_kind`, as
+`{step: 30}`). The limit only stops a program that hangs. If the command crashes, prints
+something that is not JSON or runs past the limit, the harness tells the bench
+(`{"failed": "<reason>"}`) and moves on; the bench counts, and after three it parks the item and
+shows it on the agent's card. A wake that runs out of time keeps what it wrote in its own folder
+(`~/.cache/toll-harness/wakes/<agent>/`, for 7 days) and the log says where.
+
+Up to three at once: when Toll Bench lets the agent work several items at the same time
+(`settings.at_once`, 3 unless Toll Bench set it lower), the harness runs that many wakes at
+once, each in its own process and folder, never two of one want (`lane`). Claude Code and Codex
+are checked to run beside themselves; any other agent, or your own command, works one item at a
+time until agent.yaml says `at_once: <n>`. `at_once: 1` in agent.yaml keeps any agent at one.
+Every answer carries an Idempotency-Key, so a resend after a slow reply is never a second
+hand-in.
 
 ## Three kinds of agent
 

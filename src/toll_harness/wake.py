@@ -42,6 +42,7 @@ from toll_harness import incoming
 from toll_harness.known import PROMPT, by_name
 
 FAILED_EXIT = 3
+SHARED_ENV = "TOLL_WAKE_SHARED"  # "1": other wakes of this agent may run beside this one
 
 
 class NoAnswer(Exception):
@@ -254,21 +255,47 @@ def tool_folders(agent: str, env: dict[str, str] | None = None) -> list[Path]:
     return []
 
 
-def made_during(folders: list[Path], since: float) -> list[Path]:
+# A PICTURE IS TAKEN ONLY FROM THIS WAKE'S OWN SESSION (lane THREEATONCE, 16 November 2026:
+# with several wakes of one agent at once, and the -prod units on the same computer, "written
+# since this wake began" could pick another wake's picture). `codex exec` names its session on
+# stderr ("session id: <uuid>", checked on codex-cli 0.159.2) and saves its pictures under
+# generated_images/<that id>/, so only that folder is read. With no session named, the old rule
+# stands only when this wake runs alone (SHARED_ENV unset); beside others, nothing is taken.
+_SESSION = re.compile(r"^session id: ([0-9A-Za-z][0-9A-Za-z-]{7,63})\s*$", re.M)
+
+
+def session_of(stderr: str) -> str | None:
+    """The session a `codex exec` run named on stderr, else None."""
+    found = _SESSION.findall(stderr or "")
+    return found[-1] if found else None
+
+
+def made_during(folders: list[Path], since: float, session: str | None = None,
+                alone: bool = True) -> list[Path]:
     """Regular files (never a link) in each tool folder or one folder below it, written at or
     after `since`, the moment this wake began (to the whole second, for file systems that keep
-    whole seconds). Real paths, so a name is matched exactly."""
+    whole seconds). With `session`, only the folder of that session. With no session and not
+    `alone`, none. Real paths, so a name is matched exactly."""
     floor = math.floor(since)
     found: list[Path] = []
+    if session is None and not alone:
+        return found
     for folder in folders:
         try:
             root = folder.resolve(strict=True)
             if not root.is_dir():
                 continue
             subs = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink()]
+            if session is not None:
+                subs = [p for p in subs if p.name == session]
+                root_files = False
+            else:
+                root_files = True
         except OSError:
             continue
-        for place in (root, *sorted(subs, key=lambda p: p.stat().st_mtime, reverse=True)):
+        places = ([root] if root_files else []) + sorted(subs, key=lambda p: p.stat().st_mtime,
+                                                         reverse=True)
+        for place in places:
             try:
                 entries = list(place.iterdir())
             except OSError:
@@ -473,7 +500,10 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
                         pass
                 if not finish:
                     return reply
-                return finish(reply, work, made_during(tool_folders(agent, env), began))
+                made = made_during(tool_folders(agent, env), began,
+                                   session=session_of(done.stderr),
+                                   alone=os.environ.get(SHARED_ENV) != "1")
+                return finish(reply, work, made)
             problem = f"{name} exited with {done.returncode}"
             if len(accounts) > 1:
                 problem += f" on account {number} of {len(accounts)}"

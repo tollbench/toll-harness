@@ -36,6 +36,12 @@ class FakeBench:
                         "install": "pip install -U toll-harness==1.0.0; touch /tmp/never"}
         self.reachable = True
         self.acks = 0
+        # one answer per Idempotency-Key (lane THREEATONCE): key -> the reply sent for it
+        self.keys: dict[str, dict] = {}
+        self.answer_keys: list[str | None] = []
+        self.answer_delay = 0.0  # seconds the answer door takes before it replies (once)
+        self.in_progress: set[str] = set()
+        self.seen_now: set[str] = set()  # handed over and not sent again since (item.seen)
         self.registered: list[dict] = []
         # The materials door: path -> {"body": bytes, "status": 200, "headers": {}, "length":
         # True (send Content-Length), "claims": n (a Content-Length that says n), "trickle": s
@@ -72,6 +78,7 @@ class FakeBench:
             original = next(item for _, item in self.items if item["id"] == item_id)
             self.sequence += 1
             self.items.append((self.sequence, original))  # sent again
+            self.seen_now.discard(item_id)
             self.lock.notify_all()
         return {"ok": True, "next": f"Failure {tries} of 3 counted; the item comes again."}
 
@@ -164,7 +171,8 @@ class FakeBench:
                     deadline = time.monotonic() + wait
                     with bench.lock:
                         while True:
-                            fresh = [item for seq, item in bench.items if seq > after]
+                            fresh = [dict(item, seen=True) if item["id"] in bench.seen_now
+                                     else item for seq, item in bench.items if seq > after]
                             left = deadline - time.monotonic()
                             if fresh or left <= 0:
                                 break
@@ -200,22 +208,48 @@ class FakeBench:
                     item_id, action = parts[5], parts[6]
                     if action == "seen":
                         bench.seen.append(item_id)
+                        bench.seen_now.add(item_id)
                         return self._send(200, {"ok": True})
                     if action == "answer":
-                        if bench.down_answers > 0:
-                            bench.down_answers -= 1
-                            return self._send(502, {"error": "down"})
-                        if bench.busy_answers > 0:
-                            bench.busy_answers -= 1
-                            return self._send(429, {"error": "slow_down"},
-                                              {"Retry-After": "7"})
-                        bench.answers.append((item_id, body))
-                        if "failed" in body:
-                            return self._send(200, bench.count_failure(item_id))
-                        if item_id in bench.refuse:
-                            return self._send(200, bench.refuse[item_id])
-                        return self._send(200, {"ok": True, "next": "Thanks."})
+                        key = self.headers.get("Idempotency-Key")
+                        bench.answer_keys.append(key)
+                        with bench.lock:
+                            if key and key in bench.keys:
+                                return self._send(200, dict(bench.keys[key], again=True))
+                            if key and key in bench.in_progress:
+                                return self._send(409, {"error": "answer_in_progress",
+                                                        "message": "still taking it"},
+                                                  {"Retry-After": "0"})
+                            if key:
+                                bench.in_progress.add(key)
+                        try:
+                            delay, bench.answer_delay = bench.answer_delay, 0.0
+                            if delay:
+                                time.sleep(delay)
+                            status, reply, headers = self._answer(item_id, body)
+                            if key and status == 200:
+                                bench.keys[key] = reply
+                        finally:
+                            bench.in_progress.discard(key)
+                        try:
+                            return self._send(status, reply, headers)
+                        except (BrokenPipeError, ConnectionResetError):
+                            return None
                 return self._send(404, {"error": "no_door"})
+
+            def _answer(self, item_id, body):
+                if bench.down_answers > 0:
+                    bench.down_answers -= 1
+                    return 502, {"error": "down"}, None
+                if bench.busy_answers > 0:
+                    bench.busy_answers -= 1
+                    return 429, {"error": "slow_down"}, {"Retry-After": "7"}
+                bench.answers.append((item_id, body))
+                if "failed" in body:
+                    return 200, bench.count_failure(item_id), None
+                if item_id in bench.refuse:
+                    return 200, bench.refuse[item_id], None
+                return 200, {"ok": True, "next": "Thanks."}, None
 
         return Handler
 

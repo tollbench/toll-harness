@@ -87,6 +87,24 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
   folder"}`; other words on stderr never leave the computer. An answer on stdout may be up to
   140 MB (was 8 MB, which cut six pictures' worth of base64 and called it "not JSON"); past it
   the failure says "the answer is larger than the bench takes in one answer".
+- THE LAST TURN IS THE ANSWER (staging, Nov 16: Sam's three whole answers to Steven's "find 15
+  named people" step were refused as "not one JSON object" because Sam started background
+  research helpers and `claude -p --output-format text` printed every turn's "still waiting"
+  words before the list). The bridge reads Claude Code's event stream and takes its last turn
+  only; a short lead-in line before one whole JSON object that ends the reply is read as that
+  object.
+- A STEP GETS 30 MINUTES (`time_limit_minutes_by_kind`, Steven: "whey do we have a time
+  limeit?"); a wake that runs out of time is said as that and keeps what it wrote, in its own
+  folder (TMPDIR), never inside the agent's folder.
+- UP TO THREE AT ONCE (Steven, Nov 16: "yes thats fine if yo uthink it is"): the watch runs up
+  to `settings.at_once` wakes, each in its own process and folder, never two of one `lane`, in
+  the bench's line (a quick job may start beside a long step), keeps asking for items while
+  wakes run, and stops every wake cleanly on a stop. A picture a Codex wake's tool made is
+  taken only from that wake's own session folder ("session id:" on stderr). Agents not checked
+  to run beside themselves stay at one and the log says why.
+- ONE ANSWER IS ONE HAND-IN: every answer carries an Idempotency-Key, one per hand-in, kept with
+  the answer in the outbox so a resend carries the same key; the wait for the bench's reply is 90 s (300 s with files), and a 409
+  answer_in_progress is waited out with the same key.
 - ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
   and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
   stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,
