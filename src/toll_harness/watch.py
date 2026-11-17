@@ -20,7 +20,9 @@ at a time, and backoff with jitter on the line.
 from __future__ import annotations
 
 import json
+import os
 import random
+import re
 import shutil
 import tempfile
 import time
@@ -44,6 +46,13 @@ LONGEST_BACKOFF = 60.0
 # after a dropped line or a failed call, wait a random 0 to 30 seconds.
 SPREAD_SECONDS = 30.0
 BUSY_TRIES = 5  # 429s in a row on one answer before it waits in the outbox
+# WHAT A WAKE WROTE BEFORE THE TIME LIMIT IS KEPT (the foreman, Nov 16: "a timed-out wake
+# reported as 'ran out of time' with its partial work kept if the agent wrote any"). Each wake
+# runs with its own folder as TMPDIR, outside the agent's folder (where its token is); it is
+# removed when the wake ends, except after the time limit when it holds files: then it stays,
+# named in the log, for KEEP_DAYS.
+WAKES_ENV = "TOLL_HARNESS_WAKES_DIR"
+KEEP_DAYS = 7
 
 
 def backoff_delay(failures: int, rand: Callable[[], float] = random.random,
@@ -74,6 +83,7 @@ class Watch:
         self.done: list[str] = list(state.get("done") or [])
         self.problems = 0  # calls in a row the bench did not answer
         self.line_open = False
+        self.wakes_root = wakes_root(agent)
 
     @property
     def outbox_dir(self) -> Path:
@@ -91,6 +101,7 @@ class Watch:
     def start(self) -> int | None:
         """Say hello, read who we are, update if needed. RESTART_EXIT after an update."""
         self.log.line(f"toll-harness {__version__} watching for {self.agent.name}")
+        prune_kept(self.wakes_root)
         if self.spread > 0:
             self.sleep(self.spread * self.rand())  # never all at once after a bench restart
         self._apply_me(self._me_with_backoff())
@@ -210,16 +221,27 @@ class Watch:
         shape = item.get("answer") if isinstance(item.get("answer"), dict) else {}
         wants_answer = kind != "notice" and shape.get("needed", True) is not False
         files = self._bring_files(item_id, item)
+        limit = self.agent.time_limit_for(kind)
+        folder = self._wake_folder(item_id)
+        result = None
         try:
-            result = self.handoff(self.agent.command, item,
-                                  time_limit=self.agent.time_limit_seconds,
+            result = self.handoff(self.agent.command, item, time_limit=limit,
                                   config_path=str(self.agent.path),
                                   cwd=str(self.agent.path.parent),
-                                  **({"files_dir": str(files)} if files else {}))
+                                  **({"files_dir": str(files)} if files else {}),
+                                  **({"wake_dir": str(folder)} if folder else {}))
         finally:
             if files:
                 shutil.rmtree(files, ignore_errors=True)  # nothing is kept after the item
+            kept = folder and result is not None and getattr(result, "ran_out", False) \
+                and _holds_files(folder)
+            if folder and not kept:
+                shutil.rmtree(folder, ignore_errors=True)
         self.log.line(f"handed off {item_id}: {result.status} after {result.seconds:.1f} s")
+        if getattr(result, "ran_out", False):
+            self.log.warn(f"{item_id} ran out of time ({int(limit // 60)} min, the limit for "
+                          f"a {kind} item)" + (f"; what it wrote so far is kept in {folder}"
+                                               if kept else "; it wrote nothing to keep"))
         if result.status == ANSWERED:
             if not wants_answer:
                 self._finish(item_id)
@@ -237,6 +259,16 @@ class Watch:
             self._finish(item_id)
             return "failed"
         return self._answer(item_id, kind, {"failed": result.reported})
+
+    def _wake_folder(self, item_id: str) -> Path | None:
+        """This wake's own folder (its TMPDIR), made fresh; None when it cannot be made."""
+        if self.agent.wake is None:
+            return None
+        try:
+            self.wakes_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            return Path(tempfile.mkdtemp(prefix=f"{item_id}-", dir=self.wakes_root))
+        except OSError:
+            return None
 
     def _bring_files(self, item_id: str, item: dict[str, Any]) -> Path | None:
         """For an agent woken by name, the files the item lists, fetched here (the key stays
@@ -277,6 +309,33 @@ class Watch:
                 return False
             path.unlink()
         return True
+
+
+def wakes_root(agent: Agent) -> Path:
+    """Where this agent's wakes get their own folders: TOLL_HARNESS_WAKES_DIR, else
+    ~/.cache/toll-harness/wakes/<agent>. Never inside the agent's own folder."""
+    base = os.environ.get(WAKES_ENV) or os.path.join(os.path.expanduser("~"), ".cache",
+                                                     "toll-harness", "wakes")
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", agent.name).strip("-.") or "agent"
+    return Path(base) / name
+
+
+def _holds_files(folder: Path) -> bool:
+    try:
+        return any(path.is_file() for path in folder.rglob("*"))
+    except OSError:
+        return False
+
+
+def prune_kept(root: Path, days: float = KEEP_DAYS) -> None:
+    """Remove kept wake folders older than `days`; never raises."""
+    try:
+        cutoff = time.time() - days * 86400
+        for path in root.iterdir():
+            if path.is_dir() and not path.is_symlink() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def where_lines(problems: Any, most: int = 3) -> str:

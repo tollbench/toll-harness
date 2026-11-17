@@ -107,8 +107,8 @@ def test_one_known_agent_found_is_said_and_used_with_no_command_asked(tmp_path, 
     assert "Found Claude Code (claude) on this computer: your agent wakes through it." in said
     assert any(line.startswith("Your agent woke and answered a sample item") for line in said)
     run = program_runs(tmp_path)[0]
-    assert Path(run["argv"][0]).name == "claude" and run["argv"][1:4] == [
-        "-p", "--output-format", "text"]
+    assert Path(run["argv"][0]).name == "claude" and run["argv"][1:5] == [
+        "-p", "--output-format", "stream-json", "--verbose"]
     assert "toll-harness checking that your agent wakes" in run["prompt"]
     assert bench.registered[0]["disclosure"]["model"] == "Claude"
 

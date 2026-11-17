@@ -19,6 +19,13 @@ TOKEN_ENV = "TOLL_HARNESS_AGENT_TOKEN"  # init --registered reads the agent's to
 CONFIG_ENV = "TOLL_AGENT_CONFIG"  # set for the agent's command, so `answer` finds agent.yaml
 TOKEN_SECRET = "book_of_houses_agent_token"  # same name as 0.76, so a moved agent keeps it
 DEFAULT_TIME_LIMIT_MINUTES = 15
+# A STEP GETS LONGER (staging, Nov 16: Sam's research steps for Steven ran 10 to 11 minutes
+# against the 15-minute limit; the foreman, on Steven's "whey do we have a time limeit?", asked
+# for 30 minutes on steps and quick jobs as they are). The limit is only there to stop a
+# program that hangs: the harness cannot tell hung from still working. agent.yaml may set any
+# kind's own limit under time_limit_minutes_by_kind; a kind it does not name gets these, and
+# any other kind time_limit_minutes.
+DEFAULT_KIND_LIMIT_MINUTES = {"step": 30}
 
 
 class ConfigError(ValueError):
@@ -89,6 +96,22 @@ class Agent:
     def time_limit_seconds(self) -> float:
         minutes = self.section.get("time_limit_minutes", DEFAULT_TIME_LIMIT_MINUTES)
         return max(1.0, float(minutes) * 60)
+
+    def time_limit_for(self, kind: str) -> float:
+        """Seconds one wake for an item of this kind may run: agent.yaml's
+        time_limit_minutes_by_kind for the kind when it names it; else
+        DEFAULT_KIND_LIMIT_MINUTES for the kind when that is longer than time_limit_minutes;
+        else time_limit_minutes."""
+        own = self.section.get("time_limit_minutes_by_kind")
+        if isinstance(own, dict) and kind in own:
+            try:
+                return max(1.0, float(own[kind]) * 60)
+            except (TypeError, ValueError):
+                pass
+        default = DEFAULT_KIND_LIMIT_MINUTES.get(kind)
+        if default is not None:
+            return max(self.time_limit_seconds, float(default) * 60)
+        return self.time_limit_seconds
 
     @property
     def bench_url(self) -> str:

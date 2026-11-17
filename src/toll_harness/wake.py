@@ -117,6 +117,14 @@ def prompt_for(item: dict[str, Any], brought: dict[str, Any] | None = None) -> s
 
 _FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\n(.*?)\n?[ \t]*```", re.S)
 NOT_ONE = "the agent's reply was not one JSON object (or exactly one ```json block)"
+# A LEAD-IN LINE IS NOT A BAD ANSWER (staging, Nov 16, 9:12 pm: Sam's press kit step handed in
+# "The PDF renders cleanly on one page. Here is the hand-in." then a blank line and the whole
+# answer, after Claude Code's own reminder to say what it was doing; the bench was told "not one
+# JSON object" and Steven's step came one failure from being stopped). A few short words BEFORE
+# one whole JSON object that starts on its own line and ends the reply are read as that object.
+# JSON inside a sentence, words after the object, or JSON in the lead-in are still refused.
+LEAD_IN_MOST_CHARS = 400
+LEAD_IN_MOST_LINES = 3
 
 
 def _holds_json(text: str) -> bool:
@@ -132,6 +140,27 @@ def _holds_json(text: str) -> bool:
     return False
 
 
+def _after_lead_in(text: str) -> Any:
+    """The one JSON object that ends `text` after a short lead-in of plain words, else raises
+    NoAnswer(NOT_ONE). The object starts at the start of a line and runs to the very end."""
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{" or index == 0 or text[index - 1] != "\n":
+            continue
+        lead = text[:index].strip()
+        if (not lead or len(lead) > LEAD_IN_MOST_CHARS
+                or lead.count("\n") + 1 > LEAD_IN_MOST_LINES
+                or "```" in lead or _holds_json(lead)):
+            break  # past a short lead-in of plain words: nothing later is an answer either
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            continue
+        if text[end:].strip() == "" and isinstance(value, dict):
+            return value
+    raise NoAnswer(NOT_ONE)
+
+
 def answer_from(reply: str) -> dict[str, Any]:
     """The answer in the agent's reply: the whole reply as one JSON object, or EXACTLY one
     fenced code block holding one (`claude -p` fences its JSON and may add a "Sources:" line
@@ -145,14 +174,17 @@ def answer_from(reply: str) -> dict[str, Any]:
         value = json.loads(text)
     except ValueError:
         blocks = _FENCE.findall(text)
-        if len(blocks) != 1:
+        if not blocks:
+            value = _after_lead_in(text)
+        elif len(blocks) != 1:
             raise NoAnswer(NOT_ONE) from None
-        if _holds_json(_FENCE.sub(" ", text)):
+        elif _holds_json(_FENCE.sub(" ", text)):
             raise NoAnswer("the agent's reply held JSON outside its one code block") from None
-        try:
-            value = json.loads(blocks[0])
-        except ValueError:
-            raise NoAnswer("the agent's code block was not JSON") from None
+        else:
+            try:
+                value = json.loads(blocks[0])
+            except ValueError:
+                raise NoAnswer("the agent's code block was not JSON") from None
     if not isinstance(value, dict):
         raise NoAnswer("the agent's reply was JSON but not an object")
     if set(value) and set(value) <= {"text", "tool_calls"}:  # the 0.x envelope
@@ -333,6 +365,43 @@ def attach_files(answer: dict[str, Any], work: Path,
 CLAUDE_DEFAULT = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
                   "--strict-mcp-config", "--no-session-persistence"]
 
+# THE LAST TURN IS THE ANSWER (staging, Nov 16, 8:46 and 9:02 pm: Sam started background
+# research helpers for Steven's "find 15 named people" step, ended two turns with "Still
+# waiting on the librarian search..." and handed in the whole list in a third turn. `claude -p
+# --output-format text` prints EVERY turn's closing words one after another, so the reply was
+# prose plus the list and was refused twice as "not one JSON object"). The bridge asks Claude
+# Code for its event stream and reads only the closing words of its LAST turn (the last
+# "result" event, or main-thread words written after it); checked on claude 2.1.325: one
+# "result" event per turn, a helper's own words carry its parent_tool_use_id.
+CLAUDE_STREAM = ["--output-format", "stream-json", "--verbose"]
+
+
+def claude_final(stdout: str) -> str:
+    """The closing words of Claude Code's last turn in its stream-json output; `stdout` as it
+    is when it holds no Claude Code events (an operator's own --output-format)."""
+    final: str | None = None
+    words: list[str] = []  # the main thread's words since the last result event
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or "session_id" not in event:
+            continue
+        if event.get("type") == "result":
+            final, words = str(event.get("result") or ""), []
+        elif event.get("type") == "assistant" and not event.get("parent_tool_use_id"):
+            message = event.get("message") if isinstance(event.get("message"), dict) else {}
+            for block in message.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    words = [block["text"]]
+    if words:
+        return words[-1]
+    return stdout if final is None else final
+
 
 def argv_for(agent: str, *, model: str | None, program: str | None,
              extra: list[str], last_message: str | None = None,
@@ -350,8 +419,8 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
         # an agent that brings its own tools may write files, in its scratch folder only
         edits = (["--permission-mode", "acceptEdits"]
                  if extra and "--permission-mode" not in extra else [])
-        return [binary, "-p", "--output-format", "text", *with_model, *edits,
-                *(extra or CLAUDE_DEFAULT)]
+        stream = [] if "--output-format" in extra else CLAUDE_STREAM
+        return [binary, "-p", *stream, *with_model, *edits, *(extra or CLAUDE_DEFAULT)]
     if known.name == "codex":
         where = ["--cd", scratch] if scratch else []
         own_sandbox = any(a in ("-s", "--sandbox") or str(a).startswith("--sandbox=")
@@ -395,6 +464,8 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
                 raise NoAnswer(f"`{argv[0]}` cannot be run (permission denied)") from None
             if done.returncode == 0:
                 reply = done.stdout
+                if by_name(agent) is not None and by_name(agent).name == "claude":
+                    reply = claude_final(reply)
                 if by_name(agent) is not None and by_name(agent).name == "codex":
                     try:
                         reply = Path(last).read_text(encoding="utf-8")
