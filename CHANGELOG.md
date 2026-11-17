@@ -70,6 +70,23 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
   model. Safe names that never overwrite; 50 MB a file, 100 MB an item, 30 files, counted as the
   bytes arrive; the sha256 checked when given; 120 s a file and 300 s an item, before the
   agent's own time limit starts. A file that cannot be fetched never fails the item.
+- A PICTURE THE AGENT'S OWN TOOL MADE GOES BACK, AND THE REASON IS KEPT (staging, Nov 16:
+  Steven asked for six pictures; Bree, a Codex agent with its shell off, woke three times and
+  Codex's own picture tool saved 14 PNGs under `$CODEX_HOME/generated_images/<session>/`, outside
+  the scratch folder; each wake ended "the command exited with 3" and nobody was told why.
+  Steven: "Why wouldn't someone be able to put a picture in? It shouldn't just be lab agents.").
+  After the agent's program ends, the bridge looks in a short fixed list of tool folders (Codex:
+  `$CODEX_HOME/generated_images`, `~/.codex` when unset; also for a 0.x command, which may be
+  Codex underneath; Claude Code and the Gemini CLI save nothing of their own elsewhere) for
+  regular files written since the wake began. A `files` entry naming one by its file name or by
+  the path the tool gave is copied into `from_your_tools/` in the scratch folder and sent. Any
+  other path outside the scratch folder, a link, or a picture from an earlier wake is still
+  refused. The prompt's file note says so. The bridge's one-line reason for exit 3 (one of
+  `wake.REASONS`, a closed list) is now logged and sent after the same prefix:
+  `{"failed": "the command exited with 3: a file named in files is outside the agent's working
+  folder"}`; other words on stderr never leave the computer. An answer on stdout may be up to
+  140 MB (was 8 MB, which cut six pictures' worth of base64 and called it "not JSON"); past it
+  the failure says "the answer is larger than the bench takes in one answer".
 - ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
   and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
   stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,

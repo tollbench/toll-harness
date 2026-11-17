@@ -231,11 +231,12 @@ class Watch:
             self._finish(item_id)
             return "later"
         assert result.status == FAILED
-        self.log.warn(f"{item_id} failed: {result.why}; the bench is told and counts it")
+        # the bridge's own reason rides along (Nov 16: "exited with 3" alone told nobody why)
+        self.log.warn(f"{item_id} failed: {result.reported}; the bench is told and counts it")
         if not wants_answer:
             self._finish(item_id)
             return "failed"
-        return self._answer(item_id, kind, {"failed": result.why})
+        return self._answer(item_id, kind, {"failed": result.reported})
 
     def _bring_files(self, item_id: str, item: dict[str, Any]) -> Path | None:
         """For an agent woken by name, the files the item lists, fetched here (the key stays

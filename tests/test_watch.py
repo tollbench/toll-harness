@@ -301,3 +301,31 @@ def test_live_line_open_is_said_when_the_bench_first_answers_not_when_an_item_co
     Watch(agent, wait=3, updater=no_update, spread=0).run(1)  # one call, nothing waiting
     assert time.monotonic() - started < 2.5  # the first call did not hold the line
     assert "live line open" in (agent.data_dir / "harness.log").read_text()
+
+
+def test_the_bridges_reason_is_logged_and_sent_as_the_failed_reason(made, tmp_path):
+    """Staging, Nov 16 (lane HARNFIX): Bree's three picture wakes each logged and sent only
+    "the command exited with 3"; the bridge's line saying why was dropped. Now it rides along
+    after the same prefix, and other words on stderr never do."""
+    bridge = tmp_path / "bridge_like.py"
+    bridge.write_text("import sys\nsys.stdin.read()\nprint('a file named in files is outside "
+                      "the agent' + chr(39) + 's working folder', file=sys.stderr)\nsys.exit(3)\n")
+    agent = made.agent(command=[sys.executable, str(bridge)])
+    made.bench.add(item("it_pic"))
+    watch(agent).run(1)
+    reason = ("the command exited with 3: a file named in files is outside the agent's "
+              "working folder")
+    assert made.bench.answers == [("it_pic", {"failed": reason})]
+    log = (agent.data_dir / "harness.log").read_text()
+    assert f"it_pic failed: {reason}; the bench is told and counts it" in log
+
+
+def test_other_words_on_stderr_are_never_sent(made, tmp_path):
+    own = tmp_path / "own.py"
+    own.write_text("import sys\nsys.stdin.read()\nprint('the owner said his address is 5 Elm', "
+                   "file=sys.stderr)\nsys.exit(3)\n")
+    agent = made.agent(command=[sys.executable, str(own)])
+    made.bench.add(item("it_own"))
+    watch(agent).run(1)
+    assert made.bench.answers == [("it_own", {"failed": "the command exited with 3"})]
+    assert "5 Elm" not in (agent.data_dir / "harness.log").read_text()

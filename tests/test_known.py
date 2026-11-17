@@ -438,3 +438,183 @@ def test_the_prompt_says_how_a_file_goes_back_when_the_answer_takes_files():
     with_files = wake.prompt_for(dict(item("it_n2"), answer={"needed": True, "shape": {
         "status": "x", "files": "list"}}))
     assert wake.FILES_NOTE not in plain and wake.FILES_NOTE in with_files
+
+
+# -- a picture the agent's own tool made goes back too (staging, Nov 16, lane HARNFIX) ------
+# Steven asked for six pictures; Bree (Codex, shell off) woke three times and Codex's own
+# picture tool saved 14 PNGs under $CODEX_HOME/generated_images/<session>/, outside the scratch
+# folder. Every wake ended "the command exited with 3" and nobody was told why. Steven: "Why
+# wouldn't someone be able to put a picture in? It shouldn't just be lab agents."
+PICTURE = textwrap.dedent("""\
+    #!{python}
+    import json, os, sys
+    sys.stdin.read()
+    out = os.path.join(os.environ["CODEX_HOME"], "generated_images",
+                       "01a1e6aa-0f0d-79c3-aa9a-197266072db8")
+    if os.environ.get("IN_SCRATCH"):  # made in the folder it was started in
+        out = os.getcwd()
+    os.makedirs(out, exist_ok=True)
+    pic = os.path.join(out, "exec-0a02ea46.png")
+    open(pic, "wb").write(b"\\x89PNG picture " * int(os.environ.get("PICTURE_REPEAT", "1")))
+    if os.environ.get("PRIVATE_FILE"):  # a file made now, but by nobody's picture tool
+        open(os.environ["PRIVATE_FILE"], "w").write("the operator's own words")
+    if os.environ.get("LINK_TO"):  # a link planted in the tool folder during the wake
+        link = os.path.join(out, "exec-link.png")
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(os.environ["LINK_TO"], link)
+    named = os.environ.get("NAME_AS", "abs")
+    path = {{"abs": pic, "plain": "exec-0a02ea46.png"}}.get(named, named)
+    reply = json.dumps({{"status": "done", "result": "six pictures",
+                        "files": [{{"filename": "cover.png", "path": path}}]}})
+    if "--output-last-message" in sys.argv:
+        open(sys.argv[sys.argv.index("--output-last-message") + 1], "w").write(reply)
+    else:
+        print(reply)
+""")
+STEP = dict(item("it_pic"), kind="step", answer={"needed": True, "shape": {
+    "status": "string", "result": "string", "files": "list"}})
+
+
+@pytest.fixture
+def pictures(tmp_path, programs, monkeypatch):
+    """codex (and claude) replaced by a stand-in that saves a picture where Codex does."""
+    for name in ("codex", "claude", "old-agent"):
+        (programs / name).write_text(PICTURE.format(python=sys.executable))
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    for key in ("NAME_AS", "PICTURE_REPEAT", "PRIVATE_FILE", "LINK_TO", "IN_SCRATCH"):
+        monkeypatch.delenv(key, raising=False)
+    return home / "generated_images" / "01a1e6aa-0f0d-79c3-aa9a-197266072db8"
+
+
+@pytest.mark.parametrize("name_as", ["abs", "plain"])
+def test_a_picture_codex_saved_in_its_own_folder_during_the_wake_goes_back(
+        pictures, monkeypatch, name_as):
+    import base64
+    monkeypatch.setenv("NAME_AS", name_as)
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == ANSWERED, (result.why, result.said)
+    (sent,) = result.answer["files"]
+    assert sent["filename"] == "cover.png" and "path" not in sent
+    assert base64.b64decode(sent["content_base64"]) == b"\x89PNG picture "
+    assert (pictures / "exec-0a02ea46.png").is_file()  # the tool's own file is left in place
+
+
+def test_a_picture_rewritten_in_an_old_folder_during_the_wake_goes_back(pictures,
+                                                                       monkeypatch):
+    pictures.mkdir(parents=True)
+    (pictures / "exec-0a02ea46.png").write_bytes(b"yesterday")
+    for path in (pictures / "exec-0a02ea46.png", pictures):
+        os.utime(path, (path.stat().st_atime - 86400, path.stat().st_mtime - 86400))
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == ANSWERED, (result.why, result.said)
+
+
+def test_a_0x_command_that_is_codex_underneath_hands_its_picture_back_too(pictures,
+                                                                         programs):
+    command = known.wake_argv({"agent": known.PROMPT, "command": [str(programs / "old-agent")]})
+    result = hand_off(command, STEP, time_limit=30)
+    assert result.status == ANSWERED, (result.why, result.said)
+
+
+@pytest.mark.parametrize("in_scratch", ["", "1"])
+def test_an_answer_past_the_old_8_mb_stdout_cap_is_not_cut(pictures, monkeypatch, in_scratch):
+    # six of Bree's 2.7 MB pictures are about 22 MB as base64: the old 8 MB cut made that
+    # "the command printed something that is not JSON", wherever the pictures were made
+    monkeypatch.setenv("PICTURE_REPEAT", str(700_000))  # 9.8 MB, 13 MB as base64
+    monkeypatch.setenv("NAME_AS", "plain")
+    monkeypatch.setenv("IN_SCRATCH", in_scratch)
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=60)
+    assert result.status == ANSWERED, (result.why, result.said)
+    assert len(result.answer["files"][0]["content_base64"]) > 8 * 1024 * 1024
+
+
+OUTSIDE = "the command exited with 3: a file named in files is outside the agent's working folder"
+
+
+def test_a_picture_made_before_the_wake_is_still_outside(pictures, monkeypatch):
+    old = pictures.parent / "01a1d5ec-bd0b-7263-b0f5-f5c780002eee" / "exec-old.png"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"\x89PNG an earlier wake's picture")
+    os.utime(old, (old.stat().st_atime - 3600, old.stat().st_mtime - 3600))
+    os.utime(old.parent, (old.stat().st_atime, old.stat().st_mtime))
+    monkeypatch.setenv("NAME_AS", str(old))
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == FAILED and result.reported == OUTSIDE
+
+
+def test_an_operator_file_is_still_refused_even_one_written_during_the_wake(
+        tmp_path, pictures, monkeypatch):
+    private = tmp_path / "operator-notes.txt"
+    monkeypatch.setenv("PRIVATE_FILE", str(private))
+    monkeypatch.setenv("NAME_AS", str(private))
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == FAILED and result.reported == OUTSIDE
+    monkeypatch.setenv("NAME_AS", "operator-notes.txt")  # its plain name finds nothing either
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.reported == ("the command exited with 3: the agent named a file it did not "
+                               "make: operator-notes.txt")
+
+
+def test_a_link_planted_in_the_tool_folder_is_never_followed(tmp_path, pictures,
+                                                            monkeypatch):
+    private = tmp_path / "operator-key.txt"
+    private.write_text("not for the bench")
+    monkeypatch.setenv("LINK_TO", str(private))
+    monkeypatch.setenv("NAME_AS", "exec-link.png")
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == FAILED
+    assert result.reported.endswith("the agent named a file it did not make: exec-link.png")
+    monkeypatch.setenv("NAME_AS", str(pictures / "exec-link.png"))
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.status == FAILED and result.reported == OUTSIDE
+
+
+def test_claude_has_no_tool_folder_so_a_codex_picture_is_not_its_to_hand_in(pictures,
+                                                                           monkeypatch):
+    monkeypatch.setenv("NAME_AS", "abs")
+    result = hand_off(known.wake_argv({"agent": "claude"}), STEP, time_limit=30)
+    assert result.status == FAILED and result.reported == OUTSIDE
+
+
+def test_a_name_never_made_says_which_in_the_reason(pictures, monkeypatch):
+    monkeypatch.setenv("NAME_AS", "picture-1.png")
+    result = hand_off(known.wake_argv({"agent": "codex"}), STEP, time_limit=30)
+    assert result.why == "the command exited with 3"  # the prefix the bench keys on, kept
+    assert result.reported == ("the command exited with 3: the agent named a file it did not "
+                               "make: picture-1.png")
+
+
+def test_only_the_bridges_own_reasons_ride_along(tmp_path):
+    script = tmp_path / "own.py"
+    script.write_text("import sys\nsys.stdin.read()\n"
+                      "print('my secret plan for the owner', file=sys.stderr)\nsys.exit(3)\n")
+    result = hand_off([sys.executable, str(script)], STEP, time_limit=30)
+    assert result.said == "my secret plan for the owner"
+    assert result.told == "" and result.reported == "the command exited with 3"
+    script.write_text("import sys\nsys.stdin.read()\n"
+                      "print('the agent replied with nothing', file=sys.stderr)\nsys.exit(1)\n")
+    assert hand_off([sys.executable, str(script)], STEP,
+                    time_limit=30).reported == "the command exited with 1"
+
+
+@pytest.mark.parametrize("line", [
+    "the item on stdin was not a JSON object", "the agent replied with nothing", wake.NOT_ONE,
+    "the agent's reply held JSON outside its one code block",
+    "the agent's code block was not JSON", "the agent's reply was JSON but not an object",
+    "the agent's reply was an empty 0.x envelope",
+    "a file named in files is outside the agent's working folder",
+    "the agent named a file it did not make: cover.png",
+    "the file cover.png is larger than the bench takes", "no 0.x command was given",
+    "the harness does not know an agent named 'robot'", "`/nowhere/claude` is not on this computer",
+    "`/usr/bin/codex` cannot be run (permission denied)", "codex exited with 1",
+    "claude exited with 1 on account 2 of 2",
+])
+def test_every_line_the_bridge_prints_is_one_of_its_fixed_reasons(line):
+    assert wake.bridge_reason(line) == line
+
+
+def test_the_prompt_says_where_a_tool_made_picture_is_and_to_name_it():
+    with_files = wake.prompt_for(STEP)
+    assert "$CODEX_HOME/generated_images" in with_files and "by its file name" in with_files

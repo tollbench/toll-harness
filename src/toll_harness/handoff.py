@@ -22,12 +22,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from toll_harness.incoming import FILES_ENV
+from toll_harness.wake import FAILED_EXIT, bridge_reason
 
 ANSWERED = "answered"
 LATER = "later"
 FAILED = "failed"
 _PLAIN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-_MAX_STDOUT = 8 * 1024 * 1024
+# The most an answer printed on stdout may be. It was 8 MB, so an answer carrying the bytes of
+# its pictures (six 2.7 MB PNGs are about 22 MB as base64) was cut and called "not JSON". Now it
+# is the bench's own cap on one request (100 MB) with base64's third on top, and past it the
+# failure says so instead of being cut.
+_MAX_STDOUT = 140 * 1024 * 1024
+TOO_BIG = "the command printed an answer larger than the bench takes in one answer"
 
 
 @dataclass
@@ -37,6 +43,14 @@ class HandOff:
     why: str = ""  # one plain line, never the item's or the answer's contents
     said: str = ""  # the command's last stderr line: shown on this computer only, never sent
     seconds: float = 0.0
+    told: str = ""  # the bridge's own reason for exit 3 (one of wake.REASONS), or ''
+
+    @property
+    def reported(self) -> str:
+        """What the watch logs and sends to the bench as the failed reason: `why`, and the
+        bridge's own reason after it when there is one ("the command exited with 3: a file
+        named in files is outside the agent's working folder"). Never other stderr words."""
+        return f"{self.why}: {self.told}" if self.told else self.why
 
 
 def _plain(value: Any) -> str:
@@ -91,9 +105,13 @@ def hand_off(command: list[str], item: dict[str, Any], *, time_limit: float,
     seconds = time.monotonic() - started
     if process.returncode != 0:
         lines = (_err or b"").decode("utf-8", errors="replace").strip().splitlines()
+        said = lines[-1][:300] if lines else ""
+        told = bridge_reason(said) if process.returncode == FAILED_EXIT else ""
         return HandOff(FAILED, why=f"the command exited with {process.returncode}",
-                       said=lines[-1][:300] if lines else "", seconds=seconds)
-    text = out[:_MAX_STDOUT].decode("utf-8", errors="replace").strip()
+                       said=said, told=told, seconds=seconds)
+    if len(out) > _MAX_STDOUT:
+        return HandOff(FAILED, why=TOO_BIG, seconds=seconds)
+    text = out.decode("utf-8", errors="replace").strip()
     if not text:
         return HandOff(LATER, why="nothing printed: the agent answers later", seconds=seconds)
     try:
