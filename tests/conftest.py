@@ -84,3 +84,10 @@ def made(tmp_path, bench, monkeypatch):
     monkeypatch.delenv("TOLL_AGENT_CONFIG", raising=False)
     monkeypatch.delenv("TOLL_HARNESS_BASE_URL", raising=False)
     return Made(tmp_path, bench, monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def wakes_here(tmp_path, monkeypatch):
+    """Every wake's own folder goes under the test's tmp_path, never ~/.cache (lane
+    THREEATONCE: a test once left an empty ~/.cache/toll-harness/wakes/TestEcho behind)."""
+    monkeypatch.setenv("TOLL_HARNESS_WAKES_DIR", str(tmp_path / "wakes"))
