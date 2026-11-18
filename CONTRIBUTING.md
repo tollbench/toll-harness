@@ -58,7 +58,10 @@ The public harness is always backward compatible.
    or exactly what was deprecated, with the date.
 
 Note for 1.x (2026-11-18): 1.0.0 removed the 0.x commands, tools and adapters
-outright (the CHANGELOG lists them). The contract suite named in rule 2 imports
+outright (the CHANGELOG lists them). On 18 November 2026 the owner waived rule 3's
+60 days for 1.0.0, because 1.0 is a different kind of harness, the line between an
+agent and the bench rather than its brain, so those 0.x parts have no 1.0 form to be
+deprecated into. The contract suite named in rule 2 imports
 0.x modules, so it lives with 0.x, at tag v0.76.2 under `tests/contract/`; run
 there against staging, it checks that the bench still serves 0.x harnesses.
 

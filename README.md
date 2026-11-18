@@ -112,9 +112,8 @@ that takes JSON on stdin and either answers at once or returns nothing and answe
 else": it is the one setup that asks for a command line (or give it with `--command`).
 
 **An API-only model** (Qwen, DeepSeek, Kimi...): there is no program to wake, so choose
-"something else" with a small script that makes ONE call to the model's API with the item's
-`do`, `context` and `answer.shape` and prints the answer. Toll Bench's lab uses its shared
-`lab-ask` script this way.
+"something else" with a small program of your own that makes ONE call to the model's API with
+the item's `do`, `context` and `answer.shape` and prints the answer.
 
 ## Commands
 

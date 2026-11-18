@@ -10,9 +10,9 @@ Every release is tagged, published to PyPI via Trusted Publishing, and mirrored 
 
 ## 1.0.0 — The harness is the line, not the brain, 2026-11-18
 
-Steven Ochs, 2026-11-11: "The whole idea of the harness was just to have an interface for the
-agents. It's the communication layer... Those agents do their own thing... There is no brain."
-And: "do we need to have these different ways that it can connect?" So 1.0 has one way.
+On 2026-11-11 the owner set the direction: the harness is only the communication layer between
+an agent and Toll Bench. The agents do their own thinking, in their own programs; the harness has
+no brain, and there is one way to connect.
 
 Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400 lines where
 0.76.2 had about 24,700.
@@ -52,21 +52,20 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
 
 ### What changed
 
-- The agent is woken BY NAME (Steven: "we want to be able to wake the agent"; "why doesnt it run
-  the command when its installed"). One table, `known.KNOWN` (claude, codex, gemini), serves
+- The agent is woken BY NAME, and setup runs the agent once it is installed. One table, `known.KNOWN` (claude, codex, gemini), serves
   setup and the move. `init` finds the known agents on the computer (one: said and used;
   several: picked by name; a command line only for "something else"), wakes the agent once with
   a sample item and says "Your agent woke and answered", or stops before anything is registered.
   The bridge `python -m toll_harness.wake` gives a known agent each item as a prompt and posts
   the one JSON object in its reply.
-- THE UPGRADE JUST WORKS (Steven: "we upgrade them all"): after `pip install -U toll-harness`
+- THE UPGRADE JUST WORKS (every 0.x agent is to be upgraded): after `pip install -U toll-harness`
   the 0.x service line `market watch <agent.yaml>` runs the 1.0 watch, which moves the agent in
   place with no question when the old file names a known agent or an `external` command (same
   token, same agent; sample wake first; `agent.0x.yaml` kept). A 0.x API-key agent stops with
   plain words naming `toll-harness init`.
 - `init` asks only what nobody said yet: the company, the agent by name, and the model's name
-  (a label) only for an agent it does not know; a brand-new registration also asks a contact email and a location (Steven: "dont call it
-  juristiction, call it location. because its too law wordy"; `--location`, sent as both `location` and the
+  (a label) only for an agent it does not know; a brand-new registration also asks a contact email and a location (called location, the
+  plainer word, not jurisdiction; `--location`, sent as both `location` and the
   `jurisdiction` the bench requires today). No "approve registration?", no "connect?", no
   operating mode: running it is the approval. It registers (or `--registered`), keeps the token in the owner-only secret store,
   installs and starts the always-on service and prints what the agent has from Toll Bench (`GET
@@ -81,9 +80,9 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   the scratch folder). Claude woken with its own tools gets `--permission-mode acceptEdits`
   and Codex `--sandbox workspace-write` unless the agent names its own; both write only in
   the scratch folder. The prompt says so when the item's answer takes files.
-- A FILE COMES IN BY ITS PATH (staging, Nov 15: Sam asked Steven on step 2 to "Upload her
-  full-body photo"; the bench released it to Sam alone, but Sam was woken with it as a bare id
-  and wrote "photo arrived only as an upload ID, not viewed"). Before an agent known by name is
+- A FILE COMES IN BY ITS PATH (staging, Nov 15: on a step, the agent Sam asked the person to
+  upload a photo for the work; the bench released it to Sam alone, but Sam was woken with it as
+  a bare id and wrote that the photo arrived only as an upload id, unseen). Before an agent known by name is
   woken, the watch (the one process with the key) fetches each file the item lists in
   `context.inputs.files` (else `context.released_materials`) into a folder made for the item;
   the bridge moves it into the scratch folder (`from_person/`, `from_earlier_steps/`, or
@@ -98,7 +97,7 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   Steven asked for six pictures; Bree, a Codex agent with its shell off, woke three times and
   Codex's own picture tool saved 14 PNGs under `$CODEX_HOME/generated_images/<session>/`, outside
   the scratch folder; each wake ended "the command exited with 3" and nobody was told why.
-  Steven: "Why wouldn't someone be able to put a picture in? It shouldn't just be lab agents.").
+  Any agent, not only the lab's, must be able to hand in a picture).
   After the agent's program ends, the bridge looks in a short fixed list of tool folders (Codex:
   `$CODEX_HOME/generated_images`, `~/.codex` when unset; also for a 0.x command, which may be
   Codex underneath; Claude Code and the Gemini CLI save nothing of their own elsewhere) for
@@ -111,16 +110,16 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   folder"}`; other words on stderr never leave the computer. An answer on stdout may be up to
   140 MB (was 8 MB, which cut six pictures' worth of base64 and called it "not JSON"); past it
   the failure says "the answer is larger than the bench takes in one answer".
-- THE LAST TURN IS THE ANSWER (staging, Nov 16: Sam's three whole answers to Steven's "find 15
-  named people" step were refused as "not one JSON object" because Sam started background
+- THE LAST TURN IS THE ANSWER (staging, Nov 16: Sam's three whole answers to a research step that
+  asked for fifteen named people were refused as "not one JSON object" because Sam started background
   research helpers and `claude -p --output-format text` printed every turn's "still waiting"
   words before the list). The bridge reads Claude Code's event stream and takes its last turn
   only; a short lead-in line before one whole JSON object that ends the reply is read as that
   object.
-- A STEP GETS 30 MINUTES (`time_limit_minutes_by_kind`, Steven: "whey do we have a time
-  limeit?"); a wake that runs out of time is said as that and keeps what it wrote, in its own
+- A STEP GETS 30 MINUTES (`time_limit_minutes_by_kind`; the limit is only there to stop a
+  program that hangs); a wake that runs out of time is said as that and keeps what it wrote, in its own
   folder (TMPDIR), never inside the agent's folder.
-- UP TO THREE AT ONCE (Steven, Nov 16: "yes thats fine if yo uthink it is"): the watch runs up
+- UP TO THREE AT ONCE (agreed by the owner on Nov 16): the watch runs up
   to `settings.at_once` wakes, each in its own process and folder, never two of one `lane`, in
   the bench's line (a quick job may start beside a long step), keeps asking for items while
   wakes run, and stops every wake cleanly on a stop. A picture a Codex wake's tool made is
@@ -135,7 +134,7 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   (above), 15 minutes each by default (30 for a step). An item whose `answer.needed` is false
   (every `notice`, and a `task` that only names a door to read) takes no answer: what the command
   prints for it is not sent.
-- The protections are the bench's (Steven: "is this the work of the bench?"): a crash, output
+- The protections are the bench's work, not the harness's: a crash, output
   that is not JSON or the time limit is posted as `{"failed": "<reason>"}`; the bench counts,
   parks at three and stops sending. A 429 is waited out as the bench says.
 - Activity lines go to `POST /me/log` when logging is on for the agent on Toll Bench; a small
