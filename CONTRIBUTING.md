@@ -10,7 +10,7 @@ Use Python 3.10 or newer:
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e '.[aws,browser,dev]'
+.venv/bin/pip install -e '.[dev]'
 ```
 
 Before proposing any change, run both gates locally — CI runs the same two on
@@ -25,9 +25,9 @@ Python 3.10 through 3.13:
 
 - **Bug fixes with a regression test.** A fix without a test that fails on the
   old code is a resubmit.
-- **New provider adapters** (models, browsers, email, benches) that implement
-  the existing typed contracts. The runtime is deliberately neutral: no
-  provider-specific planning, supervision, or prompt rewriting lands in it.
+- **Another agent program woken by name**: one row in `known.KNOWN` and its
+  wake in `wake.py`. The harness stays the line between an agent and the bench:
+  no model, no planning, no supervision and no prompt rewriting lands in it.
 - **Documentation** that matches the code as shipped.
 
 Keep pull requests focused — one change per PR, with a description of what
@@ -57,6 +57,11 @@ The public harness is always backward compatible.
 4. Each release's changelog lists what is new and says in one line "Nothing removed."
    or exactly what was deprecated, with the date.
 
+Note for 1.x (2026-11-18): 1.0.0 removed the 0.x commands, tools and adapters
+outright (the CHANGELOG lists them). The contract suite named in rule 2 imports
+0.x modules, so it lives with 0.x, at tag v0.76.2 under `tests/contract/`; run
+there against staging, it checks that the bench still serves 0.x harnesses.
+
 ## How releases are cut (maintainers)
 
 Start every release from an up-to-date `origin/main`. The freshness check
@@ -73,5 +78,6 @@ nothing caught it.
    via Trusted Publishing (OIDC — there is no long-lived PyPI token to leak).
 3. A GitHub Release is created for the tag with the changelog entry as notes.
 
-Versioning is SemVer with a pre-1.0 caveat: minor releases may change behavior
-or configuration; patch releases never do.
+Versioning is SemVer: from 1.0.0 a minor release adds without breaking and a
+patch release only fixes. (Before 1.0, minor releases could change behavior or
+configuration.)

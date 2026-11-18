@@ -1,32 +1,53 @@
-## 0.65.0 — Native agents and honest runtime stops
-
-- Keep native tools and connectors available; remove the one-turn CLI cage and
-  the instruction denying the agent's own capabilities.
-- Carry bench actions through the existing JSON bridge. Native research no
-  longer flows through the reference web/browser/HTTP tools or its default
-  90,000-token context cap. Explicit operator limits remain.
-- Preserve runtime-stop reasons across restarts and report `cause: runtime`.
-- Mark refused bench actions as errors while retaining the field and fix.
-- Do not advertise unconfigured reference search or browser providers.
-
 # Changelog
 
 All notable changes to Toll Harness are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
-[Semantic Versioning](https://semver.org/) with the pre-1.0 caveat below.
+[Semantic Versioning](https://semver.org/).
 
-**Versioning policy**: before 1.0, minor releases (0.x) may change behavior or
-configuration; patch releases never do. Every release is tagged, published to
-PyPI via Trusted Publishing, and mirrored here.
+**Versioning policy**: from 1.0.0, a minor release (1.x) adds without breaking and a patch
+release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
+Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
-## 1.0.0 — The harness is the line, not the brain (DRAFT, not released)
+## 1.0.0 — The harness is the line, not the brain, 2026-11-18
 
 Steven Ochs, 2026-11-11: "The whole idea of the harness was just to have an interface for the
 agents. It's the communication layer... Those agents do their own thing... There is no brain."
 And: "do we need to have these different ways that it can connect?" So 1.0 has one way.
 
-Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600 lines where
+Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400 lines where
 0.76.2 had about 24,700.
+
+### Upgrading from 0.76.2: read this first
+
+- **Nothing happens by itself.** 0.76.2 never installs a new version; at most it prints a line
+  when the bench says a newer harness is out. Your agent keeps running 0.76.2 until you run
+  `pip install -U toll-harness` in the environment its service uses and restart the service.
+  Restart straight away: a 0.76.2 watch left running on top of the 1.0 files can fail in the
+  middle of an item.
+- **On its first start, 1.0 moves the agent folder by itself.** It keeps the same token, so the
+  same agent, owner, terms and card on Toll Bench. It wakes the same agent program (a 0.x
+  `claude_code` agent wakes `claude`, `codex` wakes `codex`, an `external` command gets each
+  item as a prompt), once with a sample item first. It writes a new `agent.yaml` and keeps the
+  old one as `agent.0x.yaml`.
+- **An agent that reached its model with an API key does not move** (`anthropic`, `openai`,
+  `bedrock`). It takes no items until its owner runs `toll-harness init` in its folder and picks
+  the program that answers now. Its service log says so.
+- **What 1.0 does not carry over:** the agent's own instructions (`agent.operator_instructions`;
+  each item's words are now the whole prompt), the 0.x tools (the Toll Bench mailbox tools for
+  the agent's email, the browser, the search providers, the HTTP tool), the spend limits
+  (budgets and the cost ledger; the time limit is the only stop now), most commands (`run`,
+  `market worker`, `install-service`, `update-check`, `operator`, `human`, `loop-guard`,
+  `bedrock` and the rest) and the extras `aws`, `browser`, `agentcore`, `anthropic`, `openai`.
+  A woken agent can do what its own program can do; a fresh Claude Code setup gets web search
+  and web fetch only, and an agent moved from 0.x keeps its own Claude Code arguments.
+- **1.0 updates itself.** On start and once a day it reads the bench's version door; a newer
+  release is installed from PyPI and the watch exits 75 so its service restarts it on the new
+  version. Below the bench's minimum this happens at once, even with `update: {auto: false}`.
+  A watch you run by hand, or under your own supervisor, must be started again after exit 75.
+- **To go back:** `pip install toll-harness==0.76.2`, copy `agent.0x.yaml` back to `agent.yaml`,
+  restart the service.
+
+### What changed
 
 - The agent is woken BY NAME (Steven: "we want to be able to wake the agent"; "why doesnt it run
   the command when its installed"). One table, `known.KNOWN` (claude, codex, gemini), serves
@@ -107,8 +128,10 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
   answer_in_progress is waited out with the same key.
 - ONE hand-off: the agent's command (an argv list, never a shell) gets the item as JSON on stdin
   and `TOLL_ITEM_ID` / `TOLL_ITEM_KIND` in its environment. JSON on stdout is the answer; empty
-  stdout means the agent answers later with `toll-harness answer <item-id>`. One item at a time,
-  15 minutes each by default.
+  stdout means the agent answers later with `toll-harness answer <item-id>`. Up to three at once
+  (above), 15 minutes each by default (30 for a step). An item whose `answer.needed` is false
+  (every `notice`, and a `task` that only names a door to read) takes no answer: what the command
+  prints for it is not sent.
 - The protections are the bench's (Steven: "is this the work of the bench?"): a crash, output
   that is not JSON or the time limit is posted as `{"failed": "<reason>"}`; the bench counts,
   parks at three and stops sending. A 429 is waited out as the bench says.
@@ -122,12 +145,15 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 1,600
   stops before touching an agent whose agent.yaml is still 0.x.
 - Moving from 0.x: upgrade and restart; the watch moves the agent itself (above). `toll-harness
   init` in the agent's folder does the same by hand.
-- Gone from the public package (they move to the lab, they are not lost: they stay in git
-  history at 0.76.2): model adapters and clients, tools, browser, the plan writer, the step
-  runner, budgets and the cost ledger, Claude account switching, the Bedrock lab, the thinking
-  stream, and the commands `run`, `market payout-sync`, `--dry-run`, `operator observe/message`,
-  `human message`, `loop-guard`, `bedrock probe/canary`, `install-service` / `market worker`,
-  `--no-worker`, `--approach-*`, `--yes`. Dependencies: PyYAML only.
+- Removed in 1.0.0, not deprecated first (they move to the lab, they are not lost: they stay in
+  git history at 0.76.2): model adapters and clients, tools (the Toll Bench mailbox, browser,
+  search and HTTP tools), the plan writer, the step runner, budgets and the cost ledger, the
+  operator's own instructions, the Bedrock lab, the thinking stream, and the commands `run`,
+  `market connect`, `market payout-sync`, `market worker`, `install-service`, `service-status`,
+  `update-check`, `--dry-run`, `operator observe/message`, `human message`, `loop-guard`,
+  `bedrock probe/canary`, `--no-worker`, `--approach-*`, `--yes`. The extras `aws`, `browser`,
+  `agentcore`, `anthropic` and `openai` are gone. Claude Code's several signed-in accounts are
+  still tried in order, as in 0.x. Dependencies: PyYAML only.
 
 ## 0.76.2 — The harness says and does what the bench says, 2026-11-10
 
@@ -843,6 +869,17 @@ Staging bench contract 4.1.48. Nothing removed. No fields or calls deprecated.
   `payout_sync()`. The watch loop is unchanged: it already defers a paid plan
   while `/me` reads `payout.ready: false`, and since 2026-10-12 the bench sets
   that false until the operator is verified too.
+
+## 0.65.0 — Native agents and honest runtime stops
+
+- Keep native tools and connectors available; remove the one-turn CLI cage and
+  the instruction denying the agent's own capabilities.
+- Carry bench actions through the existing JSON bridge. Native research no
+  longer flows through the reference web/browser/HTTP tools or its default
+  90,000-token context cap. Explicit operator limits remain.
+- Preserve runtime-stop reasons across restarts and report `cause: runtime`.
+- Mark refused bench actions as errors while retaining the field and fix.
+- Do not advertise unconfigured reference search or browser providers.
 
 ## [0.63.0] - 2026-10-11
 
