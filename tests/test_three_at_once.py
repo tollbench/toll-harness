@@ -20,7 +20,6 @@ import sys
 import textwrap
 import threading
 import time
-from pathlib import Path
 
 import pytest
 import yaml
@@ -263,7 +262,8 @@ CODEX = textwrap.dedent("""\
     import json, os, re, sys, time
     prompt = sys.stdin.read()
     item_id = re.search(r'"id": "(it_[A-Za-z0-9_]+)"', prompt).group(1)
-    session = "01a1e8" + item_id.replace("_", "")[-6:].rjust(6, "0") + "-aaaa-bbbb-cccc-dddddddddddd"
+    session = ("01a1e8" + item_id.replace("_", "")[-6:].rjust(6, "0")
+               + "-aaaa-bbbb-cccc-dddddddddddd")
     if not os.environ.get("NO_SESSION"):
         print("session id: " + session, file=sys.stderr)
     folder = os.path.join(os.environ["CODEX_HOME"], "generated_images", session)

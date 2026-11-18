@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import sys
 import textwrap
-from pathlib import Path
 
 import pytest
 import yaml
@@ -20,7 +19,7 @@ from tests.fakebench import TOKEN, item
 from tests.test_known import program_runs, programs  # noqa: F401 - the fixture
 from toll_harness import known, wake
 from toll_harness.agent import TOKEN_SECRET, load
-from toll_harness.handoff import ANSWERED, FAILED, hand_off
+from toll_harness.handoff import ANSWERED, hand_off
 from toll_harness.watch import Watch
 
 SESSION = "0fa1255f-13cb-43c7-bf2e-9dca5707bb35"
@@ -108,7 +107,7 @@ STREAMING_CLAUDE = textwrap.dedent("""\
 """)
 
 
-def test_a_claude_wake_reads_its_stream_and_hands_in_the_last_turn(tmp_path, programs,
+def test_a_claude_wake_reads_its_stream_and_hands_in_the_last_turn(tmp_path, programs,  # noqa: F811
                                                                    monkeypatch):
     (programs / "claude").write_text(STREAMING_CLAUDE.format(python=sys.executable))
     stream = tmp_path / "stream.jsonl"
@@ -122,7 +121,7 @@ def test_a_claude_wake_reads_its_stream_and_hands_in_the_last_turn(tmp_path, pro
     assert "--verbose" in argv and argv.count("--output-format") == 1
 
 
-def test_an_operators_own_output_format_is_kept(tmp_path, programs):
+def test_an_operators_own_output_format_is_kept(tmp_path, programs):  # noqa: F811
     hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--output-format", "json"]}),
              item("it_o1"), time_limit=30)
     argv = program_runs(tmp_path)[0]["argv"]
@@ -171,7 +170,7 @@ SLOW = textwrap.dedent("""\
 
 
 @pytest.fixture
-def slow(tmp_path, programs, monkeypatch):
+def slow(tmp_path, programs, monkeypatch):  # noqa: F811
     (programs / "old-agent").write_text(SLOW.format(python=sys.executable))
     monkeypatch.setenv("TOLL_HARNESS_WAKES_DIR", str(tmp_path / "wakes"))
     for key in ("WRITE_PART", "SLEEP"):

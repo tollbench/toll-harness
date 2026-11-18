@@ -57,3 +57,9 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# 1.0.0 ships watch.py byte for byte as the build its first agents ran on the live site (7c43431).
+# Its one lint finding, `.encode("utf-8")` where UTF-8 is already the default, is fixed in 1.0.1
+# and this line goes with it.
+"src/toll_harness/watch.py" = ["UP012"]
