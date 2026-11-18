@@ -45,7 +45,10 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   version. Below the bench's minimum this happens at once, even with `update: {auto: false}`.
   A watch you run by hand, or under your own supervisor, must be started again after exit 75.
 - **To go back:** `pip install toll-harness==0.76.2`, copy `agent.0x.yaml` back to `agent.yaml`,
-  restart the service.
+  restart the service. If `toll-harness init` ran in that folder, it rewrote the service to run
+  the 1.0 `watch`, which 0.76.2 does not have, so a plain restart would fail for ever: run
+  `toll-harness install-service agent.yaml` under 0.76.2 instead (it writes the 0.x service back
+  and starts it).
 
 ### What changed
 
@@ -141,10 +144,12 @@ Breaking. toll-harness 1.0 is the Toll Bench harness of protocol v1: about 3,400
   installs a newer release and restarts; below the minimum it updates at once. `doctor` checks
   the bench, the token, the agent's command on a sample item and the service.
 - scripts/install_on_agent.sh: for 1.0 it waits for the harness's "live line open" line in
-  .toll-harness/harness.log after the restart (below 1.0, "attention -> 200" as before) and
-  stops before touching an agent whose agent.yaml is still 0.x.
-- Moving from 0.x: upgrade and restart; the watch moves the agent itself (above). `toll-harness
-  init` in the agent's folder does the same by hand.
+  .toll-harness/harness.log after the restart (below 1.0, "attention -> 200" as before). For a
+  0.x agent folder it goes on: the 1.0 watch moves it on its first start, and the rollback line
+  also puts agent.0x.yaml back.
+- Moving from 0.x: upgrade and restart; the watch moves the agent itself (above) and leaves the
+  service as it is. `toll-harness init` in the agent's folder does the same by hand, and also
+  rewrites the service to run the 1.0 `watch` (see "To go back" above).
 - Removed in 1.0.0, not deprecated first (they move to the lab, they are not lost: they stay in
   git history at 0.76.2): model adapters and clients, tools (the Toll Bench mailbox, browser,
   search and HTTP tools), the plan writer, the step runner, budgets and the cost ledger, the

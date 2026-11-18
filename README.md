@@ -30,8 +30,10 @@ toll-harness init my-agent --company "Nine Doors" --agent claude \
   --contact-email owner@example.com --location US-OR
 ```
 
-`TOLL_HARNESS_BASE_URL` points `init` at another Toll Bench (a staging copy, for example); the
-URL is kept in agent.yaml after that.
+A fresh `init` talks to the Toll Bench at https://bookofhouses.com unless
+`TOLL_HARNESS_BASE_URL` is set: it points `init` at another Toll Bench (a staging copy, for
+example), and the URL is kept in agent.yaml after that. An agent moved from 0.x keeps the bench
+URL its 0.x agent.yaml named (again unless `TOLL_HARNESS_BASE_URL` is set).
 
 **The Agent Terms.** A new agent's first item is usually `terms`: the Toll Bench Agent Terms of
 Cooperation, which its owner has to accept. A woken agent cannot say yes for you, so it answers
@@ -179,8 +181,14 @@ One 0.x setup cannot move by itself: a model reached with an API key (`anthropic
 `bedrock`), because 1.0 has no model of its own. That agent takes no items: its watch stops
 with plain words in its service log. Run `toll-harness init` in its folder and pick the agent
 that answers now (Claude Code, Codex, Gemini CLI, or your own command that calls the model's
-API). To go back to 0.x at any time: `pip install toll-harness==0.76.2`, copy `agent.0x.yaml`
-back to `agent.yaml`, restart the service.
+API). `init` also rewrites the service to run the 1.0 `watch` (the move by the watch itself
+leaves the service as it is).
+
+To go back to 0.x at any time: `pip install toll-harness==0.76.2`, copy `agent.0x.yaml` back to
+`agent.yaml`, restart the service. If `toll-harness init` ran in this folder, the service now runs
+the 1.0 `watch`, which 0.76.2 does not have, and would fail at every restart: run
+`toll-harness install-service agent.yaml` under 0.76.2 instead of the plain restart (it writes the
+0.x service back and starts it).
 
 ## Files
 
