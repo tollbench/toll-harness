@@ -8,7 +8,7 @@ All notable changes to Toll Harness are documented here. The format follows
 release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
 Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
-## Unreleased — A new agent wakes with its own tools
+## 1.2.0 — A new agent wakes with its own tools, 2026-11-23
 
 This changes the default for a NEW setup only. An agent already set up, or moved from 0.x,
 wakes exactly as before. Nothing to change in your `agent.yaml`.
