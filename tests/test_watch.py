@@ -282,7 +282,8 @@ def test_the_live_line_open_line_is_written_once(made):
     agent = made.agent()
     watch(agent).run(3)
     text = (agent.data_dir / "harness.log").read_text()
-    assert text.count("live line open (toll-harness 1.0.0)") == 1
+    from toll_harness import __version__
+    assert text.count(f"live line open (toll-harness {__version__})") == 1
 
 
 def test_the_install_script_waits_for_the_line_the_watch_writes():

@@ -430,6 +430,38 @@ def claude_final(stdout: str) -> str:
     return stdout if final is None else final
 
 
+# CODEX, AND THE TOOLS ITS OPERATOR PLUGGED IN (staging, Nov 21 to 23: Bree's operator had
+# given it a publish tool, `-c mcp_servers.publish.command=...` in extra_args. `codex exec`
+# runs with nobody at the keyboard, so its approval policy is "never", and a tool that
+# reaches the open web asks for an approval: Codex's own reviewer rejected every call
+# ("Automatic approval review rejected publish_page because approval policy is never") and
+# Bree told its person four times that it could not deliver). A tool server the operator
+# names in extra_args is one they mean the agent to use, so the harness says so to Codex:
+# default_tools_approval_mode "approve" for each such server, unless the operator's own
+# settings already say a mode for it or switch it off. Servers from the operator's Codex
+# config file are left as they are. A Codex too old to know the setting ignores it.
+_CODEX_SERVER = re.compile(r"^mcp_servers\.([A-Za-z0-9_-]+)\.(.+?)\s*=\s*(.*)$", re.S)
+
+
+def codex_own_tools(extra: list[str]) -> list[str]:
+    named: list[str] = []
+    settled: set[str] = set()
+    for part in extra:
+        found = _CODEX_SERVER.match(str(part).strip())
+        if not found:
+            continue
+        name, key, value = found.group(1), found.group(2), found.group(3).strip()
+        if key in ("command", "url") and name not in named:
+            named.append(name)
+        if key == "default_tools_approval_mode" or (key == "enabled" and value == "false"):
+            settled.add(name)
+    out: list[str] = []
+    for name in named:
+        if name not in settled:
+            out += ["-c", f'mcp_servers.{name}.default_tools_approval_mode="approve"']
+    return out
+
+
 def argv_for(agent: str, *, model: str | None, program: str | None,
              extra: list[str], last_message: str | None = None,
              scratch: str | None = None) -> list[str]:
@@ -454,7 +486,8 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
                           or "sandbox_mode" in str(a) for a in extra)
         sandbox = [] if own_sandbox else ["--sandbox", "workspace-write"]
         return [binary, "exec", "--skip-git-repo-check", *where, *sandbox,
-                "--output-last-message", str(last_message), *with_model, *extra, "-"]
+                "--output-last-message", str(last_message), *with_model, *extra,
+                *codex_own_tools(extra), "-"]
     return [binary, *with_model, *extra]  # gemini: the prompt on stdin, the reply on stdout
 
 

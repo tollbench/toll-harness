@@ -65,7 +65,7 @@ def test_below_the_minimum_updates_at_once_even_with_automatic_updates_off(made)
 
 def test_newer_with_automatic_updates_off_only_says_so(made):
     agent = made.agent()
-    made.bench.version = {"current": "1.0.1", "minimum": "1.0.0"}
+    made.bench.version = {"current": "1.99.0", "minimum": "1.0.0"}
     result = check_and_install(agent, agent.bench(), ActivityLog(agent.data_dir),
                                runner=lambda *a, **k: pytest.fail("installed"))
     assert result.get("off")

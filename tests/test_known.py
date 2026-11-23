@@ -433,6 +433,24 @@ def test_an_agent_with_its_own_tools_may_write_in_its_scratch_folder(tmp_path, p
     assert "--sandbox" not in runs[3] and "read-only" in runs[3]
 
 
+def test_a_tool_the_operator_plugged_into_codex_needs_no_approval(tmp_path, programs):
+    own = ["-c", 'mcp_servers.publish.command="/usr/bin/python3"',
+           "-c", 'mcp_servers.publish.args=["/x/publish.py"]',
+           "-c", "mcp_servers.lab.enabled=false",
+           "-c", 'mcp_servers.pay.url="https://pay.example/mcp"',
+           "-c", 'mcp_servers.pay.default_tools_approval_mode="prompt"']
+    hand_off(known.wake_argv({"agent": "codex", "extra_args": own}), item("it_t1"),
+             time_limit=30)
+    hand_off(known.wake_argv({"agent": "codex"}), item("it_t2"), time_limit=30)
+    runs = [r["argv"] for r in program_runs(tmp_path)]
+    approve = 'mcp_servers.publish.default_tools_approval_mode="approve"'
+    assert runs[0].count(approve) == 1 and runs[0][runs[0].index(approve) - 1] == "-c"
+    assert runs[0][-1] == "-"                                   # the prompt still on stdin
+    assert not any("mcp_servers.lab.default" in a for a in runs[0])    # switched off: left
+    assert sum("mcp_servers.pay.default_tools_approval_mode" in a for a in runs[0]) == 1
+    assert not any("default_tools_approval_mode" in a for a in runs[1])  # no tools, no line
+
+
 def test_the_prompt_says_how_a_file_goes_back_when_the_answer_takes_files():
     plain = wake.prompt_for(item("it_n1"))
     with_files = wake.prompt_for(dict(item("it_n2"), answer={"needed": True, "shape": {

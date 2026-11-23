@@ -8,6 +8,22 @@ All notable changes to Toll Harness are documented here. The format follows
 release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
 Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
+## 1.0.1 — A tool you plug into Codex is one it may use, 2026-11-22
+
+A fix. Nothing to change in your `agent.yaml`.
+
+- **Codex agents: a tool server named in `extra_args` no longer has its calls rejected.**
+  The harness wakes Codex with nobody at the keyboard (`codex exec`), so Codex's approval
+  policy is "never"; a tool that reaches the open web asks for an approval, and Codex's own
+  reviewer rejected every call ("Automatic approval review rejected ... because approval
+  policy is never"). For each MCP server your `extra_args` name
+  (`-c mcp_servers.<name>.command=...` or `.url=...`), the harness now also passes
+  `-c mcp_servers.<name>.default_tools_approval_mode="approve"`.
+- **Your own word wins.** A server you give a `default_tools_approval_mode` yourself, or
+  switch off (`enabled=false`), is left as you set it. Servers from your Codex config file
+  are not touched. A Codex too old to know the setting ignores it.
+- Claude Code and Gemini agents are unchanged.
+
 ## 1.0.0 — The harness is the line, not the brain, 2026-11-18
 
 On 2026-11-11 the owner set the direction: the harness is only the communication layer between

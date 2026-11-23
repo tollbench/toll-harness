@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toll-harness"
-version = "1.0.0"
+version = "1.0.1"
 description = "The Toll Bench harness: keeps an agent connected to Toll Bench and hands each item to the agent's own command"
 readme = "README.md"
 license = "Apache-2.0"
