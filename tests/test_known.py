@@ -25,7 +25,7 @@ from tests.fakebench import TOKEN, item
 from toll_harness import cli, known, wake
 from toll_harness.agent import TOKEN_SECRET, load
 from toll_harness.handoff import ANSWERED, FAILED, hand_off
-from toll_harness.onboarding import InitError, init
+from toll_harness.onboarding import OWN_TOOLS_LINE, InitError, init
 from toll_harness.secrets import FileSecretStore
 from toll_harness.watch import Watch
 
@@ -103,7 +103,8 @@ def test_one_known_agent_found_is_said_and_used_with_no_command_asked(tmp_path, 
 
     agent = fresh(tmp_path, bench, ask=ask, which=only("claude"), said=said)
     assert asked == ["Company"]  # the model's name comes from the agent picked
-    assert agent.section["wake"] == {"agent": "claude"} and agent.section["model"] == "Claude"
+    assert agent.section["wake"] == {"agent": "claude", "own_tools": True}
+    assert agent.section["model"] == "Claude"
     assert "Found Claude Code (claude) on this computer: your agent wakes through it." in said
     assert any(line.startswith("Your agent woke and answered a sample item") for line in said)
     run = program_runs(tmp_path)[0]
@@ -111,6 +112,9 @@ def test_one_known_agent_found_is_said_and_used_with_no_command_asked(tmp_path, 
         "-p", "--output-format", "stream-json", "--verbose"]
     assert "toll-harness checking that your agent wakes" in run["prompt"]
     assert bench.registered[0]["disclosure"]["model"] == "Claude"
+    assert said.count(OWN_TOOLS_LINE) == 1  # one plain line, no question
+    assert said.index(OWN_TOOLS_LINE) == next(
+        n for n, line in enumerate(said) if line.startswith("Your agent woke")) + 1
 
 
 def test_several_found_the_owner_picks_one_by_name(tmp_path, bench, programs):
@@ -123,7 +127,8 @@ def test_several_found_the_owner_picks_one_by_name(tmp_path, bench, programs):
     agent = fresh(tmp_path, bench, ask=ask, which=only("claude", "gemini"))
     assert asked[1] == ("Which agent answers for you? 1) Claude Code (claude), "
                         "2) Gemini CLI (gemini), 3) something else")
-    assert agent.section["wake"] == {"agent": "gemini"} and agent.section["model"] == "Gemini"
+    assert agent.section["wake"] == {"agent": "gemini", "own_tools": True}
+    assert agent.section["model"] == "Gemini"
     assert Path(program_runs(tmp_path)[0]["argv"][0]).name == "gemini"
 
 
@@ -170,7 +175,7 @@ def test_the_agent_flag_names_it_with_no_question(tmp_path, bench, programs):
     agent = fresh(tmp_path, bench, ask=lambda label, default: pytest.fail(label),
                   which=only("claude", "codex"),
                   answers={"company": "Test Owner Co", "agent": "codex"})
-    assert agent.section["wake"] == {"agent": "codex"}
+    assert agent.section["wake"] == {"agent": "codex", "own_tools": True}
     run = program_runs(tmp_path)[0]
     assert run["argv"][1:3] == ["exec", "--skip-git-repo-check"] and run["argv"][-1] == "-"
 
@@ -228,7 +233,8 @@ def test_a_reply_that_is_not_one_object_or_one_block_is_refused_in_plain_words(r
         wake.answer_from(reply)
 
 
-def test_a_fresh_claude_wake_gets_the_web_and_no_shell_or_files(tmp_path, programs):
+def test_an_agent_set_up_before_own_tools_still_gets_the_web_and_no_shell_or_files(
+        tmp_path, programs):
     hand_off(known.wake_argv({"agent": "claude"}), item("it_7"), time_limit=30)
     argv = program_runs(tmp_path)[0]["argv"]
     assert argv[argv.index("--tools") + 1] == "WebSearch,WebFetch"
@@ -236,6 +242,124 @@ def test_a_fresh_claude_wake_gets_the_web_and_no_shell_or_files(tmp_path, progra
     hand_off(known.wake_argv({"agent": "claude", "extra_args": ["--own"]}), item("it_8"),
              time_limit=30)
     assert program_runs(tmp_path)[1]["argv"][-1:] == ["--own"]  # its own settings win
+
+
+# -- its own tools (Steven, Nov 23: "they are supposed to have their own tools at this point
+# ... why are we getting in the middle") -------------------------------------------------------
+def test_a_fresh_claude_wake_has_its_owners_tools_and_mcp_servers(tmp_path, programs):
+    hand_off(known.wake_argv({"agent": "claude", "own_tools": True}), item("it_o1"),
+             time_limit=30)
+    argv = program_runs(tmp_path)[0]["argv"]
+    assert argv[1:] == ["-p", "--output-format", "stream-json", "--verbose",
+                        "--allowedTools", "WebSearch,WebFetch", "--no-session-persistence"]
+    # nothing narrows its tools, nothing blocks its owner's MCP servers, and no permission
+    # mode overrides the owner's own: a tool the owner has not allowed is refused by Claude Code
+    assert "--tools" not in argv and "--strict-mcp-config" not in argv
+    assert "--permission-mode" not in argv and "--dangerously-skip-permissions" not in argv
+
+
+def test_own_tools_never_change_an_agent_that_brings_its_own_extra_args(tmp_path, programs):
+    for number, extra in enumerate((["--effort", "high"], ["--own"])):
+        hand_off(known.wake_argv({"agent": "claude", "extra_args": extra}), item(f"it_a{number}"),
+                 time_limit=30)
+        hand_off(known.wake_argv({"agent": "claude", "extra_args": extra, "own_tools": True}),
+                 item(f"it_b{number}"), time_limit=30)
+    runs = [run["argv"][1:] for run in program_runs(tmp_path)]
+    assert runs[0] == runs[1] == ["-p", "--output-format", "stream-json", "--verbose",
+                                  "--permission-mode", "acceptEdits", "--effort", "high"]
+    assert runs[2] == runs[3]
+
+
+def test_an_existing_agent_yaml_wakes_byte_for_byte_as_before(tmp_path, programs, monkeypatch):
+    # what 1.1.0 ran for an agent.yaml written before own_tools: a moved 0.x Claude Code agent
+    # with its own extra_args and accounts, a Codex agent with its own, and a 1.0 fresh setup
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text('sandbox_mode = "read-only"\n')
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    folder = tmp_path / "Sam"
+    folder.mkdir()
+    wakes = [
+        {"agent": "claude", "model": "claude-opus-5-5", "program": str(programs / "claude"),
+         "config_dirs": ["/acct/a"], "extra_args": ["--effort", "high"]},
+        {"agent": "codex", "model": "gpt-5", "extra_args": ["-c", 'model_reasoning_effort="high"']},
+        {"agent": "claude"},
+    ]
+    before = [
+        ["-p", "--output-format", "stream-json", "--verbose", "--model", "claude-opus-5-5",
+         "--permission-mode", "acceptEdits", "--effort", "high"],
+        ["exec", "--skip-git-repo-check", "--cd", "SCRATCH", "--sandbox", "workspace-write",
+         "--output-last-message", "LAST", "--model", "gpt-5", "-c",
+         'model_reasoning_effort="high"', "-"],
+        ["-p", "--output-format", "stream-json", "--verbose", "--tools", "WebSearch,WebFetch",
+         "--allowedTools", "WebSearch,WebFetch", "--strict-mcp-config",
+         "--no-session-persistence"],
+    ]
+    for number, wake_ in enumerate(wakes):
+        (folder / "agent.yaml").write_text(yaml.safe_dump({
+            "version": 2, "agent": {"name": "Sam", "company": "Co", "model": "M", "wake": wake_},
+            "bench": {"url": "http://bench"}}))
+        assert "--own-tools" not in load(folder).command
+        hand_off(load(folder).command, item(f"it_e{number}"), time_limit=30)
+    for run, expected in zip(program_runs(tmp_path), before, strict=True):
+        argv = run["argv"][1:]
+        for name in ("--cd", "--output-last-message"):
+            if name in argv:
+                argv[argv.index(name) + 1] = {"--cd": "SCRATCH"}.get(name, "LAST")
+        assert argv == expected
+
+
+def test_a_fresh_codex_wake_keeps_the_sandbox_its_owner_chose_in_their_config(
+        tmp_path, programs, monkeypatch):
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    fresh_codex = known.wake_argv({"agent": "codex", "own_tools": True})
+    hand_off(fresh_codex, item("it_c1"), time_limit=30)  # no config: workspace-write
+    (home / "config.toml").write_text('model = "gpt-5"\nsandbox_mode = "danger-full-access"\n')
+    hand_off(fresh_codex, item("it_c2"), time_limit=30)  # the owner's own sandbox wins
+    (home / "config.toml").write_text('[sandbox_workspace_write]\nnetwork_access = true\n'
+                                      '[profiles.x]\nsandbox_mode = "read-only"\n')
+    hand_off(fresh_codex, item("it_c3"), time_limit=30)  # not at the top level: not chosen
+    (home / "mine.config.toml").write_text('sandbox_mode = "read-only"\n')
+    hand_off(known.wake_argv({"agent": "codex", "own_tools": True,
+                              "extra_args": ["--profile", "mine"]}), item("it_c4"),
+             time_limit=30)  # the profile file the owner names counts too
+    runs = [run["argv"] for run in program_runs(tmp_path)]
+    assert runs[0][runs[0].index("--sandbox") + 1] == "workspace-write"
+    assert "--sandbox" not in runs[1]
+    assert runs[2][runs[2].index("--sandbox") + 1] == "workspace-write"
+    assert "--sandbox" not in runs[3]
+
+
+KEEPER = textwrap.dedent("""\
+    #!{python}
+    import json, os, sys
+    prompt = sys.stdin.read()
+    with open(os.environ["PROGRAM_RECORD"], "a") as handle:
+        handle.write(json.dumps({{"argv": sys.argv, "cwd": os.getcwd(), "prompt": prompt,
+                                  "env": dict(os.environ)}}) + "\\n")
+    print('{{"ok": true}}')
+""")
+
+
+def test_own_tools_still_wake_in_a_scratch_folder_with_no_token(tmp_path, bench, programs,
+                                                                monkeypatch):
+    (programs / "claude").write_text(KEEPER.format(python=sys.executable))
+    monkeypatch.setenv("TOLL_HARNESS_AGENT_TOKEN", TOKEN)
+    agent = fresh(tmp_path, bench, ask=lambda label, default: "Test Owner Co",
+                  which=only("claude"))
+    assert agent.section["wake"]["own_tools"] is True and agent.token() == TOKEN
+    bench.add(item("it_k1"))
+    Watch(agent, wait=0, updater=lambda *a, **k: {"action": "none"}, sleep=lambda s: None,
+          spread=0).run(1)
+    assert bench.answers == [("it_k1", {"ok": True})]
+    for run in program_runs(tmp_path):
+        assert "toll-wake-" in run["cwd"] and str(agent.path.parent) not in run["cwd"]
+        assert TOKEN not in json.dumps(run)  # not on its command line, prompt or environment
+        folder = str(agent.path.parent.resolve())  # and its own folder is denied to its tools
+        at = run["argv"].index("--disallowedTools")
+        assert run["argv"][at + 1:at + 3] == [f"Read(/{folder}/**)", f"Edit(/{folder}/**)"]
 
 
 def test_the_prompt_carries_what_to_do_the_context_and_the_shape():
@@ -683,7 +807,7 @@ def test_antigravity_found_on_path_wakes_with_its_prompt_on_stdin(tmp_path, benc
     said = []
     agent = fresh(tmp_path, bench, ask=lambda label, default: "Test Owner Co",
                   which=only("agy"), said=said)
-    assert agent.section["wake"] == {"agent": "antigravity"}
+    assert agent.section["wake"] == {"agent": "antigravity", "own_tools": True}
     assert agent.section["model"] == "Gemini"
     assert "Found Antigravity (agy) on this computer: your agent wakes through it." in said
     run = program_runs(tmp_path)[0]
@@ -706,11 +830,12 @@ def test_antigravity_inside_the_desktop_app_is_found_and_woken_by_its_path(tmp_p
     inside = "/Applications/Gemini.app/Contents/Helpers/agy"
     wake_ = known.wake_for(known.by_name("antigravity"), lambda program: None,
                            lambda path: path == inside)
-    assert wake_ == {"agent": "antigravity", "program": inside}
+    assert wake_ == {"agent": "antigravity", "program": inside, "own_tools": True}
     assert known.by_name("antigravity") in known.found(lambda program: None,
                                                        lambda path: path == inside)
     assert known.wake_for(known.by_name("antigravity"), only("agy"),
-                          lambda path: True) == {"agent": "antigravity"}  # PATH first
+                          lambda path: True) == {"agent": "antigravity",
+                                                   "own_tools": True}  # PATH first
 
 
 def test_antigravity_not_signed_in_stops_init_with_the_one_command_to_run(

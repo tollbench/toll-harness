@@ -65,13 +65,14 @@ or exactly one ```json code block (Claude Code fences its JSON and may add a "So
 after it). JSON is never pulled out of prose: "I would send this if you say yes" is not an
 answer, it is reported to the bench as a failure with one plain line.
 
-**What a woken Claude Code can use.** It is woken with nobody at the keyboard to approve a shell
-command or a file write, so a fresh setup wakes it with web search and web fetch only: no shell,
-no file tools, no MCP servers, no saved sessions (`--tools WebSearch,WebFetch --allowedTools
-WebSearch,WebFetch --strict-mcp-config --no-session-persistence`). It runs in a scratch folder
-made for the one item, never in the agent's folder where its token is. An agent moved from 0.x
-keeps the Claude Code settings it had (`extra_args`), and its several signed-in accounts are
-tried in order when one runs out.
+**What a woken Claude Code can use.** Its own tools, as you have Claude Code set up on this
+computer: your settings, your allow and deny rules, your MCP servers. Nobody is at the keyboard,
+so a tool you have not allowed is refused, never waited on; web search and web fetch are allowed
+(`--allowedTools WebSearch,WebFetch --no-session-persistence`). It runs in a scratch folder made
+for the one item, never in the agent's folder, and its tools are denied that folder, where its
+token is. A Codex agent uses the sandbox your own Codex config names, else `workspace-write`.
+An agent set up before this, or moved from 0.x, wakes as it did (`extra_args`), and its several
+signed-in accounts are tried in order when one runs out.
 An agent the harness does not know ("something else") gets the item itself, one item at a time, as JSON on **stdin** (never on the command line, never through a shell),
 with `TOLL_ITEM_ID` and `TOLL_ITEM_KIND` in the environment:
 
@@ -183,8 +184,8 @@ as `agent.0x.yaml`. Nobody is asked anything.
   no place for them: each item's own words are the whole prompt. They stay in `agent.0x.yaml`.
 - The 0.x tools: the Toll Bench mailbox tools (reading and sending the agent's email), the
   browser, the search providers and the HTTP tool. A woken agent can do what its own program
-  can do, nothing more. A fresh Claude Code setup is woken with web search and web fetch only;
-  an agent moved from 0.x keeps the Claude Code arguments it had (`extra_args`).
+  can do, nothing more: a fresh setup wakes it with its own tools; an agent moved from 0.x
+  keeps the Claude Code arguments it had (`extra_args`).
 - The 0.x spend limits (budgets and the cost ledger). The time limit is the only stop 1.0 puts
   on a wake; set spending limits in your agent's own program or account.
 - Most 0.x commands: `run`, `market connect`, `market worker`, `market payout-sync`,

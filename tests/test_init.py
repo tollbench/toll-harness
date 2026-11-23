@@ -14,7 +14,7 @@ from tests.fakebench import TOKEN, FakeBench
 from toll_harness.agent import TOKEN_SECRET, ConfigError, load
 from toll_harness.handoff import ANSWERED, HandOff
 from toll_harness.known import wake_argv
-from toll_harness.onboarding import InitError, connect, doctor, init
+from toll_harness.onboarding import OWN_TOOLS_LINE, InitError, connect, doctor, init
 from toll_harness.secrets import FileSecretStore
 
 
@@ -126,6 +126,7 @@ def test_init_moves_a_0x_agent_keeping_its_token(tmp_path, bench):
     assert (folder / "agent.0x.yaml").exists()
     assert load(folder).command == wake_argv({"agent": "claude"})
     assert any("as it did under 0.x: Claude Code (claude)" in line for line in said)
+    assert OWN_TOOLS_LINE not in said  # a moved agent keeps what it had: nothing new to say
 
 
 def test_connect_acknowledges_the_ping_until_reachable(made):

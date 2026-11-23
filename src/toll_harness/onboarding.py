@@ -60,6 +60,9 @@ TERMS_ASK = "Do you, the owner, accept the {title}, version {version}? (yes or n
 TERMS_HOW_ASKED = "the owner said yes at the keyboard during toll-harness init"
 TERMS_HOW_FLAG = "the owner gave --accept-terms to toll-harness init"
 TERMS_YOURSELF = 'Nothing was accepted: accept them yourself on Toll Bench under "Your agents".'
+# Steven, Nov 23, on the one safety line at setup: "keep info slim".
+OWN_TOOLS_LINE = ("Your agent wakes with whatever it can use on this computer. Items come from "
+                  "other people on Toll Bench.")
 BRAND_MAX = 40
 SAMPLE_SECONDS = 300  # the sample wake at setup waits this long at most
 
@@ -406,6 +409,8 @@ def init(directory: str | Path, *, registered: bool = False,
         raise InitError(f"Your agent did not wake: {woke.why}{said}. Nothing was registered "
                         "or changed. Fix that and run `toll-harness init` again.")
     say(woke_line(woke))
+    if (how.get("wake") or {}).get("own_tools"):
+        say(OWN_TOOLS_LINE)
 
     if not token:
         # Only a brand-new agent: one that registered, or moves from 0.x, has these already.

@@ -1,6 +1,7 @@
 """The bridge that wakes an agent known by name with one item.
 
-    python -m toll_harness.wake --agent claude [--model M] [--program P] [--config-dir D] [-- extra]
+    python -m toll_harness.wake --agent claude [--model M] [--program P] [--config-dir D]
+                                [--own-tools] [-- extra]
     python -m toll_harness.wake --agent prompt -- /the/0.x/command and its args
 
 The harness hands it the item as JSON on stdin, as it hands any agent's command. It writes the
@@ -39,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from toll_harness import incoming
+from toll_harness.agent import CONFIG_ENV
 from toll_harness.known import PROMPT, by_name
 
 FAILED_EXIT = 3
@@ -386,13 +388,37 @@ def attach_files(answer: dict[str, Any], work: Path,
     return dict(answer, files=out)
 
 
-# Claude Code woken with no settings of its own (a fresh setup) gets the web and nothing else:
-# it is woken with nobody at the keyboard to approve a shell command or a file write, so its
-# shell, file and MCP tools stay off, and no session is saved between items. A 0.x agent that
-# brings its own settings (extra_args) keeps them. (Another worker's walk, Nov 11: the README's
-# wake command "left Claude's shell and file tools on".)
+# Claude Code woken with no settings of its own by a 1.0 or 1.1 setup gets the web and nothing
+# else: its shell, file and MCP tools off, and no session saved between items. A 0.x agent
+# that brings its own settings (extra_args) keeps them. (Another worker's walk, Nov 11: the
+# README's wake command "left Claude's shell and file tools on".) Kept as it is for every
+# agent.yaml already written that way: an existing agent wakes as it did.
 CLAUDE_DEFAULT = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
                   "--strict-mcp-config", "--no-session-persistence"]
+
+# ITS OWN TOOLS (Steven, Nov 23: "There are ALL sorts of agents ... they are supposed to have
+# their own tools at this point ... why are we getting in the middle"; "We are the ones who
+# will decide the defaults to start"). A fresh setup writes `own_tools: true` in its wake, and
+# Claude Code then wakes with the owner's own tools, MCP servers and permission settings:
+# nothing narrows the tool list, no --strict-mcp-config, no --permission-mode (the owner's
+# defaultMode stands). The web stays allowed, as it was at every setup before. Checked on
+# claude 2.1.325, Nov 23, against a stand-in model: in -p a tool the owner has not allowed is
+# refused at once ("... but you haven't granted it yet"), never left waiting for a yes nobody
+# can give; the owner's allow rules let Bash, Write and their own MCP server's tool run; their
+# deny rules beat any allow; a read or `cat` outside the scratch folder is refused.
+CLAUDE_OWN_TOOLS = ["--allowedTools", "WebSearch,WebFetch", "--no-session-persistence"]
+
+
+def keep_out(folder: str | None) -> list[str]:
+    """THE TOKEN STAYS OUT OF REACH: deny rules for the agent's own folder (agent.yaml and the
+    token beside it), which beat the owner's allow rules and even their bypass mode (checked
+    Nov 23: Read and a plain `cat` of the token refused under bypassPermissions). A shell the
+    owner allowed can still run a program that reads it: that wall is the owner's computer,
+    not a flag."""
+    if not folder or any(char in folder for char in "()*"):
+        return []
+    root = "/" + str(Path(folder).resolve()).lstrip("/")
+    return ["--disallowedTools", f"Read(/{root}/**)", f"Edit(/{root}/**)"]
 
 # THE LAST TURN IS THE ANSWER (staging, Nov 16, 8:46 and 9:02 pm: Sam started background
 # research helpers for Steven's "find 15 named people" step, ended two turns with "Still
@@ -507,9 +533,40 @@ def codex_own_tools(extra: list[str]) -> list[str]:
     return out
 
 
+# CODEX'S OWN SANDBOX. `codex exec` is woken with `--sandbox workspace-write` (it may write in
+# its scratch folder, and /tmp, never the network) unless the owner chose a sandbox: in
+# extra_args, or, for a wake with its own tools, in their own Codex config file
+# ($CODEX_HOME/config.toml, or the profile file `--profile <name>` names), which a --sandbox on
+# the command line would override (checked on codex-cli 0.162.1, Nov 23: the flag beats the
+# file; with neither, exec runs read-only).
+_SANDBOX_LINE = re.compile(r"^\s*sandbox_mode\s*=")
+
+
+def codex_config_sandbox(extra: list[str], env: dict[str, str] | None = None) -> bool:
+    """Whether the owner's own Codex config file names a sandbox_mode at its top level."""
+    env = os.environ if env is None else env
+    home = Path(env.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex"))
+    files = [home / "config.toml"]
+    for flag in ("-p", "--profile"):
+        if flag in extra[:-1]:
+            files.append(home / f"{extra[extra.index(flag) + 1]}.config.toml")
+    for path in files:
+        try:
+            lines = path.expanduser().read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
+            if line.lstrip().startswith("["):
+                break  # past the top level
+            if _SANDBOX_LINE.match(line):
+                return True
+    return False
+
+
 def argv_for(agent: str, *, model: str | None, program: str | None,
              extra: list[str], last_message: str | None = None,
-             scratch: str | None = None) -> list[str]:
+             scratch: str | None = None, own_tools: bool = False,
+             agent_folder: str | None = None) -> list[str]:
     known = by_name(agent)
     if agent == PROMPT:
         if not extra:
@@ -524,11 +581,13 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
         edits = (["--permission-mode", "acceptEdits"]
                  if extra and "--permission-mode" not in extra else [])
         stream = [] if "--output-format" in extra else CLAUDE_STREAM
-        return [binary, "-p", *stream, *with_model, *edits, *(extra or CLAUDE_DEFAULT)]
+        default = CLAUDE_OWN_TOOLS + keep_out(agent_folder) if own_tools else CLAUDE_DEFAULT
+        return [binary, "-p", *stream, *with_model, *edits, *(extra or default)]
     if known.name == "codex":
         where = ["--cd", scratch] if scratch else []
         own_sandbox = any(a in ("-s", "--sandbox") or str(a).startswith("--sandbox=")
                           or "sandbox_mode" in str(a) for a in extra)
+        own_sandbox = own_sandbox or (own_tools and codex_config_sandbox(extra))
         sandbox = [] if own_sandbox else ["--sandbox", "workspace-write"]
         return [binary, "exec", "--skip-git-repo-check", *where, *sandbox,
                 "--output-last-message", str(last_message), *with_model, *extra,
@@ -539,9 +598,15 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
     return [binary, *with_model, *extra]  # gemini: the prompt on stdin, the reply on stdout
 
 
+def _agent_folder() -> str | None:
+    """The agent's own folder: where the agent.yaml the harness named (TOLL_AGENT_CONFIG) is."""
+    path = os.environ.get(CONFIG_ENV)
+    return str(Path(path).expanduser().resolve().parent) if path else None
+
+
 def run(agent: str, prompt: str, *, model: str | None = None, program: str | None = None,
         config_dirs: list[str] | None = None, extra: list[str] | None = None,
-        finish=None, bring: str | None = None):
+        finish=None, bring: str | None = None, own_tools: bool = False):
     """Run the agent's program once with the prompt on stdin; its reply (or what
     `finish(reply, scratch_folder, made)` makes of it, while the folder is still there;
     `made` is what the agent's own tool saved in its own folder during this wake). With several
@@ -556,7 +621,8 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
         work.mkdir()
         incoming.move_into(bring, work)
         argv = argv_for(agent, model=model, program=program, extra=extra, last_message=last,
-                        scratch=str(work))
+                        scratch=str(work), own_tools=own_tools,
+                        agent_folder=_agent_folder())
         name = Path(argv[0]).name
         known = by_name(agent)
         agy = known is not None and known.name == "antigravity"
@@ -606,6 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model")
     parser.add_argument("--program")
     parser.add_argument("--config-dir", action="append", default=[])
+    parser.add_argument("--own-tools", action="store_true")
     parser.add_argument("extra", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     extra = arguments.extra[1:] if arguments.extra[:1] == ["--"] else arguments.extra
@@ -622,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
         answer = run(arguments.agent, prompt_for(item, brought), model=arguments.model,
                      program=arguments.program, config_dirs=arguments.config_dir,
                      extra=extra, bring=files_dir if brought else None,
+                     own_tools=arguments.own_tools,
                      finish=lambda reply, work, made: attach_files(answer_from(reply), work,
                                                                   made))
     except NoAnswer as error:

@@ -8,6 +8,40 @@ All notable changes to Toll Harness are documented here. The format follows
 release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
 Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
+## Unreleased — A new agent wakes with its own tools
+
+This changes the default for a NEW setup only. An agent already set up, or moved from 0.x,
+wakes exactly as before. Nothing to change in your `agent.yaml`.
+
+- **A fresh `toll-harness init` wakes your agent with its own tools**, as you have it set up on
+  this computer, and says so in one line: "Your agent wakes with whatever it can use on this
+  computer. Items come from other people on Toll Bench." The new `agent.yaml` says
+  `own_tools: true` in its `wake`.
+- **Claude Code**: no longer limited to web search and web fetch, and your own MCP servers are
+  no longer blocked. Your settings, allow and deny rules and permission mode decide. Nobody is
+  at the keyboard, so a tool you have not allowed is refused at once, never waited on. Web
+  search and web fetch stay allowed. Its tools are denied the agent's own folder, where the
+  token is. Nothing is switched to "allow everything".
+- **Codex**: the sandbox your own Codex config file names (`sandbox_mode` in
+  `~/.codex/config.toml`, or the profile file `--profile` names) now wins; with none, Codex
+  runs in `workspace-write` as before.
+- Gemini CLI and Antigravity were never narrowed by the harness: unchanged.
+- **Want the old narrow wake for a new Claude Code agent?** Put the old flags in its
+  `agent.yaml`, under `wake`:
+
+  ```yaml
+      extra_args:
+      - --tools
+      - WebSearch,WebFetch
+      - --allowedTools
+      - WebSearch,WebFetch
+      - --strict-mcp-config
+      - --no-session-persistence
+  ```
+
+  (With `extra_args` the harness also passes `--permission-mode acceptEdits`, as it always has;
+  with only the web tools that changes nothing.)
+
 ## 1.1.0 — Setup takes your yes to the Agent Terms; Antigravity by name, 2026-11-23
 
 Two additions to `toll-harness init`. Nothing to change in your `agent.yaml`.

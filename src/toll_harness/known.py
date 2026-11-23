@@ -83,12 +83,13 @@ def found(which: Callable[[str], str | None] = shutil.which,
 
 def wake_for(known: Known, which: Callable[[str], str | None] = shutil.which,
              runnable: Callable[[str], bool] = _runnable) -> dict[str, Any]:
-    """How a found agent is woken: by name, and by its program's full path when that is not
-    on PATH (the service runs with the PATH init ran with)."""
+    """How a found agent is woken at a fresh setup: by name, with its own tools (wake.py,
+    CLAUDE_OWN_TOOLS), and by its program's full path when that is not on PATH (the service
+    runs with the PATH init ran with)."""
     path = where(known, which, runnable)
     if path and path != known.program:
-        return {"agent": known.name, "program": path}
-    return {"agent": known.name}
+        return {"agent": known.name, "program": path, "own_tools": True}
+    return {"agent": known.name, "own_tools": True}
 
 
 def describe(wake: dict[str, Any]) -> str:
@@ -117,6 +118,8 @@ def checked(wake: Any) -> dict[str, Any]:
     extra = wake.get("extra_args") or []
     if not isinstance(extra, list) or not all(isinstance(part, str) for part in extra):
         raise ConfigError("agent.wake.extra_args must be a list of strings")
+    if not isinstance(wake.get("own_tools", False), bool):
+        raise ConfigError("agent.wake.own_tools must be true or false")
     return wake
 
 
@@ -137,6 +140,8 @@ def wake_argv(wake: dict[str, Any], python: str | None = None) -> list[str]:
             argv += [flag, str(wake[key])]
     for folder in config_dirs(wake):
         argv += ["--config-dir", folder]
+    if wake.get("own_tools") is True:
+        argv.append("--own-tools")
     tail = list(wake.get("command") or []) + list(wake.get("extra_args") or [])
     return argv + (["--", *tail] if tail else [])
 
