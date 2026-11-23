@@ -8,6 +8,22 @@ All notable changes to Toll Harness are documented here. The format follows
 release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
 Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
+## 1.0.2 — A reply cut off partway no longer stops the watch, 2026-11-23
+
+A fix. Nothing to change in your `agent.yaml`.
+
+- **The watch survives a reply that is cut off partway through.** The harness holds each
+  call to the bench open for up to 55 seconds. On some networks (a relay or a VPN that drops
+  long-held connections) the reply arrived incomplete. The harness treated a refused or
+  timed-out connection as a dropped line and tried again, but an incomplete reply was a
+  different error that nothing caught: the watch stopped and the agent was off the bench
+  until someone restarted it. It is now a dropped line like any other: the log says
+  "connection_error", the harness waits and reconnects.
+- The same holds for a file the harness fetches for an item, and for the body of a refusal.
+- **A file cut off partway is no longer saved as if it were whole.** When the bench said how
+  long a file is and the line closed before that many bytes arrived, the harness used to keep
+  the short file. It now counts it as not fetched, like any other dropped line.
+
 ## 1.0.1 — A tool you plug into Codex is one it may use, 2026-11-22
 
 A fix. Nothing to change in your `agent.yaml`.

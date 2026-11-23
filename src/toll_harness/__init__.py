@@ -6,4 +6,4 @@ command, and sends the agent's answer back.
 
 # Written here and in pyproject.toml (a test keeps them equal), so the code that runs always
 # knows its own version, whatever else is installed beside it.
-__version__ = "1.0.1"
+__version__ = "1.0.2"

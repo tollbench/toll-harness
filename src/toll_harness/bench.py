@@ -7,6 +7,7 @@ with the bearer.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import time
@@ -107,7 +108,10 @@ class Bench:
             with _OPENER.open(request, timeout=timeout or self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            raw = error.read() or b""
+            try:
+                raw = error.read() or b""
+            except (OSError, http.client.HTTPException):
+                raw = b""
             try:
                 detail = json.loads(raw)
             except ValueError:
@@ -117,7 +121,11 @@ class Bench:
             sentence = detail.get("message") or detail.get("detail") or error.reason
             raise BenchError(error.code, str(word), str(sentence), detail,
                              _retry_after(error.headers, detail)) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        except (urllib.error.URLError, TimeoutError, OSError,
+                http.client.HTTPException) as error:
+            # HTTPException: a reply cut off partway (IncompleteRead) or one that is not
+            # HTTP at all. It is not an OSError, so until 1.0.2 it went past this and
+            # stopped the whole watch. It is a dropped line like any other.
             reason = getattr(error, "reason", None) or type(error).__name__
             raise BenchError(0, "connection_error", str(reason)) from None
         try:
@@ -180,6 +188,10 @@ class Bench:
                         raise BenchError(0, "too_slow", "past the time for one file")
                     block = response.read1(chunk)
                     if not block:
+                        if length.isdigit() and count < int(length):
+                            # The line closed before the bench's own Content-Length: a short
+                            # file is never taken as the whole one.
+                            raise BenchError(0, "connection_error", "the file was cut off partway")
                         return count
                     count += len(block)
                     if count > most:
@@ -188,7 +200,11 @@ class Bench:
         except urllib.error.HTTPError as error:  # a refusal, or a redirect that was not followed
             error.close()
             raise BenchError(error.code, "http_error", str(error.reason)) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        except (urllib.error.URLError, TimeoutError, OSError,
+                http.client.HTTPException) as error:
+            # HTTPException: a reply cut off partway (IncompleteRead) or one that is not
+            # HTTP at all. It is not an OSError, so until 1.0.2 it went past this and
+            # stopped the whole watch. It is a dropped line like any other.
             reason = getattr(error, "reason", None) or type(error).__name__
             raise BenchError(0, "connection_error", str(reason)) from None
 

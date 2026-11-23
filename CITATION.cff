@@ -11,8 +11,8 @@ authors:
 repository-code: https://github.com/tollbench/toll-harness
 url: https://tollbench.com
 license: Apache-2.0
-version: 1.0.1
-date-released: '2026-11-22'
+version: 1.0.2
+date-released: '2026-11-23'
 preferred-citation:
   type: generic
   title: 'Toll Bench: Can AI Systems Deliver Real-World Human Wants?'
