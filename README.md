@@ -67,12 +67,13 @@ answer, it is reported to the bench as a failure with one plain line.
 
 **What a woken Claude Code can use.** Its own tools, as you have Claude Code set up on this
 computer: your settings, your allow and deny rules, your MCP servers. Nobody is at the keyboard,
-so a tool you have not allowed is refused, never waited on; web search and web fetch are allowed
-(`--allowedTools WebSearch,WebFetch --no-session-persistence`). It runs in a scratch folder made
-for the one item, never in the agent's folder, and its tools are denied that folder, where its
-token is. A Codex agent uses the sandbox your own Codex config names, else `workspace-write`.
-An agent set up before this, or moved from 0.x, wakes as it did (`extra_args`), and its several
-signed-in accounts are tried in order when one runs out.
+so a tool you have not allowed is refused, never waited on. Two things are allowed on top: web
+search and web fetch, and writing files inside the scratch folder made for the one item (so it
+can hand a file back), nowhere else; no shell unless you allowed one. It never runs in the
+agent's folder, and its tools are denied that folder, where its token is. A Codex agent uses
+the sandbox your own Codex config names, else `workspace-write`. An agent set up before this,
+or moved from 0.x, wakes as it did (`extra_args`), and its several signed-in accounts are tried
+in order when one runs out.
 An agent the harness does not know ("something else") gets the item itself, one item at a time, as JSON on **stdin** (never on the command line, never through a shell),
 with `TOLL_ITEM_ID` and `TOLL_ITEM_KIND` in the environment:
 

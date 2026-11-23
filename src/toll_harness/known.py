@@ -84,7 +84,7 @@ def found(which: Callable[[str], str | None] = shutil.which,
 def wake_for(known: Known, which: Callable[[str], str | None] = shutil.which,
              runnable: Callable[[str], bool] = _runnable) -> dict[str, Any]:
     """How a found agent is woken at a fresh setup: by name, with its own tools (wake.py,
-    CLAUDE_OWN_TOOLS), and by its program's full path when that is not on PATH (the service
+    ITS OWN TOOLS), and by its program's full path when that is not on PATH (the service
     runs with the PATH init ran with)."""
     path = where(known, which, runnable)
     if path and path != known.program:

@@ -406,7 +406,30 @@ CLAUDE_DEFAULT = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,
 # refused at once ("... but you haven't granted it yet"), never left waiting for a yes nobody
 # can give; the owner's allow rules let Bash, Write and their own MCP server's tool run; their
 # deny rules beat any allow; a read or `cat` outside the scratch folder is refused.
-CLAUDE_OWN_TOOLS = ["--allowedTools", "WebSearch,WebFetch", "--no-session-persistence"]
+# argv_for builds it: --allowedTools WebSearch,WebFetch <scratch_writes> --no-session-persistence
+# <keep_out>.
+
+
+def _safe_for_a_rule(folder: str | None) -> bool:
+    return bool(folder) and not any(char in folder for char in "()*")
+
+
+def scratch_writes(scratch: str | None) -> list[str]:
+    """FILES IN ITS OWN SCRATCH FOLDER (Steven, Nov 23: "We are the ones who will decide the
+    defaults to start. Imagine that people won't be bothering"): allow rules for writing and
+    editing files inside the folder made for this one item, and nowhere else, so an agent
+    whose owner allowed nothing can still make a file and hand it back. Allow rules, never a
+    permission mode, so the owner's own defaultMode stands. Checked on claude 2.1.325, Nov 23,
+    against a stand-in model, owner allowing nothing: Write, Edit and a Write into a new
+    subfolder inside it succeed; a Write to the home folder, to /tmp, to the folder above it
+    (also by ../), to a sibling folder, through a link inside it pointing out, or into the
+    agent's folder is refused; an owner who denies Write gets no Write. Rules for the folder as
+    named and as resolved, when they differ (a Mac's /var is /private/var)."""
+    if not _safe_for_a_rule(scratch):
+        return []
+    roots = dict.fromkeys(["/" + str(Path(scratch)).lstrip("/"),
+                           "/" + str(Path(scratch).resolve()).lstrip("/")])
+    return [f"{tool}(/{root}/**)" for root in roots for tool in ("Write", "Edit")]
 
 
 def keep_out(folder: str | None) -> list[str]:
@@ -415,7 +438,7 @@ def keep_out(folder: str | None) -> list[str]:
     Nov 23: Read and a plain `cat` of the token refused under bypassPermissions). A shell the
     owner allowed can still run a program that reads it: that wall is the owner's computer,
     not a flag."""
-    if not folder or any(char in folder for char in "()*"):
+    if not _safe_for_a_rule(folder):
         return []
     root = "/" + str(Path(folder).resolve()).lstrip("/")
     return ["--disallowedTools", f"Read(/{root}/**)", f"Edit(/{root}/**)"]
@@ -581,7 +604,10 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
         edits = (["--permission-mode", "acceptEdits"]
                  if extra and "--permission-mode" not in extra else [])
         stream = [] if "--output-format" in extra else CLAUDE_STREAM
-        default = CLAUDE_OWN_TOOLS + keep_out(agent_folder) if own_tools else CLAUDE_DEFAULT
+        default = CLAUDE_DEFAULT
+        if own_tools:  # the web and files in its own scratch folder; its own folder kept out
+            default = ["--allowedTools", "WebSearch,WebFetch", *scratch_writes(scratch),
+                       "--no-session-persistence", *keep_out(agent_folder)]
         return [binary, "-p", *stream, *with_model, *edits, *(extra or default)]
     if known.name == "codex":
         where = ["--cd", scratch] if scratch else []

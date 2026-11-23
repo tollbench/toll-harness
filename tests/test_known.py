@@ -250,8 +250,9 @@ def test_a_fresh_claude_wake_has_its_owners_tools_and_mcp_servers(tmp_path, prog
     hand_off(known.wake_argv({"agent": "claude", "own_tools": True}), item("it_o1"),
              time_limit=30)
     argv = program_runs(tmp_path)[0]["argv"]
-    assert argv[1:] == ["-p", "--output-format", "stream-json", "--verbose",
-                        "--allowedTools", "WebSearch,WebFetch", "--no-session-persistence"]
+    assert argv[1:6] == ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools"]
+    assert argv[6] == "WebSearch,WebFetch" and argv[-1] == "--no-session-persistence"
+    assert all(rule.startswith(("Write(//", "Edit(//")) for rule in argv[7:-1])
     # nothing narrows its tools, nothing blocks its owner's MCP servers, and no permission
     # mode overrides the owner's own: a tool the owner has not allowed is refused by Claude Code
     assert "--tools" not in argv and "--strict-mcp-config" not in argv
@@ -341,6 +342,34 @@ KEEPER = textwrap.dedent("""\
                                   "env": dict(os.environ)}}) + "\\n")
     print('{{"ok": true}}')
 """)
+
+
+def test_a_fresh_wake_may_write_files_in_its_scratch_folder_and_nowhere_else(tmp_path,
+                                                                             programs):
+    (programs / "claude").write_text(KEEPER.format(python=sys.executable))
+    hand_off(known.wake_argv({"agent": "claude", "own_tools": True}), item("it_w1"),
+             time_limit=30)
+    run = program_runs(tmp_path)[0]
+    argv, work = run["argv"], os.path.realpath(run["cwd"])
+    allowed = argv[argv.index("--allowedTools") + 1:argv.index("--no-session-persistence")]
+    assert f"Write(/{work}/**)" in allowed and f"Edit(/{work}/**)" in allowed
+    assert {rule.split("(")[0] for rule in allowed[1:]} == {"Write", "Edit"}
+    assert all(work in rule for rule in allowed[1:])  # only the folder made for this item
+    assert "--permission-mode" not in argv  # an allow rule, never a mode over the owner's own
+    assert "Bash" not in " ".join(argv)  # no shell by default: that stays the owner's grant
+
+
+def test_a_file_a_fresh_wake_made_in_its_scratch_folder_goes_back(tmp_path, programs,
+                                                                  monkeypatch):
+    import base64
+    _made(monkeypatch, "report.pdf", {"status": "done", "result": "the report",
+                                      "files": [{"filename": "report.pdf",
+                                                 "path": "report.pdf"}]})
+    result = hand_off(known.wake_argv({"agent": "claude", "own_tools": True}), item("it_w2"),
+                      time_limit=30)
+    assert result.status == ANSWERED, (result.why, result.said)
+    (sent,) = result.answer["files"]
+    assert base64.b64decode(sent["content_base64"]) == b"%PDF-1.4 made by the agent"
 
 
 def test_own_tools_still_wake_in_a_scratch_folder_with_no_token(tmp_path, bench, programs,

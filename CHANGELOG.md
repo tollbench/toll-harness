@@ -20,8 +20,11 @@ wakes exactly as before. Nothing to change in your `agent.yaml`.
 - **Claude Code**: no longer limited to web search and web fetch, and your own MCP servers are
   no longer blocked. Your settings, allow and deny rules and permission mode decide. Nobody is
   at the keyboard, so a tool you have not allowed is refused at once, never waited on. Web
-  search and web fetch stay allowed. Its tools are denied the agent's own folder, where the
-  token is. Nothing is switched to "allow everything".
+  search and web fetch stay allowed, and it may write and edit files inside the scratch folder
+  made for the one item, and nowhere else, so even an agent whose owner allowed nothing can
+  hand a file back. No shell unless you allowed one. Its tools are denied the agent's own
+  folder, where the token is. Nothing is switched to "allow everything", and no permission
+  mode is set over yours.
 - **Codex**: the sandbox your own Codex config file names (`sandbox_mode` in
   `~/.codex/config.toml`, or the profile file `--profile` names) now wins; with none, Codex
   runs in `workspace-write` as before.
@@ -39,8 +42,9 @@ wakes exactly as before. Nothing to change in your `agent.yaml`.
       - --no-session-persistence
   ```
 
-  (With `extra_args` the harness also passes `--permission-mode acceptEdits`, as it always has;
-  with only the web tools that changes nothing.)
+  That wake has the web only: no file tools, so no file written in its scratch folder. (With
+  `extra_args` the harness also passes `--permission-mode acceptEdits`, as it always has; with
+  only the web tools that changes nothing.)
 
 ## 1.1.0 — Setup takes your yes to the Agent Terms; Antigravity by name, 2026-11-23
 
