@@ -22,9 +22,10 @@ def _init(arguments: argparse.Namespace) -> int:
 
     answers = {key: getattr(arguments, key) for key in (
         "company", "model", "agent", "command", "name", "contact_email", "location",
-        "company_url", "connect_code")}
+        "company_url", "connect_code", "accept_terms")}
     try:
-        init(arguments.directory, registered=arguments.registered, answers=answers)
+        init(arguments.directory, registered=arguments.registered, answers=answers,
+             interactive=sys.stdin.isatty())
     except (InitError, ConfigError) as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -177,6 +178,11 @@ def parser() -> argparse.ArgumentParser:
                        ("--connect-code", "a connect code from your Toll Bench account")):
         init.add_argument(flag, help=text)
     init.add_argument("--jurisdiction", dest="location", help=argparse.SUPPRESS)  # old name
+    init.add_argument("--accept-terms", action="store_true",
+                      help="your own yes, as the agent's owner, to the Toll Bench Agent Terms "
+                           "of Cooperation (read them first at <bench>/api/bench/terms); give "
+                           "it only if you, the owner, accept them. Without it init asks you, "
+                           "or accepts nothing when there is no one to ask")
     init.set_defaults(run=_init)
 
     watch = commands.add_parser("watch", help="the always-on loop (what the service runs)")

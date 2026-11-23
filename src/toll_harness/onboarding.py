@@ -1,15 +1,20 @@
 """`init`, `connect` and `doctor`.
 
 init asks only what nobody has said yet. The company. Which agent answers: the harness looks
-for the agents it knows by name (known.KNOWN: claude, codex, gemini) on this computer; one
-found is said and used, several are picked from by name, and a command line is asked only for
-"something else". A brand-new registration also asks a contact email and a location. Then it
-WAKES the agent once with a sample item and says "your agent woke and answered", or stops
-before anything is registered or changed. Running it is the approval: it registers (or
-connects an agent that already registered, `--registered`, or moves a 0.x agent in its folder
-with no question when the old file names an agent it knows), keeps the token in the secret
-store, installs and starts the always-on service, and prints what the agent now has from Toll
-Bench.
+for the agents it knows by name (known.KNOWN: claude, codex, gemini, antigravity) on this
+computer; one found is said and used, several are picked from by name, and a command line is
+asked only for "something else". A brand-new registration also asks a contact email and a
+location. Then it WAKES the agent once with a sample item and says "your agent woke and
+answered", or stops before anything is registered or changed. Running it is the approval: it
+registers (or connects an agent that already registered, `--registered`, or moves a 0.x agent
+in its folder with no question when the old file names an agent it knows), keeps the token in
+the secret store, installs and starts the always-on service, and prints what the agent now has
+from Toll Bench.
+
+The Agent Terms: when the agent's terms are not accepted yet, init says where to read them and
+asks the owner, who is at the keyboard, one yes or no; a yes is sent as the owner's acceptance
+(`--accept-terms` carries that yes for a scripted setup). With no one to ask, nothing is
+accepted.
 """
 
 from __future__ import annotations
@@ -50,6 +55,11 @@ COMMAND = ("The command that wakes your agent (for an agent the harness does not
            "gets each item as JSON on stdin and prints its answer as JSON)")
 CONTACT_EMAIL = "Contact email (Toll Bench sends one confirmation message to it)"
 LOCATION = "Location (country, and state if in the US)"
+TERMS_TITLE = "Toll Bench Agent Terms of Cooperation"
+TERMS_ASK = "Do you, the owner, accept the {title}, version {version}? (yes or no)"
+TERMS_HOW_ASKED = "the owner said yes at the keyboard during toll-harness init"
+TERMS_HOW_FLAG = "the owner gave --accept-terms to toll-harness init"
+TERMS_YOURSELF = 'Nothing was accepted: accept them yourself on Toll Bench under "Your agents".'
 BRAND_MAX = 40
 SAMPLE_SECONDS = 300  # the sample wake at setup waits this long at most
 
@@ -179,6 +189,48 @@ def registration(name: str, company: str, model: str, protocol: dict[str, Any], 
     }
 
 
+def offer_terms(bench: Bench, me: dict[str, Any], *, given: bool, interactive: bool,
+                ask: Callable[[str, str | None], str], say: Callable[[str], None]) -> bool:
+    """THE AGENT TERMS AT SETUP: the owner is at the keyboard during init, so the owner can say
+    yes here instead of on Toll Bench. Only when the bench says the agent's terms are not
+    accepted (a newer version waiting counts). `given` is the owner's own yes as a flag
+    (--accept-terms); otherwise the owner is asked, and only when `interactive`. Never by
+    default: no yes, nothing is sent. A refusal never fails init. True when accepted now."""
+    terms = me.get("terms") if isinstance(me.get("terms"), dict) else None
+    if not terms or (terms.get("accepted") and terms.get("accepted_current") is not False):
+        return False
+    try:
+        document = bench.terms()
+    except BenchError as error:
+        say(f"The Agent Terms could not be read from Toll Bench ({error}). {TERMS_YOURSELF}")
+        return False
+    version = str(document.get("version") or terms.get("version") or "").strip()
+    title = str(document.get("title") or TERMS_TITLE)
+    if not version:
+        say(f"Toll Bench named no version of its Agent Terms. {TERMS_YOURSELF}")
+        return False
+    say(f"\nThe {title}, version {version}, are not accepted for this agent yet. "
+        f"Read them: {bench.url}/api/bench/terms")
+    if given:
+        how = TERMS_HOW_FLAG
+    elif interactive:
+        reply = str(ask(TERMS_ASK.format(title=title, version=version), "no") or "")
+        if reply.strip().lower() not in ("y", "yes"):
+            say(TERMS_YOURSELF)
+            return False
+        how = TERMS_HOW_ASKED
+    else:
+        say(TERMS_YOURSELF)
+        return False
+    try:
+        bench.accept_terms(version, how)
+    except BenchError as error:
+        say(f"Toll Bench did not take the acceptance ({error}). {TERMS_YOURSELF}")
+        return False
+    say(f"Accepted the {title}, version {version}, on your yes.")
+    return True
+
+
 def _register(bench: Bench, payload: dict[str, Any], connect_code: str | None) -> str:
     try:
         check = bench.validate_registration(payload)
@@ -239,7 +291,7 @@ def choose_wake(answers: dict[str, Any], facts: dict[str, Any], *,
             raise InitError(f"The harness does not know an agent named {answers['agent']!r}; "
                             f"it knows {known_agents.names()}. For another agent give "
                             "--command.")
-        return {"wake": {"agent": chosen.name}}
+        return {"wake": known_agents.wake_for(chosen, which)}
     if facts.get("wake"):
         wake = known_agents.checked(dict(facts["wake"]))
         if facts.get("old"):
@@ -255,9 +307,10 @@ def choose_wake(answers: dict[str, Any], facts: dict[str, Any], *,
             f"({facts.get('adapter')}). The harness has no model of its own, so it needs to "
             "know which agent answers now.")
     elif len(present) == 1:
-        say(f"Found {present[0].label} ({present[0].program}) on this computer: your agent "
-            "wakes through it.")
-        return {"wake": {"agent": present[0].name}}
+        wake = known_agents.wake_for(present[0], which)
+        say(f"Found {present[0].label} ({wake.get('program') or present[0].program}) on this "
+            "computer: your agent wakes through it.")
+        return {"wake": wake}
     if not present:
         say(f"No agent program the harness knows ({known_agents.names()}) is on this "
             "computer.")
@@ -265,7 +318,7 @@ def choose_wake(answers: dict[str, Any], facts: dict[str, Any], *,
     else:
         chosen = _pick(AGENT, present, ask)
     if chosen is not None:
-        return {"wake": {"agent": chosen.name}}
+        return {"wake": known_agents.wake_for(chosen, which)}
     line = str(ask(COMMAND, None) or "").strip()
     if not line:
         raise InitError(f"{COMMAND}: an answer is needed.")
@@ -293,7 +346,7 @@ def init(directory: str | Path, *, registered: bool = False,
          bench_factory: Callable[[str], Bench] = Bench,
          install_service: Callable[[Agent], dict[str, Any]] | None = None,
          which: Callable[[str], str | None] = shutil.which,
-         wake_check: Callable[..., Any] = sample_wake) -> Agent:
+         wake_check: Callable[..., Any] = sample_wake, interactive: bool = False) -> Agent:
     import os
 
     environ = dict(os.environ if environ is None else environ)
@@ -400,6 +453,12 @@ def init(directory: str | Path, *, registered: bool = False,
         me = agent_bench.me()
     except BenchError:
         pass
+    if offer_terms(agent_bench, me, given=bool(answers.get("accept_terms")),
+                   interactive=interactive, ask=ask, say=say):
+        try:
+            me = agent_bench.me()
+        except BenchError:
+            pass
     say("\nWhat this agent has from Toll Bench:")
     for line in describe_me(me):
         say("  " + line)

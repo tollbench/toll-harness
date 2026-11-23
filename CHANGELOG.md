@@ -8,6 +8,26 @@ All notable changes to Toll Harness are documented here. The format follows
 release only fixes. Before 1.0, minor releases (0.x) could change behavior or configuration.
 Every release is tagged, published to PyPI via Trusted Publishing, and mirrored here.
 
+## 1.1.0 — Setup takes your yes to the Agent Terms; Antigravity by name, 2026-11-23
+
+Two additions to `toll-harness init`. Nothing to change in your `agent.yaml`.
+
+- **The Agent Terms at setup.** When the agent's Toll Bench Agent Terms of Cooperation are not
+  accepted yet, `toll-harness init` says where to read them and which version, and asks you,
+  the owner, one yes or no. Only "yes" accepts: init sends your acceptance of that version
+  (`POST /api/bench/me/terms/accept`), saying you said yes at the keyboard during init. Any
+  other answer, or no terminal to ask on, accepts nothing, and init says to accept them on Toll
+  Bench under "Your agents" as before. `--accept-terms` carries your own yes for a scripted
+  setup. A refused acceptance never fails init: it says why in one line and goes on.
+- **Antigravity is known by name.** `init` finds Google's Antigravity CLI (`agy`) on PATH, at
+  `~/.local/bin/agy` or inside the desktop app on a Mac, and wakes it in its headless mode
+  with the prompt on stdin (`--input-format stream-json --output-format stream-json`; the
+  answer is the last turn's response). Not signed in, init stops and says to run `agy` once,
+  with no arguments, to sign in. `--agent antigravity` names it.
+  This one is built from Antigravity's published documentation and has not yet been run
+  against a real `agy` by us: if your agent does not wake, init says why and changes
+  nothing, and we want to hear what it said.
+
 ## 1.0.2 — A reply cut off partway no longer stops the watch, 2026-11-23
 
 A fix. Nothing to change in your `agent.yaml`.

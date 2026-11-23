@@ -43,6 +43,13 @@ class FakeBench:
         self.in_progress: set[str] = set()
         self.seen_now: set[str] = set()  # handed over and not sent again since (item.seen)
         self.registered: list[dict] = []
+        # The Agent Terms, as the bench answers them (app/services/agent_terms.py): GET
+        # /api/bench/terms is public; POST /api/bench/me/terms/accept {version, how} takes only
+        # the current version and a `how`, else 422. `refuse_terms` makes it refuse (a 422).
+        self.terms_version = "2026-11-12"
+        self.terms_accepted = True
+        self.terms_accepts: list[dict] = []
+        self.refuse_terms = False
         # The materials door: path -> {"body": bytes, "status": 200, "headers": {}, "length":
         # True (send Content-Length), "claims": n (a Content-Length that says n), "trickle": s
         # (16 bytes every s seconds)}. Every GET's Authorization header is written down.
@@ -86,7 +93,11 @@ class FakeBench:
         return {
             "agent": {"id": "A-0999", "handle": "TestEcho", "name": "TestEcho"},
             "owner": {"name": "Test Owner Co"}, "email": "testecho@agents.example",
-            "terms": {"version": "2026-11-11", "accepted": True, "how": "POST /api/bench/me/terms"},
+            "terms": {"version": self.terms_version, "accepted": self.terms_accepted,
+                      "accepted_current": self.terms_accepted,
+                      "how": "owner confirmed in chat" if self.terms_accepted else None,
+                      "read": "GET /api/bench/terms",
+                      "accept_call": "POST /api/bench/me/terms/accept"},
             "settings": dict(self.settings),
             "connector": {"current": self.version["current"],
                           "minimum": self.version["minimum"]},
@@ -151,6 +162,13 @@ class FakeBench:
                     return self._send(404, {"error": "no_door"})
                 if parsed.path == "/api/bench/protocol":
                     return self._send(200, {"rules_version_hash": "rules-abc"})
+                if parsed.path == "/api/bench/terms":
+                    return self._send(200, {
+                        "ok": True, "title": "Toll Bench Agent Terms of Cooperation",
+                        "version": bench.terms_version, "terms": ["Listen.", "Answer."],
+                        "accept": {"call": "POST /api/bench/me/terms/accept",
+                                   "body": {"version": bench.terms_version,
+                                            "how": "owner confirmed in chat"}}})
                 if not self._authed():
                     return None
                 if parsed.path in bench.files:
@@ -201,6 +219,18 @@ class FakeBench:
                     bench.acks += 1
                     bench.reachable = True
                     return self._send(200, bench.me())
+                if parsed.path == "/api/bench/me/terms/accept":
+                    bench.terms_accepts.append(body)
+                    if bench.refuse_terms or body.get("version") != bench.terms_version:
+                        return self._send(422, {
+                            "ok": False, "error": "terms_version_mismatch",
+                            "message": f"Accept the current version, {bench.terms_version}."})
+                    if not str(body.get("how") or "").strip():
+                        return self._send(422, {"ok": False, "error": "terms_how_required",
+                                                "message": "Say how your owner accepted."})
+                    bench.terms_accepted = True
+                    return self._send(200, {"ok": True, "already": False,
+                                            "terms": bench.me()["terms"]})
                 if parsed.path == "/api/bench/me/log":
                     bench.log_lines.extend(body.get("lines") or [])
                     return self._send(200, {"ok": True})

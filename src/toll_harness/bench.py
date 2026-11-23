@@ -232,5 +232,14 @@ class Bench:
     def ack_ping(self) -> dict[str, Any]:
         return self.call("POST", "/api/bench/me/pings/ack", payload={})
 
+    # -- the Agent Terms, accepted at init on the owner's own yes --------------------
+    def terms(self) -> dict[str, Any]:
+        """The current Agent Terms (public): their title, version and words."""
+        return self.call("GET", "/api/bench/terms", auth=False)
+
+    def accept_terms(self, version: str, how: str) -> dict[str, Any]:
+        return self.call("POST", "/api/bench/me/terms/accept",
+                         payload={"version": version, "how": how})
+
     def with_token(self, token: str) -> Bench:
         return Bench(self.url, token=token, timeout=self.timeout)

@@ -69,6 +69,8 @@ REASONS = tuple(re.compile(pattern) for pattern in (
     r"the harness does not know an agent named [^\n]{1,200}",
     r"`[^`\n]{1,250}` is not on this computer",
     r"`[^`\n]{1,250}` cannot be run \(permission denied\)",
+    r"`[^`\n]{1,250}` is not signed in: run `[^`\n]{1,250}` once, with no arguments, to "
+    r"sign in",
     r"[^\s]{1,120} exited with -?\d+( on account \d+ of \d+)?",
 ))
 
@@ -430,6 +432,49 @@ def claude_final(stdout: str) -> str:
     return stdout if final is None else final
 
 
+# ANTIGRAVITY (`agy`), from its own headless documentation (antigravity.google/docs/cli/
+# headless, read Nov 23; no agy was run here): with `--input-format stream-json` the prompt goes
+# on stdin as one {"event": "user", "message": {"content": ...}} line, so it is never on a
+# command line, and agy exits once stdin is closed and the turn is done. With
+# `--output-format stream-json` each turn ends with a {"event": "result", "result": {"response":
+# ...}} line: the last one's `response` is the reply. A run with no sign-in fails with an
+# "authentication required" error (the docs) or "Please sign in to view available models.
+# Launch the CLI without arguments to sign in." (seen on an owner's Mac); signing in is running
+# `agy` once with no arguments.
+AGY_IO = ["--input-format", "stream-json", "--output-format", "stream-json"]
+_SIGNED_OUT = re.compile(r"sign in|signed in|authentication required|not authenticated", re.I)
+
+
+def agy_input(prompt: str) -> str:
+    return json.dumps({"event": "user", "message": {"content": prompt}},
+                      ensure_ascii=False) + "\n"
+
+
+def agy_final(stdout: str) -> str:
+    """The `response` of the last result event in agy's stream-json output; `stdout` as it is
+    when it holds no result event (an operator's own --output-format)."""
+    final: str | None = None
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(event, dict) and event.get("event") == "result"
+                and isinstance(event.get("result"), dict)):
+            final = str(event["result"].get("response") or "")
+    return stdout if final is None else final
+
+
+def signed_out(program: str, stderr: str) -> str:
+    """The reason for an agy that is not signed in, else ''."""
+    if not _SIGNED_OUT.search(stderr or ""):
+        return ""
+    return f"`{program}` is not signed in: run `{program}` once, with no arguments, to sign in"
+
+
 # CODEX, AND THE TOOLS ITS OPERATOR PLUGGED IN (staging, Nov 21 to 23: Bree's operator had
 # given it a publish tool, `-c mcp_servers.publish.command=...` in extra_args. `codex exec`
 # runs with nobody at the keyboard, so its approval policy is "never", and a tool that
@@ -488,6 +533,9 @@ def argv_for(agent: str, *, model: str | None, program: str | None,
         return [binary, "exec", "--skip-git-repo-check", *where, *sandbox,
                 "--output-last-message", str(last_message), *with_model, *extra,
                 *codex_own_tools(extra), "-"]
+    if known.name == "antigravity":
+        io = [] if "--input-format" in extra else AGY_IO
+        return [binary, *io, *with_model, *extra]
     return [binary, *with_model, *extra]  # gemini: the prompt on stdin, the reply on stdout
 
 
@@ -510,13 +558,16 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
         argv = argv_for(agent, model=model, program=program, extra=extra, last_message=last,
                         scratch=str(work))
         name = Path(argv[0]).name
+        known = by_name(agent)
+        agy = known is not None and known.name == "antigravity"
+        given = agy_input(prompt) if agy and "--input-format" not in extra else prompt
         problem = ""
         for number, account in enumerate(accounts, 1):
             env = dict(os.environ)
             if account:
                 env["CLAUDE_CONFIG_DIR"] = account
             try:
-                done = subprocess.run(argv, input=prompt, capture_output=True, text=True,
+                done = subprocess.run(argv, input=given, capture_output=True, text=True,
                                       env=env, cwd=str(work), check=False)
             except FileNotFoundError:
                 raise NoAnswer(f"`{argv[0]}` is not on this computer") from None
@@ -531,12 +582,18 @@ def run(agent: str, prompt: str, *, model: str | None = None, program: str | Non
                         reply = Path(last).read_text(encoding="utf-8")
                     except OSError:
                         pass
+                if agy:
+                    reply = agy_final(reply)
+                    if not reply.strip() and signed_out(argv[0], done.stderr):
+                        raise NoAnswer(signed_out(argv[0], done.stderr))
                 if not finish:
                     return reply
                 made = made_during(tool_folders(agent, env), began,
                                    session=session_of(done.stderr),
                                    alone=os.environ.get(SHARED_ENV) != "1")
                 return finish(reply, work, made)
+            if agy and signed_out(argv[0], done.stderr):
+                raise NoAnswer(signed_out(argv[0], done.stderr))
             problem = f"{name} exited with {done.returncode}"
             if len(accounts) > 1:
                 problem += f" on account {number} of {len(accounts)}"

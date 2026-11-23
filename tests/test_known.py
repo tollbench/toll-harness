@@ -160,7 +160,8 @@ def test_none_found_asks_the_command_line_and_says_why(tmp_path, bench, programs
     finally:
         del os.environ["REPLY"]
     assert asked == ["Company", "The", "Model's"]
-    assert ("No agent program the harness knows (claude, codex, gemini) is on this computer."
+    assert ("No agent program the harness knows (claude, codex, gemini, antigravity) is on "
+            "this computer."
             in said)
     assert agent.section["command"] == [str(programs / "old-agent")]
 
@@ -628,6 +629,7 @@ def test_only_the_bridges_own_reasons_ride_along(tmp_path):
     "the harness does not know an agent named 'robot'", "`/nowhere/claude` is not on this computer",
     "`/usr/bin/codex` cannot be run (permission denied)", "codex exited with 1",
     "claude exited with 1 on account 2 of 2",
+    "`agy` is not signed in: run `agy` once, with no arguments, to sign in",
 ])
 def test_every_line_the_bridge_prints_is_one_of_its_fixed_reasons(line):
     assert wake.bridge_reason(line) == line
@@ -636,3 +638,88 @@ def test_every_line_the_bridge_prints_is_one_of_its_fixed_reasons(line):
 def test_the_prompt_says_where_a_tool_made_picture_is_and_to_name_it():
     with_files = wake.prompt_for(STEP)
     assert "$CODEX_HOME/generated_images" in with_files and "by its file name" in with_files
+
+
+# -- Antigravity (`agy`), as its headless docs describe it ----------------------------------
+# A stand-in agy: the prompt comes on stdin as one stream-json user event; the reply goes out as
+# stream-json events, the last result event's `response` being the answer. AGY=signed_out
+# prints the sign-in error an owner's Mac showed and exits 1.
+AGY = textwrap.dedent("""\
+    #!{python}
+    import json, os, sys
+    raw = sys.stdin.read()
+    with open(os.environ["PROGRAM_RECORD"], "a") as handle:
+        handle.write(json.dumps({{"argv": sys.argv, "stdin": raw}}) + "\\n")
+    if os.environ.get("AGY") == "signed_out":
+        print("Error: Please sign in to view available models. Launch the CLI without "
+              "arguments to sign in.", file=sys.stderr)
+        sys.exit(1)
+    event = json.loads(raw.splitlines()[0])
+    assert event["event"] == "user" and "toll-harness" in event["message"]["content"]
+    print(json.dumps({{"event": "init", "conversation_id": "c1", "init": {{"cwd": os.getcwd()}}}}))
+    print(json.dumps({{"event": "result", "result": {{"conversation_id": "c1",
+          "status": "SUCCESS", "response": "Thinking first.", "num_turns": 1}}}}))
+    print(json.dumps({{"event": "result", "result": {{"conversation_id": "c1",
+          "status": "SUCCESS", "response": '{{"ok": true, "reply": "agy woke"}}',
+          "num_turns": 2}}}}))
+""")
+
+
+@pytest.fixture
+def agy(programs, monkeypatch):
+    path = programs / "agy"
+    path.write_text(AGY.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.delenv("AGY", raising=False)
+    return path
+
+
+def test_antigravity_is_known_by_name_and_by_its_program():
+    assert known.by_name("antigravity") is known.by_name("agy") is known.by_name("Antigravity")
+    assert known.by_name("agy").model == "Gemini"
+
+
+def test_antigravity_found_on_path_wakes_with_its_prompt_on_stdin(tmp_path, bench, agy):
+    said = []
+    agent = fresh(tmp_path, bench, ask=lambda label, default: "Test Owner Co",
+                  which=only("agy"), said=said)
+    assert agent.section["wake"] == {"agent": "antigravity"}
+    assert agent.section["model"] == "Gemini"
+    assert "Found Antigravity (agy) on this computer: your agent wakes through it." in said
+    run = program_runs(tmp_path)[0]
+    assert run["argv"][1:] == ["--input-format", "stream-json", "--output-format",
+                               "stream-json"]
+    assert not any("toll-harness" in part for part in run["argv"])  # never on a command line
+    assert "toll-harness checking that your agent wakes" in json.loads(
+        run["stdin"])["message"]["content"]
+
+
+def test_antigravity_answers_with_its_last_result(tmp_path, agy):
+    result = hand_off(known.wake_argv({"agent": "antigravity", "model": "gemini-3-pro"}),
+                      item("it_agy"), time_limit=30)
+    assert result.status == ANSWERED and result.answer == {"ok": True, "reply": "agy woke"}
+    argv = program_runs(tmp_path)[0]["argv"]
+    assert argv[argv.index("--model") + 1] == "gemini-3-pro"
+
+
+def test_antigravity_inside_the_desktop_app_is_found_and_woken_by_its_path(tmp_path):
+    inside = "/Applications/Gemini.app/Contents/Helpers/agy"
+    wake_ = known.wake_for(known.by_name("antigravity"), lambda program: None,
+                           lambda path: path == inside)
+    assert wake_ == {"agent": "antigravity", "program": inside}
+    assert known.by_name("antigravity") in known.found(lambda program: None,
+                                                       lambda path: path == inside)
+    assert known.wake_for(known.by_name("antigravity"), only("agy"),
+                          lambda path: True) == {"agent": "antigravity"}  # PATH first
+
+
+def test_antigravity_not_signed_in_stops_init_with_the_one_command_to_run(
+        tmp_path, bench, agy, monkeypatch):
+    monkeypatch.setenv("AGY", "signed_out")
+    with pytest.raises(InitError) as stopped:
+        fresh(tmp_path, bench, ask=lambda label, default: "Test Owner Co",
+              which=only("agy"))
+    assert str(stopped.value).startswith(
+        "Your agent did not wake: the command exited with 3 (`agy` is not signed in: run "
+        "`agy` once, with no arguments, to sign in). Nothing was registered or changed.")
+    assert bench.registered == []

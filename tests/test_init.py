@@ -213,3 +213,103 @@ def test_what_the_agent_has_leaves_out_empty_settings():
         "logging": False, "focus": "", "tools": [], "skip_crowded_at": None,
         "looking_for": "all"}})
     assert lines[-1] == "Settings: logging False, looking_for all"
+
+
+# -- the Agent Terms at setup: the owner is at the keyboard ---------------------------------
+TERMS_LINE = "Toll Bench Agent Terms of Cooperation, version 2026-11-12, are not accepted"
+
+
+def new_agent(**extra):
+    return answers(contact_email="o@example.com", location="US-OR", **extra)
+
+
+def test_the_owners_yes_at_init_accepts_the_terms_once_with_the_benchs_version(tmp_path,
+                                                                              bench):
+    bench.terms_accepted = False
+    asked, said = [], []
+
+    def ask(label, default):
+        asked.append((label, default))
+        return "yes"
+
+    run_init(tmp_path / "Yes", bench, said=said, ask=ask, answers=new_agent(), interactive=True)
+    assert asked == [("Do you, the owner, accept the Toll Bench Agent Terms of Cooperation, "
+                      "version 2026-11-12? (yes or no)", "no")]
+    assert bench.terms_accepts == [{"version": "2026-11-12",
+                                    "how": "the owner said yes at the keyboard during "
+                                           "toll-harness init"}]
+    text = "\n".join(said)
+    assert TERMS_LINE in text and f"Read them: {bench.url}/api/bench/terms" in text
+    assert "Accepted the Toll Bench Agent Terms of Cooperation, version 2026-11-12" in text
+    assert "Terms:    version 2026-11-12, accepted" in text  # /me read again after
+
+
+@pytest.mark.parametrize("reply", ["no", "", "n", "maybe"])
+def test_anything_but_yes_accepts_nothing(tmp_path, bench, reply):
+    bench.terms_accepted = False
+    said = []
+    run_init(tmp_path / "No", bench, said=said, ask=lambda label, default: reply,
+             answers=new_agent(), interactive=True)
+    assert bench.terms_accepts == []
+    assert 'accept them yourself on Toll Bench under "Your agents"' in "\n".join(said)
+
+
+def test_with_no_one_to_ask_nothing_is_accepted_and_nothing_asked(tmp_path, bench):
+    bench.terms_accepted = False
+    said = []
+    run_init(tmp_path / "Script", bench, said=said, answers=new_agent(),
+             ask=lambda *a: pytest.fail("asked"))
+    assert bench.terms_accepts == []
+    text = "\n".join(said)
+    assert TERMS_LINE in text and "Your agents" in text and "NOT accepted yet" in text
+
+
+def test_the_accept_terms_flag_is_the_owners_yes_without_a_question(tmp_path, bench):
+    bench.terms_accepted = False
+    run_init(tmp_path / "Flag", bench, answers=new_agent(accept_terms=True),
+             ask=lambda *a: pytest.fail("asked"))
+    assert bench.terms_accepts == [{"version": "2026-11-12",
+                                    "how": "the owner gave --accept-terms to toll-harness init"}]
+
+
+def test_registered_agent_with_terms_waiting_is_asked_too(tmp_path, bench):
+    bench.terms_accepted = False
+    run_init(tmp_path / "Reg", bench, registered=True, interactive=True,
+             answers=answers(), ask=lambda label, default: "yes",
+             environ={"TOLL_HARNESS_BASE_URL": bench.url, "TOLL_HARNESS_AGENT_TOKEN": TOKEN})
+    assert [body["version"] for body in bench.terms_accepts] == ["2026-11-12"]
+
+
+def test_terms_already_accepted_are_not_asked_or_sent(tmp_path, bench):
+    run_init(tmp_path / "Done", bench, answers=new_agent(accept_terms=True), interactive=True,
+             ask=lambda *a: pytest.fail("asked"))
+    assert bench.terms_accepts == []
+
+
+def test_a_refused_acceptance_never_fails_init(tmp_path, bench):
+    bench.terms_accepted = False
+    bench.refuse_terms = True
+    said = []
+    agent = run_init(tmp_path / "Refused", bench, said=said,
+                     answers=new_agent(accept_terms=True))
+    assert agent.token() == TOKEN and len(bench.terms_accepts) == 1
+    line = next(line for line in said if line.startswith("Toll Bench did not take"))
+    assert "422 terms_version_mismatch" in line and "Your agents" in line
+    assert "Terms:    version 2026-11-12, NOT accepted yet" in "\n".join(said)
+
+
+def test_the_accept_terms_flag_reaches_init_and_says_it_is_the_owners_yes(tmp_path,
+                                                                         monkeypatch, capsys):
+    from toll_harness import cli, onboarding
+
+    seen = []
+    monkeypatch.setattr(onboarding, "init", lambda directory, **kw: seen.append(kw))
+    for extra in ([], ["--accept-terms"]):
+        with pytest.raises(SystemExit):
+            cli.main(["init", str(tmp_path), "--command", "a", *extra])
+    assert [kw["answers"]["accept_terms"] for kw in seen] == [False, True]
+    assert all(kw["interactive"] is False for kw in seen)  # pytest's stdin is no terminal
+    with pytest.raises(SystemExit):
+        cli.main(["init", "--help"])
+    shown = " ".join(capsys.readouterr().out.split())
+    assert "--accept-terms" in shown and "your own yes, as the agent's owner" in shown

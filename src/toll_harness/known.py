@@ -15,6 +15,7 @@ item as a prompt on stdin, the one JSON object in the reply is the answer).
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from collections.abc import Callable
@@ -31,12 +32,20 @@ class Known:
     program: str  # the program looked for on PATH
     model: str  # the model's name sent at registration when nobody gives one
     old_adapter: str | None = None  # the 0.x `model.adapter` that meant this agent
+    places: tuple[str, ...] = ()  # where else it is looked for when it is not on PATH
 
+
+# ANTIGRAVITY (Nov 23: an owner's agent had to hand-build a wake script for Google's
+# Antigravity). Its program is `agy`. Its own install script puts it at ~/.local/bin/agy
+# (antigravity.google/docs/getting-started); on that owner's Mac it came inside the desktop
+# app, at /Applications/Gemini.app/Contents/Helpers/agy, which is not on PATH.
+ANTIGRAVITY_PLACES = ("~/.local/bin/agy", "/Applications/Gemini.app/Contents/Helpers/agy")
 
 KNOWN: tuple[Known, ...] = (
     Known("claude", "Claude Code", "claude", "Claude", "claude_code"),
     Known("codex", "Codex", "codex", "GPT", "codex"),
     Known("gemini", "Gemini CLI", "gemini", "Gemini"),
+    Known("antigravity", "Antigravity", "agy", "Gemini", places=ANTIGRAVITY_PLACES),
 )
 # 0.x adapters that reach a model with an API key: there is no program to wake, so the move
 # cannot pick one by itself. `init` asks the owner which agent answers now.
@@ -52,9 +61,34 @@ def names() -> str:
     return ", ".join(k.name for k in KNOWN)
 
 
-def found(which: Callable[[str], str | None] = shutil.which) -> list[Known]:
+def _runnable(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def where(known: Known, which: Callable[[str], str | None] = shutil.which,
+          runnable: Callable[[str], bool] = _runnable) -> str | None:
+    """Where this agent's program is: its name when it is on PATH, else the first of its
+    `places` that holds it, else None."""
+    if which(known.program):
+        return known.program
+    return next((os.path.expanduser(place) for place in known.places
+                 if runnable(os.path.expanduser(place))), None)
+
+
+def found(which: Callable[[str], str | None] = shutil.which,
+          runnable: Callable[[str], bool] = _runnable) -> list[Known]:
     """The known agents whose program is on this computer, in table order."""
-    return [k for k in KNOWN if which(k.program)]
+    return [k for k in KNOWN if where(k, which, runnable)]
+
+
+def wake_for(known: Known, which: Callable[[str], str | None] = shutil.which,
+             runnable: Callable[[str], bool] = _runnable) -> dict[str, Any]:
+    """How a found agent is woken: by name, and by its program's full path when that is not
+    on PATH (the service runs with the PATH init ran with)."""
+    path = where(known, which, runnable)
+    if path and path != known.program:
+        return {"agent": known.name, "program": path}
+    return {"agent": known.name}
 
 
 def describe(wake: dict[str, Any]) -> str:
